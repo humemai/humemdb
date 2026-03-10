@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling>=1.27", "hatch-vcs>=0.4"]
+build-backend = "hatchling.build"
+
+[project]
+name = "humemdb"
+dynamic = ["version"]
+description = "HumemDB"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [
+  { name = "HumemAI" },
+]
+requires-python = ">=3.10"
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Database",
+]
+keywords = ["database", "humemdb", "memory"]
+
+[project.urls]
+Homepage = "https://github.com/humemai/humemdb"
+Repository = "https://github.com/humemai/humemdb"
+Issues = "https://github.com/humemai/humemdb/issues"
+
+[tool.hatch.version]
+source = "vcs"
+tag-pattern = "v(?P<version>.*)"
+
+[tool.hatch.version.raw-options]
+fallback_version = "0.1.0"
+local_scheme = "no-local-version"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/humemdb"]

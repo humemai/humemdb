@@ -1,6 +1,6 @@
 """High-level embedded database interface for HumemDB.
 
-The `HumemDB` class is the public entry point for the Phase 1 runtime. It owns the
+The `HumemDB` class is the public entry point for the current runtime. It owns the
 SQLite and DuckDB engine wrappers, exposes an explicit routing API, and defines the
 current lifecycle semantics for queries and transactions.
 
@@ -9,6 +9,7 @@ The current contract is intentionally conservative:
 - only `query_type="sql"` is implemented
 - SQLite is the canonical public write target
 - DuckDB is read-only through the public API
+- PostgreSQL-like SQL is translated into backend SQL before execution
 - transaction control is explicit and route-scoped
 
 As the project grows, this module is where routing, query validation, and the portable
@@ -22,6 +23,7 @@ from pathlib import Path
 from typing import Protocol
 
 from .engines import DuckDBEngine, SQLiteEngine
+from .sql import translate_sql
 from .types import BatchParameters, QueryParameters, QueryResult, QueryType, Route
 
 _READ_ONLY_KEYWORDS = {
@@ -66,6 +68,7 @@ class HumemDB:
 
         self.sqlite = SQLiteEngine(str(sqlite_path_obj))
         self.duckdb = DuckDBEngine(self.duckdb_path)
+        self.duckdb.attach_sqlite(str(sqlite_path_obj))
         logger.debug(
             "HumemDB initialized with sqlite_path=%s duckdb_path=%s",
             self.sqlite_path,
@@ -84,8 +87,8 @@ class HumemDB:
 
         Args:
             text: Query text to execute.
-            route: Engine route. In Phase 1 this must be `sqlite` or `duckdb`.
-            query_type: Logical query type. Only `sql` is implemented in Phase 1.
+            route: Engine route. This must be `sqlite` or `duckdb`.
+            query_type: Logical query type. Only `sql` is implemented.
             params: Optional DB-API parameters.
 
         Returns:
@@ -99,12 +102,18 @@ class HumemDB:
         if query_type != "sql":
             logger.debug("Rejected unsupported query_type=%s", query_type)
             raise NotImplementedError(
-                f"Phase 1 only supports query_type='sql'; got {query_type!r}."
+                f"Phase 2 only supports query_type='sql'; got {query_type!r}."
             )
+
+        translated_text = translate_sql(text, target=route)
 
         if route == "sqlite":
             logger.debug("Routing SQL query to SQLite")
-            return self.sqlite.execute(text, params, query_type=query_type)
+            return self.sqlite.execute(
+                translated_text,
+                params,
+                query_type=query_type,
+            )
 
         if route == "duckdb":
             if not _is_read_only_query(text):
@@ -114,7 +123,11 @@ class HumemDB:
                     "SQLite is the source of truth."
                 )
             logger.debug("Routing read-only SQL query to DuckDB")
-            return self.duckdb.execute(text, params, query_type=query_type)
+            return self.duckdb.execute(
+                translated_text,
+                params,
+                query_type=query_type,
+            )
 
         raise ValueError(f"Unsupported route: {route!r}")
 
@@ -155,14 +168,13 @@ class HumemDB:
     ) -> QueryResult:
         """Execute the same statement repeatedly for a batch of parameters.
 
-        In Phase 1, this method is intentionally limited to SQLite so HumemDB can
-        support simple transactional batch writes without introducing a full ingestion
-        framework.
+        This method is intentionally limited to SQLite so HumemDB can support simple
+        transactional batch writes without introducing a full ingestion framework.
 
         Args:
             text: SQL statement to execute repeatedly.
             params_seq: Sequence of DB-API parameter sets.
-            route: Execution route. Must be `sqlite` in Phase 1.
+            route: Execution route. Must be `sqlite`.
             query_type: Logical query type. Only `sql` is implemented.
 
         Returns:
@@ -177,12 +189,18 @@ class HumemDB:
         if query_type != "sql":
             logger.debug("Rejected unsupported batch query_type=%s", query_type)
             raise NotImplementedError(
-                f"Phase 1 only supports query_type='sql'; got {query_type!r}."
+                f"Phase 2 only supports query_type='sql'; got {query_type!r}."
             )
+
+        translated_text = translate_sql(text, target=route)
 
         if route == "sqlite":
             logger.debug("Routing batched SQL query to SQLite")
-            return self.sqlite.executemany(text, params_seq, query_type=query_type)
+            return self.sqlite.executemany(
+                translated_text,
+                params_seq,
+                query_type=query_type,
+            )
 
         if route == "duckdb":
             logger.debug("Rejected batched write routed to DuckDB")

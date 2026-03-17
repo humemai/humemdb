@@ -11,7 +11,53 @@ def _humemdb_class():
     return importlib.import_module("humemdb").HumemDB
 
 
+def _translate_sql():
+    # Import lazily so tests exercise the installed package surface.
+    return importlib.import_module("humemdb").translate_sql
+
+
 class HumemDBTest(unittest.TestCase):
+    def test_translate_sql_rewrites_postgres_cast_for_sqlite(self) -> None:
+        translate_sql = _translate_sql()
+
+        translated = translate_sql("SELECT 1::INTEGER AS value", target="sqlite")
+
+        self.assertEqual(translated, "SELECT CAST(1 AS INTEGER) AS value")
+
+    def test_translate_sql_rewrites_ilike_for_sqlite(self) -> None:
+        translate_sql = _translate_sql()
+
+        translated = translate_sql(
+            "SELECT 'Alice' ILIKE 'aLiCe' AS matched",
+            target="sqlite",
+        )
+
+        self.assertEqual(
+            translated,
+            "SELECT LOWER('Alice') LIKE LOWER('aLiCe') AS matched",
+        )
+
+    def test_translate_sql_rejects_invalid_postgres_like_sql(self) -> None:
+        translate_sql = _translate_sql()
+
+        with self.assertRaises(ValueError):
+            translate_sql("SELECT FROM", target="sqlite")
+
+    def test_translate_sql_rejects_unsupported_statement_kind(self) -> None:
+        translate_sql = _translate_sql()
+
+        with self.assertRaisesRegex(ValueError, "HumemSQL v0 only supports"):
+            translate_sql("DROP TABLE users", target="sqlite")
+
+    def test_translate_sql_rejects_recursive_cte(self) -> None:
+        translate_sql = _translate_sql()
+
+        with self.assertRaisesRegex(ValueError, "recursive CTEs"):
+            translate_sql(
+                "WITH RECURSIVE t(n) AS (SELECT 1) SELECT * FROM t",
+                target="sqlite",
+            )
+
     def test_explicit_sqlite_and_duckdb_routing(self) -> None:
         HumemDB = _humemdb_class()
 
@@ -44,23 +90,40 @@ class HumemDBTest(unittest.TestCase):
                 self.assertEqual(sqlite_result.columns, ("id", "name"))
                 self.assertEqual(sqlite_result.rows, ((1, "Alice"),))
 
-                # Seed DuckDB directly through the internal engine.
-                # The public HumemDB API treats DuckDB as read-only because
-                # SQLite is the source of truth.
-                db.duckdb.execute("CREATE TABLE metrics (name VARCHAR, value INTEGER)")
-                db.duckdb.execute(
-                    "INSERT INTO metrics VALUES (?, ?)",
-                    params=("queries", 1),
-                )
-
-                # Read the DuckDB row back through the public API.
+                # DuckDB should be able to read the SQLite source-of-truth tables
+                # directly through the Phase 3 direct-read path.
                 duckdb_result = db.query(
-                    "SELECT name, value FROM metrics",
+                    "SELECT id, name FROM users",
                     route="duckdb",
                 )
 
-                self.assertEqual(duckdb_result.columns, ("name", "value"))
-                self.assertEqual(duckdb_result.rows, (("queries", 1),))
+                self.assertEqual(duckdb_result.columns, ("id", "name"))
+                self.assertEqual(duckdb_result.rows, ((1, "Alice"),))
+
+    def test_duckdb_reads_sqlite_source_of_truth_directly(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            duckdb_path = Path(tmpdir) / "humem.duckdb"
+
+            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+                db.query(
+                    "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+                    route="sqlite",
+                )
+                db.executemany(
+                    "INSERT INTO users (name) VALUES (?)",
+                    [("Alice",), ("Bob",)],
+                    route="sqlite",
+                )
+
+                result = db.query(
+                    "SELECT name FROM users ORDER BY id",
+                    route="duckdb",
+                )
+
+                self.assertEqual(result.rows, (("Alice",), ("Bob",)))
 
     def test_public_api_rejects_direct_duckdb_writes(self) -> None:
         HumemDB = _humemdb_class()
@@ -169,6 +232,62 @@ class HumemDBTest(unittest.TestCase):
 
                 self.assertEqual(result.rows, (("Alice",), ("Bob",)))
 
+    def test_sqlite_query_accepts_postgres_cast_syntax(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+
+            with HumemDB(str(sqlite_path)) as db:
+                result = db.query(
+                    "SELECT 1::INTEGER AS value",
+                    route="sqlite",
+                )
+
+                self.assertEqual(result.columns, ("value",))
+                self.assertEqual(result.rows, ((1,),))
+
+    def test_duckdb_query_accepts_postgres_cast_syntax(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            duckdb_path = Path(tmpdir) / "humem.duckdb"
+
+            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+                result = db.query(
+                    "SELECT 1::INTEGER AS value",
+                    route="duckdb",
+                )
+
+                self.assertEqual(result.columns, ("value",))
+                self.assertEqual(result.rows, ((1,),))
+
+    def test_sqlite_query_accepts_postgres_ilike_syntax(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+
+            with HumemDB(str(sqlite_path)) as db:
+                result = db.query(
+                    "SELECT 'Alice' ILIKE 'aLiCe' AS matched",
+                    route="sqlite",
+                )
+
+                self.assertEqual(result.columns, ("matched",))
+                self.assertTrue(bool(result.rows[0][0]))
+
+    def test_sqlite_query_rejects_unsupported_humemsql_statement(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+
+            with HumemDB(str(sqlite_path)) as db:
+                with self.assertRaisesRegex(ValueError, "HumemSQL v0 only supports"):
+                    db.query("DROP TABLE users", route="sqlite")
+
     def test_sqlite_executemany_rolls_back_inside_transaction(self) -> None:
         HumemDB = _humemdb_class()
 
@@ -234,7 +353,7 @@ class HumemDBTest(unittest.TestCase):
             sqlite_path = Path(tmpdir) / "humem.sqlite3"
 
             with HumemDB(str(sqlite_path)) as db:
-                # Phase 1 only supports SQL, so Cypher should fail clearly for now.
+                # Only SQL is implemented right now, so Cypher should fail clearly.
                 with self.assertRaises(NotImplementedError):
                     db.query("MATCH (n) RETURN n", route="sqlite", query_type="cypher")
 

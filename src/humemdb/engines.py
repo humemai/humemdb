@@ -175,6 +175,7 @@ class DuckDBEngine:
     path: str | None = None
     connection: duckdb.DuckDBPyConnection = field(init=False)
     _in_transaction: bool = field(init=False, default=False)
+    _sqlite_alias: str = field(init=False, default="sqlite_db")
 
     def __post_init__(self) -> None:
         """Open the DuckDB connection for a file path or in-memory database."""
@@ -182,6 +183,28 @@ class DuckDBEngine:
         database = self.path or ":memory:"
         self.connection = duckdb.connect(database=database)
         logger.debug("Opened DuckDB connection path=%s", database)
+
+    def attach_sqlite(self, path: str) -> None:
+        """Attach a SQLite database so DuckDB can read it directly.
+
+        The attached SQLite database is placed first in DuckDB's search path so
+        unqualified read queries resolve to SQLite tables before falling back to
+        DuckDB's local `main` schema.
+        """
+
+        self.connection.execute("INSTALL sqlite")
+        self.connection.execute("LOAD sqlite")
+        self.connection.execute(
+            f"ATTACH '{path}' AS {self._sqlite_alias} (TYPE sqlite)"
+        )
+        self.connection.execute(
+            f"SET search_path='{self._sqlite_alias},main'"
+        )
+        logger.debug(
+            "Attached SQLite database path=%s into DuckDB alias=%s",
+            path,
+            self._sqlite_alias,
+        )
 
     def execute(
         self,

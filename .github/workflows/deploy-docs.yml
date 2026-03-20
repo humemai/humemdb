@@ -68,9 +68,12 @@ jobs:
           fi
 
           VERSION="${RAW_VERSION#v}"
+          VERSION_TAG="v$VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "version_tag=$VERSION_TAG" >> "$GITHUB_OUTPUT"
           echo "set_latest=$SET_LATEST" >> "$GITHUB_OUTPUT"
           echo "Deploying documentation version: $VERSION"
+          echo "Using source tag ref: $VERSION_TAG"
 
       - name: Checkout humemai-docs
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -90,6 +93,7 @@ jobs:
         working-directory: humemai-docs
         env:
           MIKE_VERSION: ${{ steps.version.outputs.version }}
+          MIKE_VERSION_TAG: ${{ steps.version.outputs.version_tag }}
         run: |
           uv run --project .. mike deploy --update-aliases \
             --deploy-prefix humemdb \
@@ -110,6 +114,7 @@ jobs:
         working-directory: humemai-docs
         env:
           MIKE_VERSION: ${{ steps.version.outputs.version }}
+          MIKE_VERSION_TAG: ${{ steps.version.outputs.version_tag }}
         run: |
           uv run --project .. mike deploy \
             --deploy-prefix humemdb \

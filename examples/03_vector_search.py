@@ -39,7 +39,14 @@ def build_archive_vectors() -> list[tuple[int, str, int, list[float]]]:
     start_id = DEFAULT_COLLECTION_SIZE + 1
     for offset in range(ARCHIVE_COLLECTION_SIZE):
         item_id = start_id + offset
-        rows.append((item_id, "archive", 9, _embedding(0.0, 0.0, 1.0 - offset / 100_000.0)))
+        rows.append(
+            (
+                item_id,
+                "archive",
+                9,
+                _embedding(0.0, 0.0, 1.0 - offset / 100_000.0),
+            )
+        )
     return rows
 
 
@@ -89,18 +96,16 @@ def main() -> None:
                 metric="cosine",
             )
 
-        assert top_matches.rows[0][0] == 1
         assert len(top_matches.rows) == 5
-        assert tuple(row[0] for row in top_matches.rows[:3]) == (1, 2, 3)
+        assert all(row[0] <= 8_000 for row in top_matches.rows)
+        assert all(abs(row[1] - 1.0) < 1e-6 for row in top_matches.rows)
         assert len(bucket_matches.rows) == 5
         assert all(8_001 <= row[0] <= 16_000 for row in bucket_matches.rows)
-        assert tuple(row[0] for row in raw_query_result.rows[:3]) == (1, 2, 3)
-        assert tuple(row[0] for row in archive_result.rows) == (
-            DEFAULT_COLLECTION_SIZE + 1,
-            DEFAULT_COLLECTION_SIZE + 2,
-            DEFAULT_COLLECTION_SIZE + 3,
-        )
-        assert refreshed_result.rows[0][0] in {1, 99_001}
+        assert all(row[0] <= 8_000 for row in raw_query_result.rows)
+        assert all(abs(row[1] - 1.0) < 1e-6 for row in raw_query_result.rows)
+        assert all(row[0] > DEFAULT_COLLECTION_SIZE for row in archive_result.rows)
+        assert all(abs(row[1] - 1.0) < 1e-6 for row in archive_result.rows)
+        assert refreshed_result.rows[0][0] == 99_001
         assert any(row[0] == 99_001 for row in refreshed_result.rows)
 
         print("Top matches:", top_matches.rows)

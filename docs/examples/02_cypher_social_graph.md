@@ -8,9 +8,9 @@ This page documents the real repository example `examples/02_cypher_social_graph
 
 The script builds a generated social/work graph rather than a tiny three-node toy.
 
-- 120 repeated graph patterns
-- hundreds of nodes
-- hundreds of directed `KNOWS` edges
+- 5,000 repeated graph patterns
+- thousands of nodes
+- thousands of directed `KNOWS` edges
 - richer node properties: `name`, `age`, `active`, `cohort`, `city`
 - richer relationship properties: `since`, `strength`, and implicit `type`
 - SQLite and DuckDB graph reads over the same stored graph state

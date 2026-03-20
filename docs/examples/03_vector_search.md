@@ -6,7 +6,7 @@ This page documents the real repository example `examples/03_vector_search.py`.
 
 ## What the Python example does
 
-The script generates a realer exact-search workload rather than only a handful of
+The script generates a sizable exact-search workload rather than only a handful of
 vectors.
 
 - 24,000 vectors in the `default` collection

@@ -27,11 +27,6 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
 
-      - name: Install build tools
-        run: |
-          uv venv .venv
-          uv pip install --python .venv/bin/python build twine
-
       - name: Install project and docs dependencies
         run: |
           uv sync --group docs
@@ -46,19 +41,15 @@ jobs:
 
       - name: Build distributions
         run: |
-          . .venv/bin/activate
-          python -m build
+          uv run --with build python -m build
 
       - name: Check package metadata
         run: |
-          . .venv/bin/activate
-          python -m twine check dist/*
+          uv run --with twine python -m twine check dist/*
 
       - name: Verify wheel installation
         run: |
-          python -m venv .pkg-test
-          uv pip install --python .pkg-test/bin/python dist/*.whl
-          .pkg-test/bin/python -c "import humemdb; print(humemdb.__version__)"
+          uv run --isolated --with ./dist/*.whl python -c "import humemdb; print(humemdb.__version__)"
 
       - name: Upload distributions
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3

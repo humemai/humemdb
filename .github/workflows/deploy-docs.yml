@@ -91,14 +91,14 @@ jobs:
         env:
           MIKE_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          mike deploy --update-aliases \
+          ../.venv/bin/mike deploy --update-aliases \
             --deploy-prefix humemdb \
             --branch ${{ env.DOCS_BRANCH }} \
             --push \
             --config-file ../mkdocs.yml \
             ${{ steps.version.outputs.version }} latest \
             --title "${{ steps.version.outputs.version }}"
-          mike set-default \
+          ../.venv/bin/mike set-default \
             --deploy-prefix humemdb \
             --branch ${{ env.DOCS_BRANCH }} \
             --push \
@@ -111,7 +111,7 @@ jobs:
         env:
           MIKE_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          mike deploy \
+          ../.venv/bin/mike deploy \
             --deploy-prefix humemdb \
             --branch ${{ env.DOCS_BRANCH }} \
             --push \

@@ -30,8 +30,7 @@ jobs:
       - name: Install build tools
         run: |
           uv venv .venv
-          . .venv/bin/activate
-          uv pip install build twine
+          uv pip install --python .venv/bin/python build twine
 
       - name: Install project and docs dependencies
         run: |
@@ -58,9 +57,8 @@ jobs:
       - name: Verify wheel installation
         run: |
           python -m venv .pkg-test
-          . .pkg-test/bin/activate
-          uv pip install dist/*.whl
-          python -c "import humemdb; print(humemdb.__version__)"
+          uv pip install --python .pkg-test/bin/python dist/*.whl
+          .pkg-test/bin/python -c "import humemdb; print(humemdb.__version__)"
 
       - name: Upload distributions
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3

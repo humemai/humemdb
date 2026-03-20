@@ -1,0 +1,40 @@
+/* Custom styles for HumemDB documentation */
+
+:root {
+  --humemdb-hero-bg: linear-gradient(135deg, rgba(13, 148, 136, 0.14), rgba(132, 204, 22, 0.16));
+  --humemdb-hero-border: rgba(13, 148, 136, 0.28);
+}
+
+.md-typeset h1 {
+  letter-spacing: -0.02em;
+}
+
+.md-typeset .admonition,
+.md-typeset details {
+  border-radius: 0.6rem;
+}
+
+.md-typeset .highlight pre {
+  border-radius: 0.6rem;
+}
+
+.md-content__inner > .md-typeset h1:first-of-type,
+.md-content__inner > .md-typeset p:first-of-type {
+  position: relative;
+}
+
+.md-content__inner > .md-typeset h1:first-of-type {
+  margin-bottom: 0.4rem;
+}
+
+.md-content__inner > .md-typeset h1:first-of-type + p {
+  padding: 1rem 1.1rem;
+  background: var(--humemdb-hero-bg);
+  border: 1px solid var(--humemdb-hero-border);
+  border-radius: 0.9rem;
+}
+
+.md-typeset table:not([class]) {
+  display: block;
+  overflow-x: auto;
+}

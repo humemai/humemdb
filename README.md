@@ -6,12 +6,16 @@ vector search.
 - SQLite for OLTP.
 - DuckDB for OLAP.
 - Cypher support over SQL-backed graph storage.
-- Exact NumPy search over SQLite-backed vector collections today.
-- Later, LanceDB where the benchmark justifies an indexed vector path.
+- Exact and ANN vector search, with exact NumPy over SQLite-backed collections today.
+- LanceDB later where the benchmark justifies an indexed ANN path.
 
 Today, it starts as a thin Python orchestration layer over embedded engines. The
 longer-term goal is a single embedded system that supports standard SQL, Cypher, and
 vector search without forcing one engine to do every job.
+
+Documentation site:
+
+- https://docs.humem.ai/humemdb/
 
 ## Install
 
@@ -124,7 +128,8 @@ HumemDB treats its query languages as explicit frontend surfaces.
 
 - `HumemSQL v0` is the current relational surface.
 - `HumemCypher v0` is the current graph surface.
-- `HumemVector v0` is the current exact vector surface.
+- `HumemVector v0` is the current vector surface for exact and ANN work, with the
+  default runtime path starting exact today.
 
 The `v0` label is the version boundary for the public language surface, not a separate
 module tree or class hierarchy. The current repo only has one live version of each
@@ -184,6 +189,9 @@ with HumemDB("app.sqlite3", "analytics.duckdb") as db:
 
     print(result.rows)
 ```
+
+Additional minimal examples for the current SQL, Cypher, and vector surfaces now live in
+the MkDocs site.
 
 ## Phases
 

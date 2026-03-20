@@ -57,9 +57,13 @@ jobs:
           name: python-package-distributions
           path: dist/
 
+  examples:
+    name: Run examples
+    uses: ./.github/workflows/test-examples.yml
+
   publish:
     name: Publish package to PyPI
-    needs: build
+    needs: [build, examples]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     environment: pypi

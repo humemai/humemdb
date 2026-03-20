@@ -43,6 +43,7 @@ theme:
 
 plugins:
   - search
+  - macros
 
 markdown_extensions:
   - admonition
@@ -72,6 +73,7 @@ extra:
       link: https://pypi.org/project/humemdb/
   version:
     provider: mike
+  version_tag: !ENV [MIKE_VERSION, latest]
 
 extra_css:
   - stylesheets/extra.css
@@ -83,9 +85,9 @@ nav:
       - Quick Start: getting-started/quickstart.md
   - Examples:
       - Overview: examples/index.md
-      - SQL Example: examples/sql.md
-      - Cypher Example: examples/cypher.md
-      - Vector Example: examples/vector.md
+      - 01 - SQL Basics: examples/01_sql_basics.md
+      - 02 - Cypher Social Graph: examples/02_cypher_social_graph.md
+      - 03 - Vector Search: examples/03_vector_search.md
   - Guide:
       - Query Surfaces: guide/query-surfaces.md
       - Routing: guide/routing.md

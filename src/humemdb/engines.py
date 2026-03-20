@@ -4,7 +4,7 @@ The classes in this module are intentionally small. They provide a thin runtime 
 around the Python database bindings while normalizing results into the `QueryResult`
 object used by the rest of HumemDB.
 
-Two design decisions are important in Phase 1:
+Two design decisions are important here:
 
 - both engines expose a similar execute/begin/commit/rollback/close surface
 - the public `HumemDB` API, not this module, enforces architecture rules such as DuckDB
@@ -23,6 +23,7 @@ from typing import Any, Mapping, Sequence, TypeAlias
 
 import duckdb
 
+from .runtime import HUMEMDB_THREADS_ENV, resolve_thread_budget_from_env
 from .types import BatchParameters, QueryParameters, QueryResult, QueryType
 
 _AUTO_COMMIT_KEYWORDS = {
@@ -103,9 +104,8 @@ class SQLiteEngine:
     ) -> QueryResult:
         """Execute the same SQL statement for multiple parameter sets.
 
-        This is intended for small to moderate SQLite batch writes in the early HumemDB
-        implementation. Large ingestion strategies are intentionally deferred to later
-        phases.
+        This is intended for small to moderate SQLite batch writes in the current
+        implementation. Larger ingestion strategies are intentionally deferred.
 
         Args:
             text: SQL statement to execute repeatedly.
@@ -182,7 +182,26 @@ class DuckDBEngine:
 
         database = self.path or ":memory:"
         self.connection = duckdb.connect(database=database)
+        self._configure_threads_from_env()
         logger.debug("Opened DuckDB connection path=%s", database)
+
+    def _configure_threads_from_env(self) -> None:
+        """Apply an optional HumemDB-wide worker-thread override.
+
+        Today only DuckDB consumes this setting directly. The env var is intentionally
+        named at the HumemDB level so future engines can honor the same limit.
+        """
+
+        source_env, threads = resolve_thread_budget_from_env()
+        if threads is None:
+            return
+
+        self.connection.execute(f"SET threads = {threads}")
+        logger.debug(
+            "Configured DuckDB threads=%s from %s",
+            threads,
+            source_env or HUMEMDB_THREADS_ENV,
+        )
 
     def attach_sqlite(self, path: str) -> None:
         """Attach a SQLite database so DuckDB can read it directly.
@@ -310,7 +329,7 @@ def _statement_keyword(text: str) -> str:
     """Extract the first SQL keyword from a statement.
 
     This helper is intentionally lightweight and only supports the small amount of
-    statement classification needed in Phase 1.
+    statement classification currently needed.
     """
 
     stripped = text.lstrip()

@@ -45,5 +45,6 @@ jobs:
       - name: Build docs
         env:
           MIKE_VERSION: dev
+          MIKE_VERSION_TAG: main
         run: |
           uv run mkdocs build --strict

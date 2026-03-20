@@ -73,7 +73,7 @@ extra:
       link: https://pypi.org/project/humemdb/
   version:
     provider: mike
-  version_tag: !ENV [MIKE_VERSION, latest]
+  version_tag: !ENV [MIKE_VERSION_TAG, main]
 
 extra_css:
   - stylesheets/extra.css

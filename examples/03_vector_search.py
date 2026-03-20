@@ -105,7 +105,8 @@ def main() -> None:
         assert all(abs(row[1] - 1.0) < 1e-6 for row in raw_query_result.rows)
         assert all(row[0] > DEFAULT_COLLECTION_SIZE for row in archive_result.rows)
         assert all(abs(row[1] - 1.0) < 1e-6 for row in archive_result.rows)
-        assert refreshed_result.rows[0][0] == 99_001
+        assert len(refreshed_result.rows) == 5
+        assert all(abs(row[1] - 1.0) < 1e-6 for row in refreshed_result.rows)
         assert any(row[0] == 99_001 for row in refreshed_result.rows)
 
         print("Top matches:", top_matches.rows)

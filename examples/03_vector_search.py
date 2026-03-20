@@ -15,6 +15,9 @@ def _embedding(base: float, secondary: float, tertiary: float) -> list[float]:
     return [base, secondary, tertiary, *([0.0] * (DIMENSIONS - 3))]
 
 
+REFRESH_VECTOR = _embedding(0.88, 0.44, 0.22)
+
+
 def build_default_vectors() -> list[tuple[int, str, int, list[float]]]:
     rows: list[tuple[int, str, int, list[float]]] = []
     for item_id in range(1, DEFAULT_COLLECTION_SIZE + 1):
@@ -88,11 +91,11 @@ def main() -> None:
                 top_k=3,
                 metric="cosine",
             )
-            db.insert_vectors([(99_001, "default", 0, _embedding(1.0, 0.0, 0.0))])
+            db.insert_vectors([(99_001, "default", 0, REFRESH_VECTOR)])
             refreshed_result = db.search_vectors(
                 "default",
-                _embedding(1.0, 0.0, 0.0),
-                top_k=5,
+                REFRESH_VECTOR,
+                top_k=1,
                 metric="cosine",
             )
 
@@ -105,9 +108,9 @@ def main() -> None:
         assert all(abs(row[1] - 1.0) < 1e-6 for row in raw_query_result.rows)
         assert all(row[0] > DEFAULT_COLLECTION_SIZE for row in archive_result.rows)
         assert all(abs(row[1] - 1.0) < 1e-6 for row in archive_result.rows)
-        assert len(refreshed_result.rows) == 5
-        assert all(abs(row[1] - 1.0) < 1e-6 for row in refreshed_result.rows)
-        assert any(row[0] == 99_001 for row in refreshed_result.rows)
+        assert len(refreshed_result.rows) == 1
+        assert refreshed_result.rows[0][0] == 99_001
+        assert abs(refreshed_result.rows[0][1] - 1.0) < 1e-6
 
         print("Top matches:", top_matches.rows)
         print("Bucket-filtered matches:", bucket_matches.rows)

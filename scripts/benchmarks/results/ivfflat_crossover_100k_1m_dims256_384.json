@@ -1,0 +1,578 @@
+{
+  "grid": {
+    "buckets": 128,
+    "dimensions": [
+      256,
+      384
+    ],
+    "lancedb_mode": "tuned",
+    "lancedb_tuned_family": "ivf_flat",
+    "metric": "cosine",
+    "queries": 100,
+    "repetitions": 2,
+    "rows": [
+      100000,
+      250000,
+      500000,
+      1000000
+    ],
+    "seed": 7,
+    "skip_numpy_sq8": true,
+    "top_k": [
+      10
+    ],
+    "warmup": 1
+  },
+  "overall": {
+    "indexed_acceptable_recall_count": 8,
+    "indexed_faster_with_acceptable_recall_count": 5,
+    "max_rows_where_numpy_exact_faster_or_equal": 250000,
+    "min_rows_where_indexed_is_faster_with_acceptable_recall": 250000,
+    "notes": [
+      "Treat this as a preliminary routing summary, not a frozen public policy.",
+      "The sweep compares against either LanceDB library defaults or a curated tuned candidate, depending on --lancedb-mode.",
+      "Re-run the sweep on larger grids and with your expected query volume before freezing thresholds."
+    ],
+    "numpy_exact_faster_or_equal_count": 3,
+    "scenario_count": 8,
+    "tuned_scenario_count": 8
+  },
+  "scenario_summaries": [
+    {
+      "artifact_sizes_bytes": {
+        "numpy_f32_matrix": 102400000,
+        "query_batch_f32": 102400
+      },
+      "break_even_queries": {
+        "lancedb_flat_vs_numpy_f32": null,
+        "lancedb_indexed_vs_numpy_f32": null
+      },
+      "dimensions": 256,
+      "filtered_candidate_count": 813,
+      "lancedb_candidate_name": "ivf_flat_probe256",
+      "lancedb_index_settings": {
+        "ef_construction": 300,
+        "index_type": "IVF_FLAT",
+        "m": 20,
+        "max_iterations": 50,
+        "num_bits": 8,
+        "num_partitions": 256,
+        "num_sub_vectors": null,
+        "sample_rate": 256,
+        "scalar_index_bucket": false,
+        "target_partition_size": null
+      },
+      "lancedb_search_settings": {
+        "ef": null,
+        "nprobes": 256,
+        "refine_factor": null
+      },
+      "lancedb_selection_reason": "lowest_latency_meeting_target_recall",
+      "lancedb_strategy": "tuned",
+      "lancedb_thread_limit": "8",
+      "latency_mean_ms": {
+        "lancedb_flat_filtered": 26.539531885646284,
+        "lancedb_flat_global": 27.755797374993563,
+        "lancedb_indexed_filtered": 2.916108570061624,
+        "lancedb_indexed_global": 3.673541289754212,
+        "numpy_f32_filtered": 0.05658769514411688,
+        "numpy_f32_global": 2.517466100398451
+      },
+      "queries": 100,
+      "recalls_at_k": {
+        "lancedb_flat_filtered": 1.0,
+        "lancedb_flat_global": 1.0,
+        "lancedb_indexed_default_filtered": 0.234,
+        "lancedb_indexed_default_global": 0.151,
+        "lancedb_indexed_filtered": 1.0,
+        "lancedb_indexed_global": 1.0
+      },
+      "recommendation": "Prefer NumPy exact as the baseline. LanceDB indexed does not yet show a latency-and-recall advantage for this scenario.",
+      "rows": 100000,
+      "setup_totals_ms": {
+        "lancedb_flat": 1396.2596850469708,
+        "lancedb_indexed": 2715.7463086768985,
+        "numpy_f32": 532.0485327392817
+      },
+      "stage_timings_ms": {
+        "lancedb_index_build": 7634.805510286242,
+        "lancedb_scalar_index_build": 0.0,
+        "lancedb_table_create": 1396.2596850469708,
+        "numpy_f32_build": 26.29197109490633,
+        "numpy_sq8_build": 0.0,
+        "sqlite_load_to_numpy": 505.7565616443753,
+        "sqlite_seed": 929.5480358414352
+      },
+      "top_k": 10
+    },
+    {
+      "artifact_sizes_bytes": {
+        "numpy_f32_matrix": 153600000,
+        "query_batch_f32": 153600
+      },
+      "break_even_queries": {
+        "lancedb_flat_vs_numpy_f32": null,
+        "lancedb_indexed_vs_numpy_f32": null
+      },
+      "dimensions": 384,
+      "filtered_candidate_count": 844,
+      "lancedb_candidate_name": "ivf_flat_probe256",
+      "lancedb_index_settings": {
+        "ef_construction": 300,
+        "index_type": "IVF_FLAT",
+        "m": 20,
+        "max_iterations": 50,
+        "num_bits": 8,
+        "num_partitions": 256,
+        "num_sub_vectors": null,
+        "sample_rate": 256,
+        "scalar_index_bucket": false,
+        "target_partition_size": null
+      },
+      "lancedb_search_settings": {
+        "ef": null,
+        "nprobes": 256,
+        "refine_factor": null
+      },
+      "lancedb_selection_reason": "lowest_latency_meeting_target_recall",
+      "lancedb_strategy": "tuned",
+      "lancedb_thread_limit": "8",
+      "latency_mean_ms": {
+        "lancedb_flat_filtered": 29.52477926388383,
+        "lancedb_flat_global": 43.29897436546162,
+        "lancedb_indexed_filtered": 3.0992226698435843,
+        "lancedb_indexed_global": 4.702090669889003,
+        "numpy_f32_filtered": 0.07579291006550193,
+        "numpy_f32_global": 3.560349044855684
+      },
+      "queries": 100,
+      "recalls_at_k": {
+        "lancedb_flat_filtered": 1.0,
+        "lancedb_flat_global": 1.0,
+        "lancedb_indexed_default_filtered": 0.238,
+        "lancedb_indexed_default_global": 0.15,
+        "lancedb_indexed_filtered": 1.0,
+        "lancedb_indexed_global": 1.0
+      },
+      "recommendation": "Prefer NumPy exact as the baseline. LanceDB indexed does not yet show a latency-and-recall advantage for this scenario.",
+      "rows": 100000,
+      "setup_totals_ms": {
+        "lancedb_flat": 2075.7794277742505,
+        "lancedb_indexed": 4115.137778688222,
+        "numpy_f32": 605.1077917218208
+      },
+      "stage_timings_ms": {
+        "lancedb_index_build": 12065.131412819028,
+        "lancedb_scalar_index_build": 0.0,
+        "lancedb_table_create": 2075.7794277742505,
+        "numpy_f32_build": 34.85347796231508,
+        "numpy_sq8_build": 0.0,
+        "sqlite_load_to_numpy": 570.2543137595057,
+        "sqlite_seed": 1188.4450558573008
+      },
+      "top_k": 10
+    },
+    {
+      "artifact_sizes_bytes": {
+        "numpy_f32_matrix": 256000000,
+        "query_batch_f32": 102400
+      },
+      "break_even_queries": {
+        "lancedb_flat_vs_numpy_f32": null,
+        "lancedb_indexed_vs_numpy_f32": 107144
+      },
+      "dimensions": 256,
+      "filtered_candidate_count": 1939,
+      "lancedb_candidate_name": "ivf_flat_probe256",
+      "lancedb_index_settings": {
+        "ef_construction": 300,
+        "index_type": "IVF_FLAT",
+        "m": 20,
+        "max_iterations": 50,
+        "num_bits": 8,
+        "num_partitions": 256,
+        "num_sub_vectors": null,
+        "sample_rate": 256,
+        "scalar_index_bucket": false,
+        "target_partition_size": null
+      },
+      "lancedb_search_settings": {
+        "ef": null,
+        "nprobes": 256,
+        "refine_factor": null
+      },
+      "lancedb_selection_reason": "lowest_latency_meeting_target_recall",
+      "lancedb_strategy": "tuned",
+      "lancedb_thread_limit": "8",
+      "latency_mean_ms": {
+        "lancedb_flat_filtered": 48.636839711107314,
+        "lancedb_flat_global": 81.38421085430309,
+        "lancedb_indexed_filtered": 3.871978847309947,
+        "lancedb_indexed_global": 6.979851722717285,
+        "numpy_f32_filtered": 0.12986400164663792,
+        "numpy_f32_global": 7.029647817835212
+      },
+      "queries": 100,
+      "recalls_at_k": {
+        "lancedb_flat_filtered": 1.0,
+        "lancedb_flat_global": 1.0,
+        "lancedb_indexed_default_filtered": 0.184,
+        "lancedb_indexed_default_global": 0.141,
+        "lancedb_indexed_filtered": 1.0,
+        "lancedb_indexed_global": 1.0
+      },
+      "recommendation": "Prefer NumPy exact for short-lived workloads, but switch to LanceDB indexed once you expect roughly 107144 or more global queries per loaded collection.",
+      "rows": 250000,
+      "setup_totals_ms": {
+        "lancedb_flat": 3548.751718364656,
+        "lancedb_indexed": 6648.954527918249,
+        "numpy_f32": 1313.6307490058243
+      },
+      "stage_timings_ms": {
+        "lancedb_index_build": 8256.986885797232,
+        "lancedb_scalar_index_build": 0.0,
+        "lancedb_table_create": 3548.751718364656,
+        "numpy_f32_build": 63.3920319378376,
+        "numpy_sq8_build": 0.0,
+        "sqlite_load_to_numpy": 1250.2387170679867,
+        "sqlite_seed": 1956.0565808787942
+      },
+      "top_k": 10
+    },
+    {
+      "artifact_sizes_bytes": {
+        "numpy_f32_matrix": 384000000,
+        "query_batch_f32": 153600
+      },
+      "break_even_queries": {
+        "lancedb_flat_vs_numpy_f32": null,
+        "lancedb_indexed_vs_numpy_f32": null
+      },
+      "dimensions": 384,
+      "filtered_candidate_count": 1940,
+      "lancedb_candidate_name": "ivf_flat_probe256",
+      "lancedb_index_settings": {
+        "ef_construction": 300,
+        "index_type": "IVF_FLAT",
+        "m": 20,
+        "max_iterations": 50,
+        "num_bits": 8,
+        "num_partitions": 256,
+        "num_sub_vectors": null,
+        "sample_rate": 256,
+        "scalar_index_bucket": false,
+        "target_partition_size": null
+      },
+      "lancedb_search_settings": {
+        "ef": null,
+        "nprobes": 256,
+        "refine_factor": null
+      },
+      "lancedb_selection_reason": "lowest_latency_meeting_target_recall",
+      "lancedb_strategy": "tuned",
+      "lancedb_thread_limit": "8",
+      "latency_mean_ms": {
+        "lancedb_flat_filtered": 65.38177417824045,
+        "lancedb_flat_global": 85.47963362419978,
+        "lancedb_indexed_filtered": 3.9794571651145816,
+        "lancedb_indexed_global": 10.272725094109774,
+        "numpy_f32_filtered": 0.16932918690145016,
+        "numpy_f32_global": 10.040865917690098
+      },
+      "queries": 100,
+      "recalls_at_k": {
+        "lancedb_flat_filtered": 1.0,
+        "lancedb_flat_global": 1.0,
+        "lancedb_indexed_default_filtered": 0.166,
+        "lancedb_indexed_default_global": 0.143,
+        "lancedb_indexed_filtered": 1.0,
+        "lancedb_indexed_global": 1.0
+      },
+      "recommendation": "Prefer NumPy exact as the baseline. LanceDB indexed does not yet show a latency-and-recall advantage for this scenario.",
+      "rows": 250000,
+      "setup_totals_ms": {
+        "lancedb_flat": 5163.047909270972,
+        "lancedb_indexed": 8113.57625387609,
+        "numpy_f32": 1601.1164914816618
+      },
+      "stage_timings_ms": {
+        "lancedb_index_build": 12589.257069863379,
+        "lancedb_scalar_index_build": 0.0,
+        "lancedb_table_create": 5163.047909270972,
+        "numpy_f32_build": 84.96093889698386,
+        "numpy_sq8_build": 0.0,
+        "sqlite_load_to_numpy": 1516.155552584678,
+        "sqlite_seed": 2532.619670033455
+      },
+      "top_k": 10
+    },
+    {
+      "artifact_sizes_bytes": {
+        "numpy_f32_matrix": 512000000,
+        "query_batch_f32": 102400
+      },
+      "break_even_queries": {
+        "lancedb_flat_vs_numpy_f32": null,
+        "lancedb_indexed_vs_numpy_f32": 3055
+      },
+      "dimensions": 256,
+      "filtered_candidate_count": 3927,
+      "lancedb_candidate_name": "ivf_flat_probe256",
+      "lancedb_index_settings": {
+        "ef_construction": 300,
+        "index_type": "IVF_FLAT",
+        "m": 20,
+        "max_iterations": 50,
+        "num_bits": 8,
+        "num_partitions": 256,
+        "num_sub_vectors": null,
+        "sample_rate": 256,
+        "scalar_index_bucket": false,
+        "target_partition_size": null
+      },
+      "lancedb_search_settings": {
+        "ef": null,
+        "nprobes": 256,
+        "refine_factor": null
+      },
+      "lancedb_selection_reason": "lowest_latency_meeting_target_recall",
+      "lancedb_strategy": "tuned",
+      "lancedb_thread_limit": "8",
+      "latency_mean_ms": {
+        "lancedb_flat_filtered": 89.4030876411125,
+        "lancedb_flat_global": 131.5858722408302,
+        "lancedb_indexed_filtered": 5.218616465572268,
+        "lancedb_indexed_global": 13.17793230060488,
+        "numpy_f32_filtered": 0.27156568598002195,
+        "numpy_f32_global": 15.271485499106348
+      },
+      "queries": 100,
+      "recalls_at_k": {
+        "lancedb_flat_filtered": 1.0,
+        "lancedb_flat_global": 1.0,
+        "lancedb_indexed_default_filtered": 0.134,
+        "lancedb_indexed_default_global": 0.14,
+        "lancedb_indexed_filtered": 1.0,
+        "lancedb_indexed_global": 1.0
+      },
+      "recommendation": "Prefer NumPy exact for short-lived workloads, but switch to LanceDB indexed once you expect roughly 3055 or more global queries per loaded collection.",
+      "rows": 500000,
+      "setup_totals_ms": {
+        "lancedb_flat": 7209.810447879136,
+        "lancedb_indexed": 9469.176977407187,
+        "numpy_f32": 3075.062728486955
+      },
+      "stage_timings_ms": {
+        "lancedb_index_build": 9101.064385846257,
+        "lancedb_scalar_index_build": 0.0,
+        "lancedb_table_create": 7209.810447879136,
+        "numpy_f32_build": 126.17670511826873,
+        "numpy_sq8_build": 0.0,
+        "sqlite_load_to_numpy": 2948.8860233686864,
+        "sqlite_seed": 3864.123845938593
+      },
+      "top_k": 10
+    },
+    {
+      "artifact_sizes_bytes": {
+        "numpy_f32_matrix": 768000000,
+        "query_batch_f32": 153600
+      },
+      "break_even_queries": {
+        "lancedb_flat_vs_numpy_f32": null,
+        "lancedb_indexed_vs_numpy_f32": 2656
+      },
+      "dimensions": 384,
+      "filtered_candidate_count": 3970,
+      "lancedb_candidate_name": "ivf_flat_probe256",
+      "lancedb_index_settings": {
+        "ef_construction": 300,
+        "index_type": "IVF_FLAT",
+        "m": 20,
+        "max_iterations": 50,
+        "num_bits": 8,
+        "num_partitions": 256,
+        "num_sub_vectors": null,
+        "sample_rate": 256,
+        "scalar_index_bucket": false,
+        "target_partition_size": null
+      },
+      "lancedb_search_settings": {
+        "ef": null,
+        "nprobes": 256,
+        "refine_factor": null
+      },
+      "lancedb_selection_reason": "lowest_latency_meeting_target_recall",
+      "lancedb_strategy": "tuned",
+      "lancedb_thread_limit": "8",
+      "latency_mean_ms": {
+        "lancedb_flat_filtered": 158.2045856001787,
+        "lancedb_flat_global": 186.33120452286676,
+        "lancedb_indexed_filtered": 5.213598324917257,
+        "lancedb_indexed_global": 19.065765927080065,
+        "numpy_f32_filtered": 0.7530607143417001,
+        "numpy_f32_global": 23.072581959422678
+      },
+      "queries": 100,
+      "recalls_at_k": {
+        "lancedb_flat_filtered": 1.0,
+        "lancedb_flat_global": 1.0,
+        "lancedb_indexed_default_filtered": 0.115,
+        "lancedb_indexed_default_global": 0.14,
+        "lancedb_indexed_filtered": 1.0,
+        "lancedb_indexed_global": 1.0
+      },
+      "recommendation": "Prefer NumPy exact for short-lived workloads, but switch to LanceDB indexed once you expect roughly 2656 or more global queries per loaded collection.",
+      "rows": 500000,
+      "setup_totals_ms": {
+        "lancedb_flat": 10266.06259169057,
+        "lancedb_indexed": 14240.98421772942,
+        "numpy_f32": 3599.555857013911
+      },
+      "stage_timings_ms": {
+        "lancedb_index_build": 13700.80433320254,
+        "lancedb_scalar_index_build": 0.0,
+        "lancedb_table_create": 10266.06259169057,
+        "numpy_f32_build": 175.04748003557324,
+        "numpy_sq8_build": 0.0,
+        "sqlite_load_to_numpy": 3424.5083769783378,
+        "sqlite_seed": 4819.6484027430415
+      },
+      "top_k": 10
+    },
+    {
+      "artifact_sizes_bytes": {
+        "numpy_f32_matrix": 1024000000,
+        "query_batch_f32": 102400
+      },
+      "break_even_queries": {
+        "lancedb_flat_vs_numpy_f32": null,
+        "lancedb_indexed_vs_numpy_f32": 1096
+      },
+      "dimensions": 256,
+      "filtered_candidate_count": 7746,
+      "lancedb_candidate_name": "ivf_flat_probe256",
+      "lancedb_index_settings": {
+        "ef_construction": 300,
+        "index_type": "IVF_FLAT",
+        "m": 20,
+        "max_iterations": 50,
+        "num_bits": 8,
+        "num_partitions": 256,
+        "num_sub_vectors": null,
+        "sample_rate": 256,
+        "scalar_index_bucket": false,
+        "target_partition_size": null
+      },
+      "lancedb_search_settings": {
+        "ef": null,
+        "nprobes": 256,
+        "refine_factor": null
+      },
+      "lancedb_selection_reason": "lowest_latency_meeting_target_recall",
+      "lancedb_strategy": "tuned",
+      "lancedb_thread_limit": "8",
+      "latency_mean_ms": {
+        "lancedb_flat_filtered": 163.54602247476578,
+        "lancedb_flat_global": 213.5411892249249,
+        "lancedb_indexed_filtered": 8.144441554322839,
+        "lancedb_indexed_global": 26.227575719822198,
+        "numpy_f32_filtered": 0.8365654642693698,
+        "numpy_f32_global": 36.272965755779296
+      },
+      "queries": 100,
+      "recalls_at_k": {
+        "lancedb_flat_filtered": 1.0,
+        "lancedb_flat_global": 1.0,
+        "lancedb_indexed_default_filtered": 0.082,
+        "lancedb_indexed_default_global": 0.126,
+        "lancedb_indexed_filtered": 1.0,
+        "lancedb_indexed_global": 1.0
+      },
+      "recommendation": "Prefer NumPy exact for short-lived workloads, but switch to LanceDB indexed once you expect roughly 1096 or more global queries per loaded collection.",
+      "rows": 1000000,
+      "setup_totals_ms": {
+        "lancedb_flat": 14989.444276317954,
+        "lancedb_indexed": 17674.538294784725,
+        "numpy_f32": 6672.037895768881
+      },
+      "stage_timings_ms": {
+        "lancedb_index_build": 10818.5466658324,
+        "lancedb_scalar_index_build": 0.0,
+        "lancedb_table_create": 14989.444276317954,
+        "numpy_f32_build": 292.4005459062755,
+        "numpy_sq8_build": 0.0,
+        "sqlite_load_to_numpy": 6379.637349862605,
+        "sqlite_seed": 7819.77358693257
+      },
+      "top_k": 10
+    },
+    {
+      "artifact_sizes_bytes": {
+        "numpy_f32_matrix": 1536000000,
+        "query_batch_f32": 153600
+      },
+      "break_even_queries": {
+        "lancedb_flat_vs_numpy_f32": null,
+        "lancedb_indexed_vs_numpy_f32": 6378
+      },
+      "dimensions": 384,
+      "filtered_candidate_count": 7620,
+      "lancedb_candidate_name": "ivf_flat_probe512",
+      "lancedb_index_settings": {
+        "ef_construction": 300,
+        "index_type": "IVF_FLAT",
+        "m": 20,
+        "max_iterations": 50,
+        "num_bits": 8,
+        "num_partitions": 512,
+        "num_sub_vectors": null,
+        "sample_rate": 256,
+        "scalar_index_bucket": false,
+        "target_partition_size": null
+      },
+      "lancedb_search_settings": {
+        "ef": null,
+        "nprobes": 512,
+        "refine_factor": null
+      },
+      "lancedb_selection_reason": "lowest_latency_meeting_target_recall",
+      "lancedb_strategy": "tuned",
+      "lancedb_thread_limit": "8",
+      "latency_mean_ms": {
+        "lancedb_flat_filtered": 240.0999988312833,
+        "lancedb_flat_global": 265.8625730802305,
+        "lancedb_indexed_filtered": 9.962822289671749,
+        "lancedb_indexed_global": 37.76556897442788,
+        "numpy_f32_filtered": 0.8303773310035467,
+        "numpy_f32_global": 41.215256126597524
+      },
+      "queries": 100,
+      "recalls_at_k": {
+        "lancedb_flat_filtered": 1.0,
+        "lancedb_flat_global": 1.0,
+        "lancedb_indexed_default_filtered": 0.102,
+        "lancedb_indexed_default_global": 0.132,
+        "lancedb_indexed_filtered": 1.0,
+        "lancedb_indexed_global": 1.0
+      },
+      "recommendation": "Prefer NumPy exact for short-lived workloads, but switch to LanceDB indexed once you expect roughly 6378 or more global queries per loaded collection.",
+      "rows": 1000000,
+      "setup_totals_ms": {
+        "lancedb_flat": 20651.901545003057,
+        "lancedb_indexed": 29881.946453358978,
+        "numpy_f32": 7881.9792019203305
+      },
+      "stage_timings_ms": {
+        "lancedb_index_build": 15224.710457026958,
+        "lancedb_scalar_index_build": 0.0,
+        "lancedb_table_create": 20651.901545003057,
+        "numpy_f32_build": 361.0557927750051,
+        "numpy_sq8_build": 0.0,
+        "sqlite_load_to_numpy": 7520.923409145325,
+        "sqlite_seed": 10748.719074297696
+      },
+      "top_k": 10
+    }
+  ]
+}

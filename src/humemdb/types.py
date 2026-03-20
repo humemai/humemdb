@@ -1,13 +1,14 @@
 """Shared public types for the HumemDB runtime.
 
-This module intentionally stays small in Phase 1. It defines the public result object
-returned by queries and the core type aliases used across the package.
+This module intentionally stays small. It defines the public result object returned by
+queries and the core type aliases used across the package.
 
 The current API surface is deliberately conservative:
 
 - routes are explicit and limited to SQLite or DuckDB
-- query types are explicit and currently only `sql` is implemented
-- parameters follow Python DB-API conventions
+- query types are explicit; `sql`, `cypher`, and exact `vector` search are implemented
+- parameters follow Python DB-API conventions, with mapping-style params used for the
+    vector frontend
 
 As HumemDB grows, this module is the natural place for additional request, result, and
 configuration data objects that should remain lightweight and stable across the rest of

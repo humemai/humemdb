@@ -2,6 +2,8 @@ name: Build Docs
 
 on:
   push:
+    tags-ignore:
+      - 'v*'
     paths:
       - 'docs/**'
       - 'mkdocs.yml'

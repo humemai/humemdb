@@ -44,6 +44,6 @@ stays visible.
 
 - [Installation](getting-started/installation.md)
 - [Quick Start](getting-started/quickstart.md)
-- [SQL Example](examples/sql.md)
-- [Cypher Example](examples/cypher.md)
-- [Vector Example](examples/vector.md)
+- [SQL Example](examples/01_sql_basics.md)
+- [Cypher Example](examples/02_cypher_social_graph.md)
+- [Vector Example](examples/03_vector_search.md)

@@ -2,6 +2,10 @@
 
 ## SQL
 
+For `query_type="sql"`, write the PostgreSQL-like `HumemSQL v0` surface on both routes.
+`route="sqlite"` and `route="duckdb"` choose the backend engine, not a backend-specific
+SQL dialect.
+
 ```python
 from humemdb import HumemDB
 

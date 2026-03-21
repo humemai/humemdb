@@ -6,6 +6,10 @@ HumemDB treats SQL, Cypher, and vector search as separate frontends.
 
 - PostgreSQL-like source syntax.
 - Translated with `sqlglot` into backend SQL.
+- Users write `HumemSQL v0` regardless of route; `route` selects the execution backend,
+  not a backend-specific SQL dialect.
+- Backend-specific SQLite or DuckDB SQL is not part of the supported public SQL
+  contract.
 - Public writes go to SQLite.
 - Read queries may go to SQLite or DuckDB.
 

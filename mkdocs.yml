@@ -93,7 +93,14 @@ nav:
       - Routing: guide/routing.md
       - Transactions: guide/transactions.md
       - Vectors: guide/vectors.md
-      - Benchmarks: guide/benchmarks.md
+      - Benchmarks:
+        - Overview: guide/benchmarks.md
+        - Translation Overhead: guide/benchmarks/translation-overhead.md
+        - Relational Direct Read: guide/benchmarks/relational-direct-read.md
+        - Cypher Graph Path: guide/benchmarks/cypher-graph-path.md
+        - Vector Search: guide/benchmarks/vector-search.md
+        - Vector Search Sweep: guide/benchmarks/vector-search-sweep.md
+        - Vector Search Tune LanceDB: guide/benchmarks/vector-search-tune-lancedb.md
   - Development:
       - Documentation: development/documentation.md
       - Licensing: development/licensing.md

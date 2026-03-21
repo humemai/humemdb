@@ -250,6 +250,9 @@ Add larger ingestion strategies.
 - Keep SQLite as the canonical ingest target because it remains the source of truth.
 - Add larger file-based and workload-specific ingestion paths only when the simple
   transactional SQLite path is no longer enough.
+- Consider an optional Parquet materialization path only if later benchmarks show that
+  repeated broad analytical reads need a snapshot or cache layer beyond the current
+  live DuckDB-over-SQLite path.
 - Start with CSV-first bulk ingest for table data into SQLite tables.
 - Add graph CSV ingest into the SQLite-backed graph tables rather than treating the
   initial Cypher frontend as the bulk loader.
@@ -257,6 +260,8 @@ Add larger ingestion strategies.
   simpler or safer.
 - Keep DuckDB as the analytical read path after ingest, not as the canonical ingest
   destination.
+- If Parquet is added later, keep it as an optional analytical snapshot/export layer,
+  not as a replacement for fresh DuckDB reads over the SQLite source of truth.
 - Choose ingest strategies based on data size, source format, and workload instead of
   assuming one bulk-load path fits everything.
 - Keep this as an ingestion/runtime phase, not a change to the public query surfaces.

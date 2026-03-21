@@ -96,4 +96,5 @@ nav:
       - Benchmarks: guide/benchmarks.md
   - Development:
       - Documentation: development/documentation.md
+      - Licensing: development/licensing.md
       - Release Workflow: development/release.md

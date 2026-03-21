@@ -1,6 +1,6 @@
 # Release Workflow
 
-Phase 6 hardens the public release path around two outputs:
+HumemDB's public release path currently centers on two outputs:
 
 - the PyPI package
 - the versioned docs site

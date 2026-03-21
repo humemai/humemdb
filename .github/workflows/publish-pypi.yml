@@ -10,6 +10,10 @@ permissions:
   contents: read
 
 jobs:
+  tests:
+    name: Run unit tests
+    uses: ./.github/workflows/test.yml
+
   build:
     name: Build package
     runs-on: ubuntu-24.04
@@ -30,10 +34,6 @@ jobs:
       - name: Install project and docs dependencies
         run: |
           uv sync --group docs
-
-      - name: Run tests
-        run: |
-          uv run python -m unittest discover -s tests -v
 
       - name: Build docs
         run: |
@@ -63,7 +63,7 @@ jobs:
 
   publish:
     name: Publish package to PyPI
-    needs: [build, examples]
+    needs: [tests, build, examples]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     environment: pypi

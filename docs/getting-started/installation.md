@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Python 3.12 or newer.
+- Python 3.10 or newer.
 - A normal local Python environment managed with `uv`.
 
 ## Install from source
@@ -43,11 +43,19 @@ uv sync --group docs
 
 ## Installed runtime dependencies
 
-- `duckdb`
-- `lancedb`
-- `numpy`
-- `sqlglot[c]`
-- `threadpoolctl`
+- `sqlite3` from the Python standard library for the canonical local write path.
+- `duckdb` for analytical reads.
+- `numpy` for the exact vector search baseline.
+- `sqlglot[c]` for PostgreSQL-like SQL translation.
+- `lancedb` for benchmark work and future indexed ANN paths.
+- `threadpoolctl` for thread-pool coordination.
 
 LanceDB is present for benchmark and later accelerated vector work, but the shipped
 default vector runtime today is still the exact SQLite plus NumPy path.
+
+## Licensing note
+
+HumemDB's own code is MIT-licensed, but installed dependencies keep their own licenses.
+See the project [LICENSE]({{ config.repo_url }}/blob/{{ config.extra.version_tag
+}}/LICENSE) for HumemDB itself and the lockfile plus package metadata for the concrete
+third-party dependency set.

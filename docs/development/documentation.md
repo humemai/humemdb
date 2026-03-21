@@ -22,7 +22,7 @@ The docs site is published into the shared `humemai-docs` repository under the
 
 `mike` manages versioned documentation aliases such as `latest`.
 
-## Writing rules for this phase
+## Writing rules
 
 - keep the docs aligned with the actual `v0` runtime surface
 - prefer clear boundaries over aspirational claims

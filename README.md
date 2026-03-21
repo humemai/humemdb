@@ -52,6 +52,8 @@ Current behavior is intentionally explicit:
 
 ## Install
 
+HumemDB supports Python 3.10 and newer.
+
 Install from source:
 
 ```bash
@@ -82,6 +84,21 @@ uv sync
 
 `uv lock` updates the lockfile with exact resolved versions. `uv sync` installs that
 exact environment.
+
+## Libraries HumemDB relies on
+
+HumemDB is a pure Python orchestration layer, but it relies on a small set of core
+Python libraries and embedded engines:
+
+- `sqlite3` from the Python standard library for the canonical local write path.
+- `duckdb` for analytical reads over the SQLite-backed source-of-truth database.
+- `numpy` for the exact in-memory vector search baseline.
+- `sqlglot[c]` for the current PostgreSQL-like SQL translation layer.
+- `lancedb` for benchmark work and future indexed ANN paths.
+- `threadpoolctl` for thread-pool coordination around compute-heavy dependencies.
+
+Those dependencies are part of the public runtime story. HumemDB does not try to hide
+them behind a fake "single engine" narrative.
 
 ## 🧠 What is supported today
 
@@ -139,7 +156,7 @@ More examples live in [examples/](examples/) and in the docs site.
 - Docs: [docs.humem.ai/humemdb](https://docs.humem.ai/humemdb/)
 - Repository: [github.com/humemai/humemdb](https://github.com/humemai/humemdb)
 - Issues: [github.com/humemai/humemdb/issues](https://github.com/humemai/humemdb/issues)
-- Internal phase tracking: [things-to-do.md](things-to-do.md)
+- Internal roadmap notes: [things-to-do.md](things-to-do.md)
 
 ## 📦 Packaging
 
@@ -149,9 +166,15 @@ side.
 
 ## 🗺️ Planning
 
-The detailed internal roadmap and phase tracking now live in `things-to-do.md` instead
-of this README.
+Detailed internal roadmap notes now live in `things-to-do.md` instead of this README.
 
 ## 📄 License
 
-MIT.
+HumemDB's own source code is licensed under MIT. See [LICENSE](LICENSE).
+
+Third-party dependencies keep their own licenses. Installing HumemDB may also install
+third-party Python packages and, in some cases, their native wheels. Those components
+are not relicensed under MIT just because HumemDB depends on them.
+
+For the concrete dependency set, see [pyproject.toml](pyproject.toml) and
+[uv.lock](uv.lock).

@@ -105,6 +105,9 @@ them behind a fake "single engine" narrative.
 ### SQL
 
 - PostgreSQL-like portable subset translated with `sqlglot`
+- callers write `HumemSQL v0` regardless of route; `route="sqlite"` and `route="duckdb"`
+    choose the backend engine, not a backend-specific SQL dialect
+- backend-specific SQLite or DuckDB SQL is not part of the supported public contract
 - statement coverage: `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `CREATE`
 - recursive CTEs intentionally unsupported in `v0`
 

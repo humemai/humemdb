@@ -262,6 +262,9 @@ Add larger ingestion strategies.
   destination.
 - If Parquet is added later, keep it as an optional analytical snapshot/export layer,
   not as a replacement for fresh DuckDB reads over the SQLite source of truth.
+- Re-evaluate append-heavy time-series workloads later to see whether they need
+  time-aware partitioning, retention, rollups, or helper APIs beyond the current SQL
+  surface.
 - Choose ingest strategies based on data size, source format, and workload instead of
   assuming one bulk-load path fits everything.
 - Keep this as an ingestion/runtime phase, not a change to the public query surfaces.

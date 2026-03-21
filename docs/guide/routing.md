@@ -15,6 +15,10 @@ release hard to reason about.
 - allow Cypher reads on SQLite or DuckDB
 - keep vector search on SQLite
 
+For `query_type="sql"`, the caller still writes `HumemSQL v0` on both routes. Choosing
+`route="sqlite"` or `route="duckdb"` selects the backend engine, not a SQLite-specific
+or DuckDB-specific SQL dialect.
+
 ## Why explicit routing comes first
 
 Automatic routing is planned later, but the runtime needs benchmark evidence and stable

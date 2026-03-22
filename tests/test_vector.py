@@ -90,7 +90,7 @@ class HumemVectorTest(unittest.TestCase):
 
         self.assertEqual(result[0].item_id, 11)
 
-    def test_vector_sqlite_roundtrip_loads_collection(self) -> None:
+    def test_vector_sqlite_roundtrip_loads_vector_set(self) -> None:
         vector = _vector_module()
         HumemDB = _humemdb_class()
 
@@ -103,22 +103,145 @@ class HumemVectorTest(unittest.TestCase):
                     vector.insert_vectors(
                         db.sqlite,
                         [
-                            (1, "default", 7, [1.0, 0.0]),
-                            (2, "default", 7, [0.0, 1.0]),
+                            (1, [1.0, 0.0]),
+                            (2, [0.0, 1.0]),
                         ],
                     )
 
-                item_ids, bucket_ids, matrix = vector.load_vector_matrix(
-                    db.sqlite,
-                    collection="default",
-                )
+                item_ids, matrix = vector.load_vector_matrix(db.sqlite)
 
         np.testing.assert_array_equal(item_ids, np.array([1, 2], dtype=np.int64))
-        np.testing.assert_array_equal(bucket_ids, np.array([7, 7], dtype=np.int32))
         np.testing.assert_allclose(
             matrix,
             np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
         )
+
+    def test_sql_owned_vectors_work_through_sql_and_vector_query(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+
+            with HumemDB(str(sqlite_path)) as db:
+                db.query(
+                    (
+                        "CREATE TABLE docs ("
+                        "id INTEGER PRIMARY KEY, "
+                        "title TEXT NOT NULL, "
+                        "topic TEXT NOT NULL, "
+                        "embedding BLOB)"
+                    ),
+                    route="sqlite",
+                )
+
+                db.executemany(
+                    (
+                        "INSERT INTO docs (id, title, topic, embedding) "
+                        "VALUES (?, ?, ?, ?)"
+                    ),
+                    [
+                        (1, "Alpha one", "alpha", [0.0, 1.0]),
+                        (2, "Alpha two", "alpha", [0.8, 0.2]),
+                        (3, "Beta one", "beta", [0.0, 1.0]),
+                    ],
+                    route="sqlite",
+                )
+
+                db.query(
+                    "UPDATE docs SET embedding = ? WHERE id = ?",
+                    route="sqlite",
+                    params=([1.0, 0.0], 1),
+                )
+
+                relational = db.query(
+                    "SELECT id, title FROM docs WHERE topic = ? ORDER BY id",
+                    route="sqlite",
+                    params=("alpha",),
+                )
+                self.assertEqual(
+                    relational.rows,
+                    ((1, "Alpha one"), (2, "Alpha two")),
+                )
+
+                vector_result = db.query(
+                    "SELECT id FROM docs WHERE topic = ? ORDER BY id",
+                    route="sqlite",
+                    query_type="vector",
+                    params={
+                        "query": [1.0, 0.0],
+                        "top_k": 3,
+                        "scope_query_type": "sql",
+                        "scope_params": ("alpha",),
+                    },
+                )
+
+                self.assertEqual(
+                    tuple(row[0] for row in vector_result.rows),
+                    (1, 2),
+                )
+                self.assertAlmostEqual(vector_result.rows[0][1], 1.0, places=6)
+
+    def test_cypher_owned_vectors_work_through_cypher_and_vector_query(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+
+            with HumemDB(str(sqlite_path)) as db:
+                created = []
+                for name, cohort, embedding in (
+                    ("Alice", "alpha", [0.0, 1.0]),
+                    ("Bob", "alpha", [0.8, 0.2]),
+                    ("Carol", "beta", [0.0, 1.0]),
+                ):
+                    result = db.query(
+                        (
+                            "CREATE (u:User {"
+                            "name: $name, cohort: $cohort, embedding: $embedding})"
+                        ),
+                        route="sqlite",
+                        query_type="cypher",
+                        params={
+                            "name": name,
+                            "cohort": cohort,
+                            "embedding": embedding,
+                        },
+                    )
+                    created.append(result.rows[0][0])
+
+                db.query(
+                    "MATCH (u:User {name: 'Alice'}) SET u.embedding = $embedding",
+                    route="sqlite",
+                    query_type="cypher",
+                    params={"embedding": [1.0, 0.0]},
+                )
+
+                graph_result = db.query(
+                    "MATCH (u:User {cohort: 'alpha'}) RETURN u.id, u.name ORDER BY u.id",
+                    route="sqlite",
+                    query_type="cypher",
+                )
+                self.assertEqual(
+                    graph_result.rows,
+                    ((created[0], "Alice"), (created[1], "Bob")),
+                )
+
+                vector_result = db.query(
+                    "MATCH (u:User {cohort: 'alpha'}) RETURN u.id ORDER BY u.id",
+                    route="sqlite",
+                    query_type="vector",
+                    params={
+                        "query": [1.0, 0.0],
+                        "top_k": 3,
+                        "scope_query_type": "cypher",
+                    },
+                )
+
+                self.assertEqual(
+                    tuple(row[0] for row in vector_result.rows),
+                    (created[0], created[1]),
+                )
+                self.assertAlmostEqual(vector_result.rows[0][1], 1.0, places=6)
 
 
 if __name__ == "__main__":

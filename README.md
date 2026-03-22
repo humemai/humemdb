@@ -18,8 +18,8 @@ already good at.
 - SQLite for OLTP.
 - DuckDB for OLAP.
 - Cypher support over SQL-backed graph storage.
-- Exact and ANN vector search, with the default runtime path starting from an exact
-  SQLite-plus-NumPy baseline today.
+- Exact vector search, with the default runtime path starting from an exact
+    SQLite-plus-NumPy baseline today.
 - LanceDB later where the benchmark justifies an indexed ANN path.
 
 Today, it starts as a thin Python orchestration layer over embedded engines. The
@@ -123,7 +123,10 @@ them behind a fake "single engine" narrative.
 
 - SQLite-backed vector storage
 - exact NumPy baseline path
-- bucket filtering
+- row-scoped vector search through SQL candidate queries
+- node-scoped vector search through Cypher candidate queries
+- thin direct object API for vector-only use, with narrow metadata equality filters
+- SQL INSERTs and Cypher CREATEs can carry vector values into the canonical store
 - benchmark path toward indexed ANN where justified
 
 ## ⚡ Quick example

@@ -42,10 +42,10 @@ Key result artifacts:
 | 100,000 | 384 | `ivf_flat_probe256` | 1.000 | 4.70 | 3.56 | 570.25 | 34.85 | 2075.78 | 12065.13 | — | NumPy exact |
 | 250,000 | 256 | `ivf_flat_probe256` | 1.000 | 6.98 | 7.03 | 1250.24 | 63.39 | 3548.75 | 8256.99 | 107,144 | LanceDB only for very high reuse |
 | 250,000 | 384 | `ivf_flat_probe256` | 1.000 | 10.27 | 10.04 | 1516.16 | 84.96 | 5163.05 | 12589.26 | — | NumPy exact |
-| 500,000 | 256 | `ivf_flat_probe256` | 1.000 | 13.18 | 15.27 | 2948.89 | 126.18 | 7209.81 | 9101.06 | 3,055 | LanceDB indexed if collection is reused |
-| 500,000 | 384 | `ivf_flat_probe256` | 1.000 | 19.07 | 23.07 | 3424.51 | 175.05 | 10266.06 | 13700.80 | 2,656 | LanceDB indexed if collection is reused |
+| 500,000 | 256 | `ivf_flat_probe256` | 1.000 | 13.18 | 15.27 | 2948.89 | 126.18 | 7209.81 | 9101.06 | 3,055 | LanceDB indexed if the vector set is reused |
+| 500,000 | 384 | `ivf_flat_probe256` | 1.000 | 19.07 | 23.07 | 3424.51 | 175.05 | 10266.06 | 13700.80 | 2,656 | LanceDB indexed if the vector set is reused |
 | 1,000,000 | 256 | `ivf_flat_probe256` | 1.000 | 26.23 | 36.27 | 6379.64 | 292.40 | 14989.44 | 10818.55 | 1,096 | Strong LanceDB indexed case |
-| 1,000,000 | 384 | `ivf_flat_probe512` | 1.000 | 37.77 | 41.22 | 7520.92 | 361.06 | 20651.90 | 15224.71 | 6,378 | LanceDB indexed if collection is reused |
+| 1,000,000 | 384 | `ivf_flat_probe512` | 1.000 | 37.77 | 41.22 | 7520.92 | 361.06 | 20651.90 | 15224.71 | 6,378 | LanceDB indexed if the vector set is reused |
 
 Current routing threshold:
 
@@ -59,5 +59,5 @@ Current routing threshold:
 Current interpretation:
 
 - prefer NumPy exact as the baseline below the crossover region
-- use tuned `IVF_FLAT` for larger reused collections
+- use tuned `IVF_FLAT` for larger reused vector sets
 - treat NumPy SQ8 as a memory tradeoff, not a speed path

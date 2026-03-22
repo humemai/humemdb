@@ -28,7 +28,7 @@ Scenario:
 - cosine metric
 - 64 queries
 - `top_k=10`
-- filtered bucket candidate count: 733
+- filtered candidate count: 733
 - LanceDB index type: `IVF_PQ` with library-default partition settings
 
 Stage timings:

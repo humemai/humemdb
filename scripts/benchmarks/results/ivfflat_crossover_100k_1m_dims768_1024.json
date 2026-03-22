@@ -221,7 +221,7 @@
         "lancedb_indexed_filtered": 1.0,
         "lancedb_indexed_global": 1.0
       },
-      "recommendation": "Prefer NumPy exact for short-lived workloads, but switch to LanceDB indexed once you expect roughly 9421 or more global queries per loaded collection.",
+      "recommendation": "Prefer NumPy exact for short-lived workloads, but switch to LanceDB indexed once you expect roughly 9421 or more global queries per loaded vector set.",
       "rows": 250000,
       "setup_totals_ms": {
         "lancedb_flat": 9909.22762081027,
@@ -355,7 +355,7 @@
         "lancedb_indexed_filtered": 1.0,
         "lancedb_indexed_global": 1.0
       },
-      "recommendation": "Prefer NumPy exact for short-lived workloads, but switch to LanceDB indexed once you expect roughly 63088 or more global queries per loaded collection.",
+      "recommendation": "Prefer NumPy exact for short-lived workloads, but switch to LanceDB indexed once you expect roughly 63088 or more global queries per loaded vector set.",
       "rows": 500000,
       "setup_totals_ms": {
         "lancedb_flat": 18870.541321113706,
@@ -422,7 +422,7 @@
         "lancedb_indexed_filtered": 1.0,
         "lancedb_indexed_global": 1.0
       },
-      "recommendation": "Prefer NumPy exact for short-lived workloads, but switch to LanceDB indexed once you expect roughly 16185 or more global queries per loaded collection.",
+      "recommendation": "Prefer NumPy exact for short-lived workloads, but switch to LanceDB indexed once you expect roughly 16185 or more global queries per loaded vector set.",
       "rows": 500000,
       "setup_totals_ms": {
         "lancedb_flat": 24419.592480175197,
@@ -489,7 +489,7 @@
         "lancedb_indexed_filtered": 1.0,
         "lancedb_indexed_global": 1.0
       },
-      "recommendation": "Prefer NumPy exact for short-lived workloads, but switch to LanceDB indexed once you expect roughly 7136 or more global queries per loaded collection.",
+      "recommendation": "Prefer NumPy exact for short-lived workloads, but switch to LanceDB indexed once you expect roughly 7136 or more global queries per loaded vector set.",
       "rows": 1000000,
       "setup_totals_ms": {
         "lancedb_flat": 41572.27943232283,
@@ -556,7 +556,7 @@
         "lancedb_indexed_filtered": 1.0,
         "lancedb_indexed_global": 1.0
       },
-      "recommendation": "Prefer NumPy exact for short-lived workloads, but switch to LanceDB indexed once you expect roughly 4718 or more global queries per loaded collection.",
+      "recommendation": "Prefer NumPy exact for short-lived workloads, but switch to LanceDB indexed once you expect roughly 4718 or more global queries per loaded vector set.",
       "rows": 1000000,
       "setup_totals_ms": {
         "lancedb_flat": 55668.074569664896,

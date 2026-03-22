@@ -36,7 +36,6 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--metric", choices=("cosine", "dot", "l2"), default="cosine")
-    parser.add_argument("--buckets", type=int, default=128)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument(
         "--lancedb-mode",
@@ -91,7 +90,6 @@ def main() -> None:
                     repetitions=args.repetitions,
                     skip_numpy_sq8=args.skip_numpy_sq8,
                     metric=args.metric,
-                    buckets=args.buckets,
                     seed=args.seed + scenario_id,
                     lancedb_mode=args.lancedb_mode,
                     lancedb_tuned_family=args.lancedb_tuned_family,
@@ -128,7 +126,6 @@ def main() -> None:
             "repetitions": args.repetitions,
             "skip_numpy_sq8": args.skip_numpy_sq8,
             "metric": args.metric,
-            "buckets": args.buckets,
             "seed": args.seed,
             "lancedb_mode": args.lancedb_mode,
             "lancedb_tuned_family": args.lancedb_tuned_family,
@@ -170,7 +167,6 @@ def _run_scenario(
     repetitions: int,
     skip_numpy_sq8: bool,
     metric: str,
-    buckets: int,
     seed: int,
     lancedb_mode: str,
     lancedb_tuned_family: str,
@@ -195,8 +191,6 @@ def _run_scenario(
         *(["--skip-numpy-sq8"] if skip_numpy_sq8 else []),
         "--metric",
         metric,
-        "--buckets",
-        str(buckets),
         "--seed",
         str(seed),
         "--output",
@@ -219,7 +213,6 @@ def _run_scenario(
             repetitions=repetitions,
             skip_numpy_sq8=skip_numpy_sq8,
             metric=metric,
-            buckets=buckets,
             seed=seed,
             candidate_family=lancedb_tuned_family,
             target_recall=target_recall,
@@ -237,7 +230,6 @@ def _run_tuned_lancedb(
     repetitions: int,
     skip_numpy_sq8: bool,
     metric: str,
-    buckets: int,
     seed: int,
     candidate_family: str,
     target_recall: float,
@@ -266,8 +258,6 @@ def _run_tuned_lancedb(
         *(["--skip-numpy-sq8"] if skip_numpy_sq8 else []),
         "--metric",
         metric,
-        "--buckets",
-        str(buckets),
         "--seed",
         str(seed),
         "--candidate-family",
@@ -485,7 +475,7 @@ def _recommendation(
         return (
             "Prefer NumPy exact for short-lived workloads, but switch to LanceDB "
             f"indexed once you expect roughly {indexed_break_even} or more global "
-            "queries per loaded collection."
+            "queries per loaded vector set."
         )
 
     if (

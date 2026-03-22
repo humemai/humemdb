@@ -355,7 +355,7 @@ def main() -> None:
         parsed_plan = parse_cypher(workload.query)
         parse_summary = _time_callable(
             lambda query=workload.query: parse_cypher(query),
-            warmup=args.warmup,report 
+            warmup=args.warmup,
             repetitions=args.repetitions,
         )
         compile_summary = _time_callable(

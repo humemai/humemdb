@@ -38,7 +38,6 @@ class BenchmarkConfig:
     warmup: int
     repetitions: int
     metric: str
-    buckets: int
     seed: int
     enable_numpy_sq8: bool = True
     lancedb_index_type: str = "IVF_PQ"
@@ -53,7 +52,7 @@ class BenchmarkConfig:
     lancedb_nprobes: int | None = None
     lancedb_refine_factor: int | None = None
     lancedb_ef: int | None = None
-    lancedb_scalar_index_bucket: bool = False
+    lancedb_scalar_index_prefilter: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,7 +75,7 @@ class TimingSummary:
 class BenchmarkReport:
     config: BenchmarkConfig
     row_count: int
-    filtered_bucket: int
+    filtered_cutoff: int
     filtered_candidate_count: int
     lancedb_thread_limit: str
     arrow_cpu_count: int
@@ -98,11 +97,10 @@ class BenchmarkReport:
                 "warmup": self.config.warmup,
                 "repetitions": self.config.repetitions,
                 "metric": self.config.metric,
-                "buckets": self.config.buckets,
                 "seed": self.config.seed,
             },
             "row_count": self.row_count,
-            "filtered_bucket": self.filtered_bucket,
+            "filtered_cutoff": self.filtered_cutoff,
             "filtered_candidate_count": self.filtered_candidate_count,
             "lancedb_thread_limit": self.lancedb_thread_limit,
             "arrow_cpu_count": self.arrow_cpu_count,
@@ -133,7 +131,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--repetitions", type=int, default=5)
     parser.add_argument("--metric", choices=("cosine", "dot", "l2"), default="cosine")
-    parser.add_argument("--buckets", type=int, default=128)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument(
         "--skip-numpy-sq8",
@@ -168,9 +165,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--lancedb-refine-factor", type=int)
     parser.add_argument("--lancedb-ef", type=int)
     parser.add_argument(
-        "--lancedb-scalar-index-bucket",
+        "--lancedb-scalar-index-prefilter",
         action="store_true",
-        help="Create a scalar index on the bucket column for prefiltered searches.",
+        help=(
+            "Create a scalar index on the scalar prefilter column for "
+            "prefiltered searches."
+        ),
     )
     parser.add_argument("--output", choices=("text", "json"), default="text")
     return parser.parse_args()
@@ -186,7 +186,6 @@ def main() -> None:
         warmup=args.warmup,
         repetitions=args.repetitions,
         metric=args.metric,
-        buckets=args.buckets,
         seed=args.seed,
         enable_numpy_sq8=not args.skip_numpy_sq8,
         lancedb_index_type=args.lancedb_index_type,
@@ -201,7 +200,7 @@ def main() -> None:
         lancedb_nprobes=args.lancedb_nprobes,
         lancedb_refine_factor=args.lancedb_refine_factor,
         lancedb_ef=args.lancedb_ef,
-        lancedb_scalar_index_bucket=args.lancedb_scalar_index_bucket,
+        lancedb_scalar_index_prefilter=args.lancedb_scalar_index_prefilter,
     )
     report = run_benchmark(config)
     if args.output == "json":
@@ -235,16 +234,12 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
                 db,
                 rows=config.rows,
                 dimensions=config.dimensions,
-                buckets=config.buckets,
                 rng=rng,
             )
             sqlite_seed_ms = (time.perf_counter() - started) * 1000.0
 
             started = time.perf_counter()
-            item_ids, bucket_ids, matrix = load_vector_matrix(
-                db.sqlite,
-                collection="default",
-            )
+            item_ids, matrix = load_vector_matrix(db.sqlite)
             sqlite_load_ms = (time.perf_counter() - started) * 1000.0
 
         queries = _make_queries(
@@ -273,8 +268,8 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
             )
             numpy_sq8_build_ms = (time.perf_counter() - started) * 1000.0
 
-        bucket_value = int(bucket_ids[len(bucket_ids) // 3])
-        filtered_candidates = np.flatnonzero(bucket_ids == bucket_value)
+        filtered_cutoff = int(item_ids[len(item_ids) // 2])
+        filtered_candidates = np.flatnonzero(item_ids <= filtered_cutoff)
 
         exact_truth = _exact_truth(
             exact_index,
@@ -287,8 +282,8 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
         lance_table = _seed_lancedb_table(
             lance_path=lance_path,
             item_ids=item_ids,
-            bucket_ids=bucket_ids,
             matrix=matrix,
+            filtered_cutoff=filtered_cutoff,
         )
         lancedb_table_create_ms = (time.perf_counter() - started) * 1000.0
 
@@ -298,7 +293,7 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
         )
         lancedb_scalar_index_build_ms = _build_lancedb_scalar_index(
             lance_table,
-            enabled=config.lancedb_scalar_index_bucket,
+            enabled=config.lancedb_scalar_index_prefilter,
         )
 
         summaries = {
@@ -337,7 +332,7 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
                     query,
                     top_k=config.top_k,
                     metric=config.metric,
-                    bucket_value=bucket_value,
+                    filtered_cutoff=filtered_cutoff,
                 ),
                 queries=queries,
             ),
@@ -358,7 +353,7 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
                     lance_table,
                     query,
                     config=config,
-                    bucket_value=bucket_value,
+                    filtered_cutoff=filtered_cutoff,
                 ),
                 queries=queries,
             ),
@@ -402,7 +397,7 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
                         query,
                         top_k=config.top_k,
                         metric=config.metric,
-                        bucket_value=bucket_value,
+                        filtered_cutoff=filtered_cutoff,
                     )
                     for query in queries
                 ],
@@ -425,7 +420,7 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
                         lance_table,
                         query,
                         config=config,
-                        bucket_value=bucket_value,
+                        filtered_cutoff=filtered_cutoff,
                     )
                     for query in queries
                 ],
@@ -472,7 +467,7 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
     return BenchmarkReport(
         config=config,
         row_count=rows,
-        filtered_bucket=bucket_value,
+        filtered_cutoff=filtered_cutoff,
         filtered_candidate_count=int(filtered_candidates.size),
         lancedb_thread_limit=lancedb_thread_limit,
         arrow_cpu_count=arrow_cpu_count,
@@ -493,8 +488,7 @@ def _print_report(report: BenchmarkReport) -> None:
     print(f"  metric: {report.config.metric}")
     print(f"  queries: {report.config.queries}")
     print(f"  top_k: {report.config.top_k}")
-    print(f"  buckets: {report.config.buckets}")
-    print(f"  filtered_bucket: {report.filtered_bucket}")
+    print(f"  filtered_cutoff: {report.filtered_cutoff}")
     print(f"  filtered_candidate_count: {report.filtered_candidate_count}")
     print(f"  lancedb_thread_limit: {report.lancedb_thread_limit}")
     print(f"  arrow_cpu_count: {report.arrow_cpu_count}")
@@ -523,36 +517,31 @@ def _print_report(report: BenchmarkReport) -> None:
 
 
 def _seed_sqlite_vectors(
-    db: HumemDB,
+    db: Any,
     *,
     rows: int,
     dimensions: int,
-    buckets: int,
-    rng: np.random.Generator,
+    rng: Any,
 ) -> int:
     matrix = rng.normal(size=(rows, dimensions)).astype(np.float32)
     matrix = matrix / np.linalg.norm(matrix, axis=1, keepdims=True)
-    bucket_ids = rng.integers(0, buckets, size=rows, dtype=np.int32)
 
     ensure_vector_schema(db.sqlite)
     with db.transaction(route="sqlite"):
         insert_vectors(
             db.sqlite,
-            [
-                (index + 1, "default", int(bucket_ids[index]), matrix[index])
-                for index in range(rows)
-            ],
+            [(index + 1, matrix[index]) for index in range(rows)],
         )
     return rows
 
 
 def _make_queries(
-    matrix: np.ndarray,
+    matrix: Any,
     *,
     count: int,
     metric: str,
-    rng: np.random.Generator,
-) -> list[np.ndarray]:
+    rng: Any,
+) -> list[Any]:
     selected = rng.choice(matrix.shape[0], size=count, replace=False)
     queries = [np.array(matrix[index], copy=True) for index in selected]
     if metric == "cosine":
@@ -564,22 +553,25 @@ def _make_queries(
 def _seed_lancedb_table(
     *,
     lance_path: Path,
-    item_ids: np.ndarray,
-    bucket_ids: np.ndarray,
-    matrix: np.ndarray,
+    item_ids: Any,
+    matrix: Any,
+    filtered_cutoff: int,
 ):
     db = lancedb.connect(str(lance_path))
     schema = pa.schema(
         [
             pa.field("item_id", pa.int64()),
-            pa.field("bucket", pa.int32()),
+            pa.field("prefilter_group", pa.int8()),
             pa.field("vector", pa.list_(pa.float32(), matrix.shape[1])),
         ]
     )
     table = pa.table(
         {
             "item_id": pa.array(item_ids.tolist(), type=pa.int64()),
-            "bucket": pa.array(bucket_ids.tolist(), type=pa.int32()),
+            "prefilter_group": pa.array(
+                (item_ids <= filtered_cutoff).astype(np.int8).tolist(),
+                type=pa.int8(),
+            ),
             "vector": pa.array(
                 matrix.tolist(),
                 type=pa.list_(pa.float32(), matrix.shape[1]),
@@ -608,17 +600,17 @@ def _build_lancedb_scalar_index(
     if not enabled:
         return 0.0
     started = time.perf_counter()
-    table.create_scalar_index("bucket")
+    table.create_scalar_index("prefilter_group")
     return (time.perf_counter() - started) * 1000.0
 
 
 def _search_lancedb_flat(
     table,
-    query: np.ndarray,
+    query: Any,
     *,
     top_k: int,
     metric: str,
-    bucket_value: int | None = None,
+    filtered_cutoff: int | None = None,
 ) -> tuple[int, ...]:
     builder = (
         table.search(query)
@@ -626,18 +618,18 @@ def _search_lancedb_flat(
         .limit(top_k)
         .bypass_vector_index()
     )
-    if bucket_value is not None:
-        builder = builder.where(f"bucket = {bucket_value}", prefilter=True)
+    if filtered_cutoff is not None:
+        builder = builder.where("prefilter_group = 1", prefilter=True)
     result = builder.select(["item_id", "_distance"]).to_list()
     return tuple(int(row["item_id"]) for row in result)
 
 
 def _search_lancedb_indexed(
     table,
-    query: np.ndarray,
+    query: Any,
     *,
     config: BenchmarkConfig,
-    bucket_value: int | None = None,
+    filtered_cutoff: int | None = None,
 ) -> tuple[int, ...]:
     builder = (
         table.search(query)
@@ -650,8 +642,8 @@ def _search_lancedb_indexed(
         builder = builder.refine_factor(config.lancedb_refine_factor)
     if config.lancedb_ef is not None:
         builder = builder.ef(config.lancedb_ef)
-    if bucket_value is not None:
-        builder = builder.where(f"bucket = {bucket_value}", prefilter=True)
+    if filtered_cutoff is not None:
+        builder = builder.where("prefilter_group = 1", prefilter=True)
     result = builder.select(["item_id", "_distance"]).to_list()
     return tuple(int(row["item_id"]) for row in result)
 
@@ -687,7 +679,7 @@ def _lancedb_index_settings(config: BenchmarkConfig) -> dict[str, Any]:
         "sample_rate": config.lancedb_sample_rate,
         "max_iterations": config.lancedb_max_iterations,
         "target_partition_size": config.lancedb_target_partition_size,
-        "scalar_index_bucket": config.lancedb_scalar_index_bucket,
+        "scalar_index_prefilter": config.lancedb_scalar_index_prefilter,
     }
 
 
@@ -701,10 +693,10 @@ def _lancedb_search_settings(config: BenchmarkConfig) -> dict[str, Any]:
 
 def _exact_truth(
     exact_index: ExactVectorIndex,
-    queries: list[np.ndarray],
+    queries: list[Any],
     *,
     top_k: int,
-    filtered_candidates: np.ndarray,
+    filtered_candidates: Any,
 ) -> dict[str, list[tuple[int, ...]]]:
     return {
         "global": [
@@ -730,7 +722,7 @@ def _time_callable(
     warmup: int,
     repetitions: int,
     runner,
-    queries: list[np.ndarray],
+    queries: list[Any],
 ) -> TimingSummary:
     for _ in range(warmup):
         for query in queries:
@@ -771,9 +763,4 @@ def _match_ids(matches) -> tuple[int, ...]:
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
 

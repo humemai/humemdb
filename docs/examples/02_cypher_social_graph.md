@@ -2,8 +2,6 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/examples/02_cypher_social_graph.py){ .md-button }
 
-This page documents the real repository example `examples/02_cypher_social_graph.py`.
-
 ## What the Python example does
 
 The script builds a generated social/work graph rather than a tiny three-node toy.

@@ -126,18 +126,24 @@ def configure_runtime_threads(
 
 
 def _apply_numeric_thread_env(thread_count: int) -> None:
+    """Apply one thread budget to BLAS/OpenMP-style environment variables."""
+
     value = str(thread_count)
     for env_name in _NUMERIC_THREAD_ENV_VARS:
         os.environ[env_name] = value
 
 
 def _apply_general_thread_env(thread_count: int) -> None:
+    """Apply one thread budget to broader runtime thread-count env vars."""
+
     value = str(thread_count)
     for env_name in _GENERAL_THREAD_ENV_VARS:
         os.environ[env_name] = value
 
 
 def _apply_arrow_thread_budget(thread_count: int) -> tuple[int | None, int | None]:
+    """Apply one thread budget to PyArrow when that dependency is available."""
+
     try:
         import pyarrow as pa
     except ImportError:
@@ -153,6 +159,8 @@ def _apply_arrow_thread_budget(thread_count: int) -> tuple[int | None, int | Non
 
 
 def _current_arrow_cpu_count() -> int | None:
+    """Return the current PyArrow CPU pool size when PyArrow is installed."""
+
     try:
         import pyarrow as pa
     except ImportError:
@@ -162,6 +170,8 @@ def _current_arrow_cpu_count() -> int | None:
 
 
 def _current_arrow_io_thread_count() -> int | None:
+    """Return the current PyArrow IO thread count when available."""
+
     try:
         import pyarrow as pa
     except ImportError:
@@ -175,6 +185,8 @@ def _current_arrow_io_thread_count() -> int | None:
 
 
 def _apply_numpy_thread_budget(thread_count: int) -> int | None:
+    """Apply one runtime thread limit to already loaded numeric thread pools."""
+
     current_limit = _THREADPOOL_STATE["limit"]
     current_limiter = _THREADPOOL_STATE["limiter"]
 

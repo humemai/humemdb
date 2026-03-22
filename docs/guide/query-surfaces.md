@@ -24,7 +24,10 @@ HumemDB treats SQL, Cypher, and vector search as separate frontends.
 
 - Separate frontend, not forced SQL syntax.
 - SQLite-backed vector table.
-- Exact NumPy search over cached matrices.
+- Exact NumPy search over the cached vector matrix.
+- Direct vector search can be narrowed with equality-style metadata filters.
+- SQL candidate queries can define row-oriented vector search scope.
+- Cypher candidate queries can define node-oriented vector search scope.
 - Routing is currently fixed to `route="sqlite"`.
 
 ## Why the version label matters

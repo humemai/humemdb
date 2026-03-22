@@ -26,7 +26,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--repetitions", type=int, default=2)
     parser.add_argument("--metric", choices=("cosine", "dot", "l2"), default="cosine")
-    parser.add_argument("--buckets", type=int, default=128)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--target-recall", type=float, default=0.95)
     parser.add_argument(
@@ -254,8 +253,6 @@ def _run_candidate(
         str(args.repetitions),
         "--metric",
         args.metric,
-        "--buckets",
-        str(args.buckets),
         "--seed",
         str(args.seed + seed_offset),
         "--lancedb-index-type",

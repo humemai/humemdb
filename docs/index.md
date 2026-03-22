@@ -7,7 +7,7 @@ already good at.
 - DuckDB is the analytical read path.
 - Cypher is lowered over SQLite-backed graph storage.
 - Vector search spans exact and ANN paths, with exact NumPy over SQLite-backed
-  collections today.
+  vector storage today.
 
 The current public surfaces are intentionally explicit:
 

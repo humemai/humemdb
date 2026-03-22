@@ -258,66 +258,89 @@ python scripts/benchmarks/vector_search.py \
 
 Use it in one of these ways:
 
-- Recommended shared-budget form:
+## [`vector_query_steps.py`](./vector_query_steps.py)
 
-  ```bash
-  HUMEMDB_THREADS=8 python scripts/benchmarks/vector_search.py ...
-  ```
+Purpose:
 
-- Vector-only fallback form:
+- Break one exact-vector workload into step timings instead of only comparing complete
+  end-to-end paths.
+- Measure ingest cost for direct vectors, SQL-owned vectors, and Cypher-owned vectors.
+- Measure frontend overhead for SQL translation and Cypher parse/bind+compile.
+- Measure scope-query execution, candidate-id mapping, pure NumPy vector search, and
+  end-to-end scoped vector query latency.
 
-  Use this only when `HUMEMDB_THREADS` is unset.
-
-  ```bash
-  LANCEDB_THREADS=8 python scripts/benchmarks/vector_search.py ...
-  ```
-
-- Default thread behavior:
-
-  Use no thread-cap env var when you want each backend's default behavior.
-
-  ```bash
-  python scripts/benchmarks/vector_search.py ...
-  ```
-
-What it reports:
-
-- Stage timings for:
-  - initial SQLite insert into the canonical vector store
-  - SQLite-to-NumPy load time
-  - NumPy exact-index materialization
-  - NumPy scalar-int8 materialization
-  - LanceDB table creation
-  - LanceDB index build
-- Artifact sizes for the in-memory NumPy exact and scalar-int8 representations.
-- Mean, stdev, min, and max per-query latency for:
-  - NumPy float32 exact search
-  - NumPy scalar-int8 search
-  - LanceDB flat search
-  - LanceDB indexed search with library-default settings
-- Recall@k versus the NumPy float32 exact baseline for the approximate paths.
-
-Current use:
-
-- This script is the starting point for the current vector routing rule of thumb.
-- The benchmark should be run across multiple collection sizes, dimensions, and `top_k`
-  settings before HumemDB freezes the first public vector-routing policy.
-- If LanceDB changes its default algorithm or hyperparameters in a later release, the
-  indexed benchmark results will change with it by design.
-
-High-recall example:
+Representative command used for the current intermediate result:
 
 ```bash
-HUMEMDB_THREADS=8 python scripts/benchmarks/vector_search.py \
-  --rows 10000 \
-  --dimensions 384 \
-  --queries 16 \
-  --top-k 10 \
-  --repetitions 2 \
-  --lancedb-index-type IVF_FLAT \
-  --lancedb-num-partitions 64 \
-  --lancedb-nprobes 128
+python scripts/benchmarks/vector_query_steps.py \
+  --rows 100000 \
+  --dimensions 768 \
+  --queries 50 \
+  --warmup 1 \
+  --repetitions 3 \
+  --output json
 ```
+
+Current status:
+
+- These are intermediate measurements, not a final routing policy.
+- The current runtime is still expected to improve, especially around scoped-path
+  execution and future ingest work.
+- Cypher ingest is currently transactional but still statement-oriented, not a true
+  batched bulk-ingest path, so its ingest cost is not yet a fair lower bound.
+
+Scenario:
+
+| Metric | Value |
+| ------ | ----: |
+| Rows | 100,000 |
+| Dimensions | 768 |
+| Queries | 50 |
+| `top_k` | 10 |
+| Scoped candidate count | 50,000 |
+
+One-time stage timings:
+
+| Stage | Time |
+| ----- | ---: |
+| Direct ingest | 1999.15 ms |
+| SQL-owned ingest | 9096.09 ms |
+| Cypher-owned ingest | 18029.06 ms |
+| Direct preload | 1707.34 ms |
+| SQL-owned preload | 1197.45 ms |
+| Cypher-owned preload | 1805.85 ms |
+
+Per-query timing means:
+
+| Stage | Mean |
+| ----- | ---: |
+| Direct vector query end-to-end | 8.38 ms |
+| Direct vector search only | 7.76 ms |
+| SQL cached translation | 0.0007 ms |
+| SQL uncached translation | 0.0982 ms |
+| SQL scope query only | 109.10 ms |
+| SQL candidate mapping only | 5.11 ms |
+| SQL vector search only | 19.20 ms |
+| SQL vector query end-to-end | 150.56 ms |
+| Cypher parse only | 0.0149 ms |
+| Cypher bind+compile | 0.0077 ms |
+| Cypher scope query only | 28.55 ms |
+| Cypher candidate mapping only | 5.12 ms |
+| Cypher vector search only | 349.70 ms |
+| Cypher vector query end-to-end | 432.36 ms |
+
+Interim interpretation:
+
+| Question | Current answer |
+| -------- | -------------- |
+| Is frontend translation/planning the bottleneck? | No. SQL uncached translation stayed around `0.10 ms`, and Cypher parse plus bind+compile stayed around `0.02 ms` combined. |
+| What dominates scoped vector latency today? | For SQL-scoped search, the scope query dominates first. For Cypher-scoped search in this run, the vector search over the large candidate subset dominated heavily. |
+| Did scoping help in this run? | No. The scope kept 50,000 of 100,000 vectors, so the filter was still too broad to pay for the extra frontend and candidate-mapping work. |
+| Why is Cypher-owned ingest much slower? | The current Cypher write path is transactional but still one `CREATE` per node, not a true batched bulk-ingest surface. |
+| What should be optimized next? | Scoped-path execution, candidate mapping, selectivity-sensitive vector search, and later bulk graph ingest rather than parser/compiler micro-optimizations. |
+
+Use this benchmark when you want to answer where time is spent inside the current exact
+vector path rather than only whether one whole end-to-end backend path wins.
 
 ## [`vector_search_sweep.py`](./vector_search_sweep.py)
 
@@ -399,10 +422,10 @@ Column legend:
 |   100,000 |  384 | `ivf_flat_probe256`     |  1.000 |               4.70 |          3.56 |           570.25 |          34.85 |          2075.78 |         12065.13 |                  — | NumPy exact                             |
 |   250,000 |  256 | `ivf_flat_probe256`     |  1.000 |               6.98 |          7.03 |          1250.24 |          63.39 |          3548.75 |          8256.99 |            107,144 | LanceDB only for very high reuse        |
 |   250,000 |  384 | `ivf_flat_probe256`     |  1.000 |              10.27 |         10.04 |          1516.16 |          84.96 |          5163.05 |         12589.26 |                  — | NumPy exact                             |
-|   500,000 |  256 | `ivf_flat_probe256`     |  1.000 |              13.18 |         15.27 |          2948.89 |         126.18 |          7209.81 |          9101.06 |              3,055 | LanceDB indexed if collection is reused |
-|   500,000 |  384 | `ivf_flat_probe256`     |  1.000 |              19.07 |         23.07 |          3424.51 |         175.05 |         10266.06 |         13700.80 |              2,656 | LanceDB indexed if collection is reused |
+|   500,000 |  256 | `ivf_flat_probe256`     |  1.000 |              13.18 |         15.27 |          2948.89 |         126.18 |          7209.81 |          9101.06 |              3,055 | LanceDB indexed if vector set is reused |
+|   500,000 |  384 | `ivf_flat_probe256`     |  1.000 |              19.07 |         23.07 |          3424.51 |         175.05 |         10266.06 |         13700.80 |              2,656 | LanceDB indexed if vector set is reused |
 | 1,000,000 |  256 | `ivf_flat_probe256`     |  1.000 |              26.23 |         36.27 |          6379.64 |         292.40 |         14989.44 |         10818.55 |              1,096 | Strong LanceDB indexed case             |
-| 1,000,000 |  384 | `ivf_flat_probe512`     |  1.000 |              37.77 |         41.22 |          7520.92 |         361.06 |         20651.90 |         15224.71 |              6,378 | LanceDB indexed if collection is reused |
+| 1,000,000 |  384 | `ivf_flat_probe512`     |  1.000 |              37.77 |         41.22 |          7520.92 |         361.06 |         20651.90 |         15224.71 |              6,378 | LanceDB indexed if vector set is reused |
 
 Current LanceDB family takeaway:
 
@@ -426,7 +449,7 @@ Current routing threshold:
 Current takeaway:
 
 - Prefer NumPy exact as the baseline below the crossover region.
-- Use tuned `IVF_FLAT` for larger reused collections.
+- Use tuned `IVF_FLAT` for larger reused vector sets.
 - Treat NumPy SQ8 as a memory tradeoff, not a speed path.
 
 SQ8 tradeoffs:

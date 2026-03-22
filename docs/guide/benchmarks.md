@@ -13,6 +13,7 @@ repository README.
 - Relational direct-read benchmark: [`duckdb_direct_read.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/duckdb_direct_read.py)
 - Cypher graph-path benchmark: [`cypher_graph_path.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/cypher_graph_path.py)
 - Vector single-run benchmark: [`vector_search.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/vector_search.py)
+- Vector step-timing benchmark: [`vector_query_steps.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/vector_query_steps.py)
 - Vector sweep benchmark: [`vector_search_sweep.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/vector_search_sweep.py)
 - LanceDB tuning benchmark: [`vector_search_tune_lancedb.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/vector_search_tune_lancedb.py)
 
@@ -66,6 +67,7 @@ The single-run, sweep, and LanceDB-tuning vector pages are split out because the
 different questions:
 
 - [`vector_search.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/vector_search.py) measures one concrete scenario in depth.
+- [`vector_query_steps.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/vector_query_steps.py) breaks one exact-vector flow into ingest, frontend, scope-query, candidate-mapping, and search stages.
 - [`vector_search_sweep.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/vector_search_sweep.py) finds crossover regions across row-count and dimension grids.
 - [`vector_search_tune_lancedb.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/vector_search_tune_lancedb.py) searches candidate indexed profiles that can still hit
     a recall target.

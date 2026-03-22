@@ -88,6 +88,10 @@ nav:
       - 01 - SQL Basics: examples/01_sql_basics.md
       - 02 - Cypher Social Graph: examples/02_cypher_social_graph.md
       - 03 - Vector Search: examples/03_vector_search.md
+  - Tests:
+      - Overview: tests/index.md
+      - test_db.py: tests/test_db.md
+      - test_vector.py: tests/test_vector.md
   - Guide:
       - Query Surfaces: guide/query-surfaces.md
       - Routing: guide/routing.md
@@ -99,6 +103,7 @@ nav:
         - Relational Direct Read: guide/benchmarks/relational-direct-read.md
         - Cypher Graph Path: guide/benchmarks/cypher-graph-path.md
         - Vector Search: guide/benchmarks/vector-search.md
+        - Vector Query Steps: guide/benchmarks/vector-query-steps.md
         - Vector Search Sweep: guide/benchmarks/vector-search-sweep.md
         - Vector Search Tune LanceDB: guide/benchmarks/vector-search-tune-lancedb.md
   - Development:

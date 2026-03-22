@@ -10,7 +10,7 @@ Current shipped examples:
 
 - [01 - SQL Basics](01_sql_basics.md): generates 2,000 users and 50,000 orders, then runs both SQLite and DuckDB queries.
 - [02 - Cypher Social Graph](02_cypher_social_graph.md): generates thousands of graph nodes and edges with richer properties.
-- [03 - Vector Search](03_vector_search.md): generates 36,000 vectors across two collections and exercises exact search.
+- [03 - Vector Search](03_vector_search.md): generates 36,000 vectors in one direct vector set and exercises exact search.
 
 Run them locally from the repository root:
 

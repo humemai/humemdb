@@ -24,6 +24,9 @@ import logging
 from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
 
+from sqlglot import parse_one
+from sqlglot import errors as sqlglot_errors
+
 from .cypher import ensure_graph_schema, execute_cypher
 from .engines import DuckDBEngine, SQLiteEngine
 from .sql import translate_sql
@@ -31,9 +34,13 @@ from .types import BatchParameters, QueryParameters, QueryResult, QueryType, Rou
 from .vector import (
     ExactVectorIndex,
     VectorMetric,
+    encode_vector_blob,
     ensure_vector_schema,
     insert_vectors as insert_vector_rows,
+    load_filtered_vector_item_ids,
     load_vector_matrix,
+    upsert_vectors,
+    upsert_vector_metadata,
 )
 
 _READ_ONLY_KEYWORDS = {
@@ -53,9 +60,20 @@ _VECTOR_RESULT_COLUMNS = ("item_id", "score")
 class _TransactionalEngine(Protocol):
     """Protocol for engine objects that support explicit transactions."""
 
-    def begin(self) -> None: ...
-    def commit(self) -> None: ...
-    def rollback(self) -> None: ...
+    def begin(self) -> None:
+        """Start one explicit transaction on the engine."""
+
+        raise NotImplementedError
+
+    def commit(self) -> None:
+        """Commit the current explicit transaction on the engine."""
+
+        raise NotImplementedError
+
+    def rollback(self) -> None:
+        """Roll back the current explicit transaction on the engine."""
+
+        raise NotImplementedError
 
 
 class HumemDB:
@@ -65,10 +83,9 @@ class HumemDB:
         sqlite_path: Path to the canonical SQLite database.
         duckdb_path: Optional path to a DuckDB database file. If omitted, DuckDB uses
             an in-memory database.
-        preload_vector_collections: Optional eager vector preload policy. Use `False`
-            to keep vector collections lazy-loaded, `True` to preload all existing
-            collections on open, or a sequence of collection names to preload a specific
-            subset.
+        preload_vectors: Optional eager vector preload flag. Use `False` to keep the
+            exact vector set lazy-loaded or `True` to warm it on open when vector data
+            already exists.
 
     Notes:
         Instantiating `HumemDB` opens both embedded database connections. Use the object
@@ -80,16 +97,16 @@ class HumemDB:
         sqlite_path: str,
         duckdb_path: str | None = None,
         *,
-        preload_vector_collections: bool | Sequence[str] = False,
+        preload_vectors: bool = False,
     ) -> None:
+        """Open the embedded engines and initialize lazy runtime state."""
+
         self.sqlite_path = sqlite_path
         self.duckdb_path = duckdb_path
         self._graph_schema_ready = False
         self._vector_schema_ready = False
-        self._vector_collection_cache: dict[str, tuple[Any, Any, Any]] = {}
-        self._vector_index_cache: dict[
-            tuple[str, VectorMetric], tuple[Any, ExactVectorIndex]
-        ] = {}
+        self._vector_matrix_cache: tuple[Any, Any] | None = None
+        self._vector_index_cache: dict[VectorMetric, ExactVectorIndex] = {}
 
         sqlite_path_obj = Path(self.sqlite_path)
         sqlite_path_obj.parent.mkdir(parents=True, exist_ok=True)
@@ -102,8 +119,8 @@ class HumemDB:
             self.sqlite_path,
             self.duckdb_path,
         )
-        if preload_vector_collections:
-            self.preload_vector_collections(preload_vector_collections)
+        if preload_vectors:
+            self.preload_vectors()
 
     def query(
         self,
@@ -116,7 +133,8 @@ class HumemDB:
         """Execute a query against the explicitly selected engine.
 
         Args:
-            text: Query text to execute.
+            text: Query text to execute. For `query_type="vector"`, this value is
+                currently ignored and the request is defined by `params`.
             route: Engine route. This must be `sqlite` or `duckdb`.
             query_type: Logical query type. `sql` maps to `HumemSQL v0` and `cypher`
                 maps to `HumemCypher v0`.
@@ -158,11 +176,22 @@ class HumemDB:
 
         if route == "sqlite":
             logger.debug("Routing SQL query to SQLite")
+            normalized_params, vector_rows, vector_mode = _prepare_sql_vector_write(
+                text,
+                params,
+            )
             result = self.sqlite.execute(
                 translated_text,
-                params,
+                normalized_params,
                 query_type=query_type,
             )
+            if vector_rows:
+                self._ensure_vector_schema()
+                if vector_mode == "insert":
+                    insert_vector_rows(self.sqlite, vector_rows)
+                else:
+                    upsert_vectors(self.sqlite, vector_rows)
+                self._invalidate_vector_cache()
             self._invalidate_vector_cache_for_sql(text, translated_text)
             return result
 
@@ -184,12 +213,12 @@ class HumemDB:
 
     def insert_vectors(
         self,
-        rows: Sequence[tuple[int, str, int, Sequence[float]]],
+        rows: Sequence[tuple[int, Sequence[float]]],
     ) -> int:
         """Insert vector rows into the canonical SQLite store.
 
         Args:
-            rows: Sequence of `(item_id, collection, bucket, embedding)` tuples.
+            rows: Sequence of `(item_id, embedding)` tuples.
 
         Returns:
             The number of inserted rows.
@@ -200,59 +229,60 @@ class HumemDB:
 
         self._ensure_vector_schema()
         insert_vector_rows(self.sqlite, rows)
-        self._invalidate_vector_cache(collection for _, collection, _, _ in rows)
+        self._invalidate_vector_cache()
         return len(rows)
 
     def search_vectors(
         self,
-        collection: str,
         query: Sequence[float],
         *,
         top_k: int = 10,
         metric: VectorMetric = "cosine",
-        bucket: int | Sequence[int] | None = None,
+        filters: Mapping[str, str | int | float | bool | None] | None = None,
     ) -> QueryResult:
-        """Search one SQLite-backed vector collection with exact NumPy search."""
+        """Search the current SQLite-backed vector set with exact NumPy search."""
 
         params: dict[str, Any] = {
             "query": query,
             "top_k": top_k,
             "metric": metric,
         }
-        if bucket is not None:
-            params["bucket"] = bucket
+        if filters is not None:
+            params["filters"] = dict(filters)
 
         return self.query(
-            collection,
+            "",
             route="sqlite",
             query_type="vector",
             params=params,
         )
 
-    def preload_vector_collections(
+    def set_vector_metadata(
         self,
-        collections: bool | Sequence[str] = True,
-    ) -> tuple[str, ...]:
-        """Eagerly load vector collections into the in-memory exact-search cache."""
+        rows: Sequence[tuple[int, Mapping[str, str | int | float | bool | None]]],
+    ) -> int:
+        """Insert or replace narrow equality-filterable vector metadata."""
 
-        if collections is False:
-            return ()
+        if not rows:
+            return 0
 
-        if collections is True:
-            collection_names = self._list_vector_collections()
-        else:
-            collection_names = tuple(collections)
+        self._ensure_vector_schema()
+        upsert_vector_metadata(self.sqlite, rows)
+        return sum(len(metadata) for _, metadata in rows)
 
-        loaded: list[str] = []
-        for collection in collection_names:
-            self._load_vector_collection(collection)
-            loaded.append(collection)
-        return tuple(loaded)
+    def preload_vectors(self) -> bool:
+        """Eagerly load the current vector set into the in-memory exact-search cache."""
 
-    def cached_vector_collections(self) -> tuple[str, ...]:
-        """Return the collection names currently loaded in the vector cache."""
+        if not self._has_vector_table():
+            return False
 
-        return tuple(sorted(self._vector_collection_cache))
+        self._load_vector_matrix()
+        return True
+
+    def vectors_cached(self) -> bool:
+        """Return whether the current vector set is loaded in memory."""
+
+        return self._vector_matrix_cache is not None
 
     def _ensure_graph_schema(self) -> None:
         """Initialize the SQLite-backed graph tables on first Cypher use."""
@@ -276,20 +306,23 @@ class HumemDB:
 
     def _execute_vector_query(
         self,
-        text: str,
+        _text: str,
         *,
         route: Route,
         params: QueryParameters,
     ) -> QueryResult:
         """Execute the exact `HumemVector v0` search path.
 
-        The vector frontend uses the `text` argument as the collection name and a
-        mapping-style `params` object with the following keys:
+        The vector frontend uses a mapping-style `params` object with the following
+        keys:
 
         - `query`: required query embedding
         - `top_k`: optional positive integer, default `10`
         - `metric`: optional `cosine`, `dot`, or `l2`, default `cosine`
-        - `bucket`: optional integer or sequence of integers to restrict candidates
+        - `filters`: optional equality metadata filters for direct vector search
+        - `scope_query_type`: optional `sql` or `cypher` candidate scope query type
+        - `scope_route`: optional route for the candidate scope query, default `sqlite`
+        - `scope_params`: optional parameters for the candidate scope query
         """
 
         if route != "sqlite":
@@ -304,10 +337,6 @@ class HumemDB:
                 "a 'query' vector."
             )
 
-        collection = text.strip()
-        if not collection:
-            raise ValueError("HumemVector v0 collection names cannot be empty.")
-
         if "query" not in params:
             raise ValueError("HumemVector v0 requires params['query'].")
 
@@ -318,15 +347,25 @@ class HumemDB:
                 "HumemVector v0 metric must be one of 'cosine', 'dot', or 'l2'."
             )
 
-        index_buckets, index = self._vector_index_for(
-            collection=collection,
-            metric=metric,
-        )
-        candidate_indexes = _candidate_indexes_for_bucket_filter(
-            index_buckets,
-            params.get("bucket"),
-        )
+        filters = params.get("filters")
+        if filters is not None and not isinstance(filters, Mapping):
+            raise ValueError(
+                "HumemVector v0 expects params['filters'] to be a mapping "
+                "when provided."
+            )
 
+        scope_query_type = params.get("scope_query_type")
+        scope_route = params.get("scope_route", "sqlite")
+        scope_params = params.get("scope_params")
+
+        index = self._vector_index_for(metric=metric)
+        candidate_indexes = self._candidate_indexes_for_vector_query(
+            scope_text=_text,
+            scope_query_type=scope_query_type,
+            scope_route=scope_route,
+            scope_params=scope_params,
+            filters=filters,
+        )
         if candidate_indexes is not None and len(candidate_indexes) == 0:
             return QueryResult(
                 rows=(),
@@ -353,50 +392,144 @@ class HumemDB:
     def _vector_index_for(
         self,
         *,
-        collection: str,
         metric: VectorMetric,
-    ) -> tuple[Any, ExactVectorIndex]:
-        """Load and cache one exact vector index per collection and metric."""
+    ) -> ExactVectorIndex:
+        """Load and cache one exact vector index per metric."""
 
-        cache_key = (collection, metric)
-        cached = self._vector_index_cache.get(cache_key)
+        cached = self._vector_index_cache.get(metric)
         if cached is not None:
             return cached
 
-        item_ids, buckets, matrix = self._load_vector_collection(collection)
-        cached = (
-            buckets,
-            ExactVectorIndex(item_ids=item_ids, matrix=matrix, metric=metric),
-        )
-        self._vector_index_cache[cache_key] = cached
+        item_ids, matrix = self._load_vector_matrix()
+        cached = ExactVectorIndex(item_ids=item_ids, matrix=matrix, metric=metric)
+        self._vector_index_cache[metric] = cached
         return cached
 
-    def _load_vector_collection(self, collection: str) -> tuple[Any, Any, Any]:
-        """Load and cache one vector collection from SQLite."""
+    def _load_vector_matrix(self) -> tuple[Any, Any]:
+        """Load and cache the current vector set from SQLite."""
 
-        cached = self._vector_collection_cache.get(collection)
-        if cached is not None:
-            return cached
+        if self._vector_matrix_cache is not None:
+            return self._vector_matrix_cache
 
         self._ensure_vector_schema()
-        cached = load_vector_matrix(self.sqlite, collection=collection)
-        self._vector_collection_cache[collection] = cached
+        cached = load_vector_matrix(self.sqlite)
+        self._vector_matrix_cache = cached
         return cached
 
-    def _list_vector_collections(self) -> tuple[str, ...]:
-        """Return the existing vector collection names without creating schema."""
+    def _candidate_indexes_for_vector_query(
+        self,
+        *,
+        scope_text: str,
+        scope_query_type: Any,
+        scope_route: Any,
+        scope_params: QueryParameters,
+        filters: Mapping[str, str | int | float | bool | None] | None,
+    ) -> Any:
+        """Resolve optional SQL/Cypher/vector-metadata scope into matrix indexes."""
 
-        if not self._has_vector_table():
+        candidate_item_ids: set[int] | None = None
+
+        if filters:
+            self._ensure_vector_schema()
+            candidate_item_ids = set(
+                load_filtered_vector_item_ids(self.sqlite, filters)
+            )
+
+        if scope_query_type is not None:
+            if scope_query_type not in {"sql", "cypher"}:
+                raise ValueError(
+                    "HumemVector v0 scope_query_type must be 'sql' or 'cypher'."
+                )
+            if not scope_text.strip():
+                raise ValueError(
+                    "HumemVector v0 scoped vector queries require scope SQL "
+                    "or Cypher text."
+                )
+            if scope_route not in {"sqlite", "duckdb"}:
+                raise ValueError(
+                    "HumemVector v0 scope_route must be 'sqlite' or 'duckdb'."
+                )
+            if scope_query_type == "sql" and not _is_read_only_query(scope_text):
+                raise ValueError(
+                    "HumemVector v0 SQL vector scope must be a read-only SQL query."
+                )
+            normalized_scope_text = scope_text.lstrip().casefold()
+            if scope_query_type == "cypher" and not normalized_scope_text.startswith(
+                "match "
+            ):
+                raise ValueError(
+                    "HumemVector v0 Cypher vector scope must be a MATCH query."
+                )
+
+            scoped_result = self.query(
+                scope_text,
+                route=scope_route,
+                query_type=scope_query_type,
+                params=scope_params,
+            )
+            scoped_item_ids = set(
+                self._vector_candidate_item_ids_from_result(scoped_result)
+            )
+            if candidate_item_ids is None:
+                candidate_item_ids = scoped_item_ids
+            else:
+                candidate_item_ids &= scoped_item_ids
+
+        if candidate_item_ids is None:
+            return None
+
+        if not candidate_item_ids:
             return ()
 
-        result = self.sqlite.execute(
-            (
-                "SELECT DISTINCT collection "
-                "FROM vector_entries "
-                "ORDER BY collection"
-            )
+        return self._candidate_indexes_for_item_ids(candidate_item_ids)
+
+    def _candidate_indexes_for_item_ids(self, item_ids: set[int]) -> Any:
+        """Map candidate item ids onto cached matrix row indexes."""
+
+        vector_item_ids, _matrix = self._load_vector_matrix()
+        return tuple(
+            index
+            for index, item_id in enumerate(vector_item_ids.tolist())
+            if int(item_id) in item_ids
         )
-        return tuple(str(row[0]) for row in result.rows)
+
+    def _vector_candidate_item_ids_from_result(
+        self,
+        result: QueryResult,
+    ) -> tuple[int, ...]:
+        """Extract vector candidate item ids from a SQL or Cypher scope result."""
+
+        if not result.columns:
+            raise ValueError(
+                "HumemVector v0 candidate scope queries must return at least "
+                "one column."
+            )
+
+        lowered_columns = tuple(column.casefold() for column in result.columns)
+        if "item_id" in lowered_columns:
+            id_index = lowered_columns.index("item_id")
+        elif "id" in lowered_columns:
+            id_index = lowered_columns.index("id")
+        else:
+            matching_indexes = [
+                index
+                for index, column in enumerate(lowered_columns)
+                if column.endswith(".id")
+            ]
+            if len(matching_indexes) == 1:
+                id_index = matching_indexes[0]
+            elif len(result.columns) == 1:
+                id_index = 0
+            else:
+                raise ValueError(
+                    "HumemVector v0 candidate scope queries must return one id column "
+                    "named 'item_id', 'id', or '*.id'."
+                )
+
+        item_ids: list[int] = []
+        for row in result.rows:
+            item_ids.append(int(row[id_index]))
+        return tuple(item_ids)
 
     def _has_vector_table(self) -> bool:
         """Return whether the current SQLite database already has vector storage."""
@@ -410,22 +543,11 @@ class HumemDB:
         )
         return bool(result.rows)
 
-    def _invalidate_vector_cache(self, collections: Sequence[str]) -> None:
-        """Drop cached exact indexes for any collection that changed."""
+    def _invalidate_vector_cache(self) -> None:
+        """Drop cached exact vector data after vector storage changes."""
 
-        collection_names = set(collections)
-        if not collection_names:
-            return
-
-        stale_keys = [
-            cache_key
-            for cache_key in self._vector_index_cache
-            if cache_key[0] in collection_names
-        ]
-        for collection in collection_names:
-            self._vector_collection_cache.pop(collection, None)
-        for cache_key in stale_keys:
-            del self._vector_index_cache[cache_key]
+        self._vector_matrix_cache = None
+        self._vector_index_cache.clear()
 
     def _invalidate_vector_cache_for_sql(
         self,
@@ -440,8 +562,7 @@ class HumemDB:
             return
 
         logger.debug("Invalidating all vector cache entries after SQL write")
-        self._vector_collection_cache.clear()
-        self._vector_index_cache.clear()
+        self._invalidate_vector_cache()
 
     def begin(self, *, route: Route) -> None:
         """Begin an explicit transaction on the selected route."""
@@ -510,11 +631,19 @@ class HumemDB:
 
         if route == "sqlite":
             logger.debug("Routing batched SQL query to SQLite")
+            normalized_params_seq, vector_rows = _prepare_sql_vector_write_batch(
+                text,
+                params_seq,
+            )
             result = self.sqlite.executemany(
                 translated_text,
-                params_seq,
+                normalized_params_seq,
                 query_type=query_type,
             )
+            if vector_rows:
+                self._ensure_vector_schema()
+                insert_vector_rows(self.sqlite, vector_rows)
+                self._invalidate_vector_cache()
             self._invalidate_vector_cache_for_sql(text, translated_text)
             return result
 
@@ -564,6 +693,8 @@ class _TransactionContext:
     """
 
     def __init__(self, db: HumemDB, route: Route) -> None:
+        """Bind the context manager to one database instance and route."""
+
         self.db = db
         self.route: Route = route
 
@@ -598,27 +729,286 @@ def _is_read_only_query(text: str) -> bool:
     return keyword in _READ_ONLY_KEYWORDS
 
 
-def _candidate_indexes_for_bucket_filter(
-    buckets: Sequence[int],
-    bucket_filter: int | Sequence[int] | None,
-) -> list[int] | None:
-    """Resolve an optional bucket filter into row indexes for vector search."""
-
-    if bucket_filter is None:
-        return None
-
-    if isinstance(bucket_filter, Sequence) and not isinstance(
-        bucket_filter,
-        (str, bytes),
-    ):
-        allowed = {int(bucket) for bucket in bucket_filter}
-    else:
-        allowed = {int(bucket_filter)}
-
-    return [index for index, bucket in enumerate(buckets) if int(bucket) in allowed]
-
-
 def _touches_vector_entries(text: str) -> bool:
     """Return whether a SQL statement references the canonical vector table."""
 
     return "vector_entries" in text.casefold()
+
+
+def _prepare_sql_vector_write(
+    text: str,
+    params: QueryParameters,
+) -> tuple[QueryParameters, list[tuple[int, Sequence[float]]], str | None]:
+    """Convert vector-bearing SQL INSERT params into SQLite blobs plus vector rows."""
+
+    if params is None or isinstance(params, Mapping):
+        return params, [], None
+
+    analysis = _analyze_sql_vector_insert(text)
+    if analysis is not None:
+        normalized_params, vector_row = _normalize_sql_vector_row(
+            params,
+            id_index=analysis["id_index"],
+            vector_index=analysis["vector_index"],
+        )
+        return normalized_params, [vector_row], "insert"
+
+    update_analysis = _analyze_sql_vector_update(text)
+    if update_analysis is not None:
+        vector_index = update_analysis["vector_index"]
+        id_index = update_analysis["id_index"]
+        if vector_index is None or id_index is None:
+            raise ValueError(
+                "HumemVector v0 SQL updates require both an embedding target and "
+                "an id predicate."
+            )
+        normalized_params, vector_row = _normalize_sql_vector_update(
+            params,
+            vector_index=vector_index,
+            id_index=id_index,
+            id_literal=update_analysis["id_literal"],
+        )
+        return normalized_params, [vector_row], "upsert"
+
+    return params, [], None
+
+
+def _prepare_sql_vector_write_batch(
+    text: str,
+    params_seq: BatchParameters,
+) -> tuple[BatchParameters, list[tuple[int, Sequence[float]]]]:
+    """Convert batched vector-bearing SQL INSERT params into blobs plus vector rows."""
+
+    analysis = _analyze_sql_vector_insert(text)
+    if analysis is None:
+        return params_seq, []
+
+    normalized_params_seq: list[Sequence[Any]] = []
+    vector_rows: list[tuple[int, Sequence[float]]] = []
+    for params in params_seq:
+        if isinstance(params, Mapping):
+            raise ValueError(
+                "HumemVector v0 SQL vector inserts currently require positional params."
+            )
+        normalized_params, vector_row = _normalize_sql_vector_row(
+            params,
+            id_index=analysis["id_index"],
+            vector_index=analysis["vector_index"],
+        )
+        normalized_params_seq.append(normalized_params)
+        vector_rows.append(vector_row)
+
+    return normalized_params_seq, vector_rows
+
+
+def _analyze_sql_vector_insert(text: str) -> dict[str, int] | None:
+    """Return id/vector param indexes for narrow vector-bearing SQL INSERTs."""
+
+    try:
+        expression = parse_one(text, read="postgres")
+    except sqlglot_errors.ParseError:
+        return None
+
+    if type(expression).__name__ != "Insert":
+        return None
+
+    target = getattr(getattr(expression, "this", None), "this", None)
+    target_name = getattr(target, "name", None) or str(target or "")
+    if target_name.casefold() == "vector_entries":
+        return None
+
+    columns = [
+        getattr(column, "name", None)
+        or getattr(getattr(column, "this", None), "name", None)
+        for column in expression.this.expressions
+    ]
+    normalized_columns = [str(column).casefold() for column in columns]
+    vector_indexes = [
+        index
+        for index, column in enumerate(normalized_columns)
+        if column == "embedding"
+    ]
+    if not vector_indexes:
+        return None
+    if len(vector_indexes) > 1:
+        raise ValueError(
+            "HumemVector v0 SQL inserts support only one embedding column."
+        )
+
+    if "id" in normalized_columns:
+        id_index = normalized_columns.index("id")
+    elif "item_id" in normalized_columns:
+        id_index = normalized_columns.index("item_id")
+    else:
+        raise ValueError(
+            "HumemVector v0 SQL inserts require an 'id' or 'item_id' column."
+        )
+
+    values = expression.args.get("expression")
+    row_count = len(getattr(values, "expressions", [])) if values is not None else 0
+    if row_count > 1:
+        raise ValueError(
+            "HumemVector v0 SQL vector inserts support one VALUES row per statement; "
+            "use executemany for batches."
+        )
+
+    return {"id_index": id_index, "vector_index": vector_indexes[0]}
+
+
+def _analyze_sql_vector_update(text: str) -> dict[str, int | None] | None:
+    """Return id/vector param indexes for narrow vector-bearing SQL UPDATEs."""
+
+    try:
+        expression = parse_one(text, read="postgres")
+    except sqlglot_errors.ParseError:
+        return None
+
+    if type(expression).__name__ != "Update":
+        return None
+
+    target = getattr(expression, "this", None)
+    target_name = getattr(target, "name", None) or str(target or "")
+    if target_name.casefold() == "vector_entries":
+        return None
+
+    vector_indexes = []
+    param_position = 0
+    for assignment in expression.expressions:
+        column_name = getattr(getattr(assignment, "this", None), "name", None)
+        rhs = getattr(assignment, "expression", None)
+        rhs_args = getattr(rhs, "args", {}) if rhs is not None else {}
+        if type(rhs).__name__ == "Placeholder" or rhs_args.get("jdbc"):
+            current_param = param_position
+            param_position += 1
+        else:
+            current_param = None
+
+        if str(column_name).casefold() == "embedding":
+            if current_param is None:
+                raise ValueError(
+                    "HumemVector v0 SQL updates currently require embedding = ? "
+                    "with positional params."
+                )
+            vector_indexes.append(current_param)
+
+    if not vector_indexes:
+        return None
+    if len(vector_indexes) > 1:
+        raise ValueError(
+            "HumemVector v0 SQL updates support only one embedding assignment."
+        )
+
+    where = expression.args.get("where")
+    if where is None or getattr(where, "this", None) is None:
+        raise ValueError(
+            "HumemVector v0 SQL vector updates currently require WHERE id = ... "
+            "or WHERE item_id = ...."
+        )
+
+    predicate = where.this
+    if type(predicate).__name__ != "EQ":
+        raise ValueError(
+            "HumemVector v0 SQL vector updates currently require a simple id "
+            "equality predicate."
+        )
+
+    left = getattr(predicate, "this", None)
+    id_name = getattr(left, "name", None)
+    if str(id_name).casefold() not in {"id", "item_id"}:
+        raise ValueError(
+            "HumemVector v0 SQL vector updates currently require WHERE id = ... "
+            "or WHERE item_id = ...."
+        )
+
+    right = getattr(predicate, "expression", None)
+    right_args = getattr(right, "args", {}) if right is not None else {}
+    if type(right).__name__ == "Placeholder" or right_args.get("jdbc"):
+        id_index = param_position
+        id_literal = None
+    else:
+        id_index = None
+        id_literal = int(str(getattr(right, "this", right)))
+
+    return {
+        "vector_index": vector_indexes[0],
+        "id_index": id_index,
+        "id_literal": id_literal,
+    }
+
+
+def _normalize_sql_vector_row(
+    params: Sequence[Any],
+    *,
+    id_index: int,
+    vector_index: int,
+) -> tuple[tuple[Any, ...], tuple[int, Sequence[float]]]:
+    """Encode one SQL row's embedding param and extract its canonical vector row."""
+
+    bound = list(params)
+    if max(id_index, vector_index) >= len(bound):
+        raise ValueError(
+            "HumemVector v0 SQL vector inserts did not receive enough "
+            "positional params."
+        )
+
+    vector_value = _coerce_vector_param(bound[vector_index], context="SQL")
+    row_id = int(bound[id_index])
+    bound[vector_index] = encode_vector_blob(vector_value)
+    return tuple(bound), (row_id, vector_value)
+
+
+def _normalize_sql_vector_update(
+    params: Sequence[Any],
+    *,
+    vector_index: int,
+    id_index: int | None,
+    id_literal: int | None,
+) -> tuple[tuple[Any, ...], tuple[int, Sequence[float]]]:
+    """Encode one SQL UPDATE embedding param and extract its canonical vector row."""
+
+    bound = list(params)
+    if vector_index >= len(bound):
+        raise ValueError(
+            "HumemVector v0 SQL vector updates did not receive enough positional "
+            "params."
+        )
+
+    vector_value = _coerce_vector_param(bound[vector_index], context="SQL")
+    if id_index is not None:
+        if id_index >= len(bound):
+            raise ValueError(
+                "HumemVector v0 SQL vector updates did not receive enough positional "
+                "params."
+            )
+        row_id = int(bound[id_index])
+    elif id_literal is not None:
+        row_id = int(id_literal)
+    else:
+        raise ValueError("HumemVector v0 SQL vector updates could not resolve an id.")
+
+    bound[vector_index] = encode_vector_blob(vector_value)
+    return tuple(bound), (row_id, vector_value)
+
+
+def _coerce_vector_param(value: Any, *, context: str) -> Sequence[float]:
+    """Validate one vector-bearing SQL or Cypher parameter value."""
+
+    if isinstance(value, (str, bytes, bytearray, memoryview)):
+        raise ValueError(
+            f"HumemVector v0 {context} vector values must be sequences of numbers."
+        )
+    if not isinstance(value, Sequence):
+        raise ValueError(
+            f"HumemVector v0 {context} vector values must be sequences of numbers."
+        )
+    if not value:
+        raise ValueError(f"HumemVector v0 {context} vector values cannot be empty.")
+
+    normalized = []
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            raise ValueError(
+                f"HumemVector v0 {context} vector values must contain only numbers."
+            )
+        normalized.append(float(item))
+    return tuple(normalized)

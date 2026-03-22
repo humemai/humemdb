@@ -15,13 +15,14 @@ accelerated variants remain benchmark tools until routing policy broadens.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal, Sequence, TypeAlias
+from typing import Any, Literal, Mapping, Sequence, TypeAlias
 
 import numpy as np
 
 from .engines import SQLiteEngine
 
 VectorMetric: TypeAlias = Literal["cosine", "dot", "l2"]
+VectorMetadataValue: TypeAlias = str | int | float | bool | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,29 +36,32 @@ class VectorSearchMatch:
 def ensure_vector_schema(sqlite: SQLiteEngine) -> None:
     """Create the initial SQLite-backed vector storage tables if needed."""
 
-    sqlite.execute(
+    for statement in (
         (
             "CREATE TABLE IF NOT EXISTS vector_entries ("
             "item_id INTEGER PRIMARY KEY, "
-            "collection TEXT NOT NULL, "
-            "bucket INTEGER NOT NULL, "
             "dimensions INTEGER NOT NULL, "
             "embedding BLOB NOT NULL)"
         ),
-        query_type="vector",
-    )
-    sqlite.execute(
         (
-            "CREATE INDEX IF NOT EXISTS idx_vector_entries_collection_bucket "
-            "ON vector_entries (collection, bucket, item_id)"
+            "CREATE TABLE IF NOT EXISTS vector_entry_metadata ("
+            "item_id INTEGER NOT NULL, "
+            "key TEXT NOT NULL, "
+            "value TEXT, "
+            "value_type TEXT NOT NULL, "
+            "PRIMARY KEY (item_id, key))"
         ),
-        query_type="vector",
-    )
+        (
+            "CREATE INDEX IF NOT EXISTS idx_vector_entry_metadata_lookup "
+            "ON vector_entry_metadata(key, value_type, value, item_id)"
+        ),
+    ):
+        sqlite.execute(statement, query_type="vector")
 
 
 def insert_vectors(
     sqlite: SQLiteEngine,
-    rows: Sequence[tuple[int, str, int, Sequence[float]]],
+    rows: Sequence[tuple[int, Sequence[float]]],
 ) -> None:
     """Insert vector rows into the SQLite canonical store."""
 
@@ -65,15 +69,43 @@ def insert_vectors(
         return
 
     encoded_rows = []
-    for item_id, collection, bucket, vector in rows:
+    for item_id, vector in rows:
         blob = encode_vector_blob(vector)
-        encoded_rows.append((item_id, collection, bucket, len(vector), blob))
+        encoded_rows.append((item_id, len(vector), blob))
 
     sqlite.executemany(
         (
             "INSERT INTO vector_entries "
-            "(item_id, collection, bucket, dimensions, embedding) "
-            "VALUES (?, ?, ?, ?, ?)"
+            "(item_id, dimensions, embedding) "
+            "VALUES (?, ?, ?)"
+        ),
+        encoded_rows,
+        query_type="vector",
+    )
+
+
+def upsert_vectors(
+    sqlite: SQLiteEngine,
+    rows: Sequence[tuple[int, Sequence[float]]],
+) -> None:
+    """Insert or replace vector rows in the SQLite canonical store."""
+
+    if not rows:
+        return
+
+    encoded_rows = []
+    for item_id, vector in rows:
+        blob = encode_vector_blob(vector)
+        encoded_rows.append((item_id, len(vector), blob))
+
+    sqlite.executemany(
+        (
+            "INSERT INTO vector_entries "
+            "(item_id, dimensions, embedding) "
+            "VALUES (?, ?, ?) "
+            "ON CONFLICT(item_id) DO UPDATE SET "
+            "dimensions = excluded.dimensions, "
+            "embedding = excluded.embedding"
         ),
         encoded_rows,
         query_type="vector",
@@ -82,42 +114,109 @@ def insert_vectors(
 
 def load_vector_matrix(
     sqlite: SQLiteEngine,
-    *,
-    collection: str,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Load one collection of SQLite-stored vectors into NumPy arrays."""
+) -> tuple[np.ndarray, np.ndarray]:
+    """Load all SQLite-stored vectors into NumPy arrays."""
 
     result = sqlite.execute(
         (
-            "SELECT item_id, bucket, dimensions, embedding "
+            "SELECT item_id, dimensions, embedding "
             "FROM vector_entries "
-            "WHERE collection = ? "
             "ORDER BY item_id"
         ),
-        params=(collection,),
         query_type="vector",
     )
     if not result.rows:
-        raise ValueError(
-            f"HumemVector v0 could not load collection {collection!r}: no rows found."
-        )
+        raise ValueError("HumemVector v0 could not load vectors: no rows found.")
 
-    dimensions = int(result.rows[0][2])
+    dimensions = int(result.rows[0][1])
     item_ids = np.empty(len(result.rows), dtype=np.int64)
-    buckets = np.empty(len(result.rows), dtype=np.int32)
     matrix = np.empty((len(result.rows), dimensions), dtype=np.float32)
 
-    for index, (item_id, bucket, row_dimensions, blob) in enumerate(result.rows):
+    for index, (item_id, row_dimensions, blob) in enumerate(result.rows):
         if int(row_dimensions) != dimensions:
             raise ValueError(
-                "HumemVector v0 requires one dimension per collection; got "
+                "HumemVector v0 requires one shared dimension per loaded vector "
+                "set; got "
                 f"{row_dimensions} and {dimensions}."
             )
         item_ids[index] = int(item_id)
-        buckets[index] = int(bucket)
         matrix[index] = decode_vector_blob(blob, dimension=dimensions)
 
-    return item_ids, buckets, matrix
+    return item_ids, matrix
+
+
+def upsert_vector_metadata(
+    sqlite: SQLiteEngine,
+    rows: Sequence[tuple[int, Mapping[str, VectorMetadataValue]]],
+) -> None:
+    """Insert or replace equality-filterable metadata for vector rows."""
+
+    encoded_rows: list[tuple[int, str, str | None, str]] = []
+    for item_id, metadata in rows:
+        for key, value in metadata.items():
+            encoded_value, value_type = _encode_metadata_value(value)
+            encoded_rows.append((item_id, key, encoded_value, value_type))
+
+    if not encoded_rows:
+        return
+
+    sqlite.executemany(
+        (
+            "INSERT INTO vector_entry_metadata "
+            "(item_id, key, value, value_type) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(item_id, key) DO UPDATE SET "
+            "value = excluded.value, "
+            "value_type = excluded.value_type"
+        ),
+        encoded_rows,
+        query_type="vector",
+    )
+
+
+def load_filtered_vector_item_ids(
+    sqlite: SQLiteEngine,
+    filters: Mapping[str, VectorMetadataValue],
+) -> tuple[int, ...]:
+    """Return item ids whose metadata matches all equality filters."""
+
+    if not filters:
+        return ()
+
+    matched_ids: set[int] | None = None
+    for key, value in filters.items():
+        encoded_value, value_type = _encode_metadata_value(value)
+        if encoded_value is None:
+            result = sqlite.execute(
+                (
+                    "SELECT item_id FROM vector_entry_metadata "
+                    "WHERE key = ? AND value_type = ? AND value IS NULL "
+                    "ORDER BY item_id"
+                ),
+                params=(key, value_type),
+                query_type="vector",
+            )
+        else:
+            result = sqlite.execute(
+                (
+                    "SELECT item_id FROM vector_entry_metadata "
+                    "WHERE key = ? AND value_type = ? AND value = ? "
+                    "ORDER BY item_id"
+                ),
+                params=(key, value_type, encoded_value),
+                query_type="vector",
+            )
+
+        item_ids = {int(row[0]) for row in result.rows}
+        if matched_ids is None:
+            matched_ids = item_ids
+        else:
+            matched_ids &= item_ids
+
+        if not matched_ids:
+            return ()
+
+    return tuple(sorted(matched_ids or ()))
 
 
 def encode_vector_blob(vector: Sequence[float]) -> bytes:
@@ -148,6 +247,8 @@ class ExactVectorIndex:
     metric: VectorMetric = "cosine"
 
     def __post_init__(self) -> None:
+        """Validate and normalize the backing matrix after dataclass construction."""
+
         matrix = _coerce_matrix(self.matrix)
         item_ids = np.asarray(self.item_ids, dtype=object)
         if item_ids.ndim != 1:
@@ -166,6 +267,8 @@ class ExactVectorIndex:
 
     @property
     def dimensions(self) -> int:
+        """Return the shared dimensionality of the indexed vectors."""
+
         return int(self.matrix.shape[1])
 
     def search(
@@ -189,12 +292,14 @@ class ExactVectorIndex:
 
         if self.metric == "cosine":
             query_array = _normalize_query(query_array)
-            scores = np.asarray(matrix @ query_array, dtype=np.float32)
+            scores = np.atleast_1d(np.asarray(matrix @ query_array, dtype=np.float32))
         elif self.metric == "dot":
-            scores = np.asarray(matrix @ query_array, dtype=np.float32)
+            scores = np.atleast_1d(np.asarray(matrix @ query_array, dtype=np.float32))
         else:
             diff = matrix - query_array
-            scores = -np.sum(diff * diff, axis=1, dtype=np.float32)
+            scores = np.atleast_1d(
+                np.asarray(-np.sum(diff * diff, axis=1, dtype=np.float32))
+            )
 
         return _build_matches(item_ids, scores, top_k)
 
@@ -221,6 +326,8 @@ class ScalarQuantizedVectorIndex:
         *,
         metric: VectorMetric = "cosine",
     ) -> ScalarQuantizedVectorIndex:
+        """Quantize a float32 matrix into the scalar-int8 benchmark format."""
+
         base_matrix = _coerce_matrix(matrix)
         if metric == "cosine":
             base_matrix = _normalize_rows(base_matrix)
@@ -241,6 +348,8 @@ class ScalarQuantizedVectorIndex:
 
     @property
     def dimensions(self) -> int:
+        """Return the shared dimensionality of the quantized vectors."""
+
         return int(self.quantized.shape[1])
 
     def search(
@@ -267,11 +376,15 @@ class ScalarQuantizedVectorIndex:
 
         if self.metric in {"cosine", "dot"}:
             scaled_query = query_array * self.scales
-            scores = np.asarray(quantized @ scaled_query, dtype=np.float32)
+            scores = np.atleast_1d(
+                np.asarray(quantized @ scaled_query, dtype=np.float32)
+            )
         else:
             approx_matrix = quantized.astype(np.float32) * self.scales
             diff = approx_matrix - query_array
-            scores = -np.sum(diff * diff, axis=1, dtype=np.float32)
+            scores = np.atleast_1d(
+                np.asarray(-np.sum(diff * diff, axis=1, dtype=np.float32))
+            )
 
         return _build_matches(item_ids, scores, top_k)
 
@@ -281,6 +394,8 @@ def _build_matches(
     scores: np.ndarray,
     top_k: int,
 ) -> tuple[VectorSearchMatch, ...]:
+    """Convert raw similarity scores into a sorted top-k match tuple."""
+
     count = _validated_top_k(top_k, total=scores.size)
     candidate_indexes = np.argpartition(-scores, count - 1)[:count]
     sorted_indexes = candidate_indexes[
@@ -293,6 +408,8 @@ def _build_matches(
 
 
 def _coerce_matrix(matrix: np.ndarray) -> np.ndarray:
+    """Validate one matrix input and return it as contiguous float32."""
+
     array = np.asarray(matrix, dtype=np.float32)
     if array.ndim != 2:
         raise ValueError("HumemVector v0 matrices must be two-dimensional.")
@@ -306,6 +423,8 @@ def _coerce_query(
     *,
     dimension: int | None = None,
 ) -> np.ndarray:
+    """Validate one query vector and return it as contiguous float32."""
+
     array = np.asarray(query, dtype=np.float32)
     if array.ndim != 1:
         raise ValueError("HumemVector v0 query vectors must be one-dimensional.")
@@ -320,12 +439,16 @@ def _coerce_query(
 
 
 def _normalize_rows(matrix: np.ndarray) -> np.ndarray:
+    """Normalize each row vector to unit length for cosine search."""
+
     norms = np.linalg.norm(matrix, axis=1, keepdims=True)
     safe_norms = np.where(norms > 0.0, norms, 1.0)
     return np.ascontiguousarray(matrix / safe_norms, dtype=np.float32)
 
 
 def _normalize_query(query: np.ndarray) -> np.ndarray:
+    """Normalize one query vector to unit length for cosine search."""
+
     norm = float(np.linalg.norm(query))
     if norm == 0.0:
         raise ValueError("HumemVector v0 cosine queries cannot be zero vectors.")
@@ -333,9 +456,29 @@ def _normalize_query(query: np.ndarray) -> np.ndarray:
 
 
 def _validated_top_k(top_k: int, *, total: int) -> int:
+    """Clamp one requested top-k value to the available score count."""
+
     if top_k < 1:
         raise ValueError("HumemVector v0 top_k must be at least 1.")
     return min(top_k, total)
+
+
+def _encode_metadata_value(value: VectorMetadataValue) -> tuple[str | None, str]:
+    """Encode one metadata scalar into the SQLite filter storage format."""
+
+    if value is None:
+        return None, "null"
+    if isinstance(value, bool):
+        return ("1" if value else "0"), "boolean"
+    if isinstance(value, int):
+        return str(value), "integer"
+    if isinstance(value, float):
+        return repr(value), "real"
+    if isinstance(value, str):
+        return value, "string"
+    raise ValueError(
+        "HumemVector v0 metadata filters support only str, int, float, bool, or None."
+    )
 
 
 def _coerce_candidate_indexes(
@@ -343,6 +486,8 @@ def _coerce_candidate_indexes(
     *,
     total: int,
 ) -> np.ndarray:
+    """Validate one candidate-index list against the current matrix size."""
+
     indexes = np.asarray(candidate_indexes, dtype=np.int64)
     if indexes.ndim != 1:
         raise ValueError("HumemVector v0 candidate indexes must be one-dimensional.")

@@ -981,7 +981,7 @@
         "numpy_sq8_filtered": 0.988,
         "numpy_sq8_global": 0.978
       },
-      "recommendation": "Prefer NumPy exact for short-lived workloads, but switch to LanceDB indexed once you expect roughly 61551 or more global queries per loaded collection.",
+      "recommendation": "Prefer NumPy exact for short-lived workloads, but switch to LanceDB indexed once you expect roughly 61551 or more global queries per loaded vector set.",
       "rows": 100000,
       "setup_totals_ms": {
         "lancedb_flat": 1391.9534720480442,

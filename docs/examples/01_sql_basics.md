@@ -2,8 +2,6 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/examples/01_sql_basics.py){ .md-button }
 
-This page documents the real repository example `examples/01_sql_basics.py`.
-
 ## What the Python example does
 
 The script generates a moderately sized embedded workload instead of a tiny hand-made

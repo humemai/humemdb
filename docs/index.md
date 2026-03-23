@@ -13,7 +13,8 @@ The current public surfaces are intentionally explicit:
 
 - `query_type="sql"` means `HumemSQL v0`.
 - `query_type="cypher"` means `HumemCypher v0`.
-- `query_type="vector"` means `HumemVector v0`.
+- `query_type="vector"` means `HumemVector v0`, with vector rows identified by
+  `target`, `scope`, and `target_id`.
 - `route="sqlite"` or `route="duckdb"` selects the execution backend.
 
 ## Why HumemDB exists

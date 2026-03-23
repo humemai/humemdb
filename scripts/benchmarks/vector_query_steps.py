@@ -19,10 +19,10 @@ vector_module = import_module("humemdb.vector")
 
 MatchNodePlan = cypher_module.MatchNodePlan
 MatchRelationshipPlan = cypher_module.MatchRelationshipPlan
-_bind_plan_values = cypher_module._bind_plan_values
-_compile_match_plan = cypher_module._compile_match_plan
+_bind_plan_values = getattr(cypher_module, "_bind_plan_values")
+_compile_match_plan = getattr(cypher_module, "_compile_match_plan")
 parse_cypher = cypher_module.parse_cypher
-_translate_sql_cached = sql_module._translate_sql_cached
+_translate_sql_cached = getattr(sql_module, "_translate_sql_cached")
 translate_sql = sql_module.translate_sql
 ExactVectorIndex = vector_module.ExactVectorIndex
 load_vector_matrix = vector_module.load_vector_matrix
@@ -209,18 +209,23 @@ def _uncached_translate_sql(text: str) -> str:
     return translate_sql(text, target="sqlite")
 
 
-def _candidate_item_ids_from_result(rows: tuple[tuple[Any, ...], ...]) -> set[int]:
-    return {int(row[0]) for row in rows}
+def _candidate_target_keys_from_result(
+    rows: tuple[tuple[Any, ...], ...],
+    *,
+    target: str,
+    scope: str,
+) -> set[tuple[str, str, int]]:
+    return {(target, scope, int(row[0])) for row in rows}
 
 
-def _candidate_indexes_for_item_ids(
+def _candidate_indexes_for_target_keys(
     vector_item_ids: np.ndarray,
-    candidate_item_ids: set[int],
+    candidate_item_ids: set[tuple[str, str, int]],
 ) -> tuple[int, ...]:
     return tuple(
         index
         for index, item_id in enumerate(vector_item_ids.tolist())
-        if int(item_id) in candidate_item_ids
+        if (str(item_id[0]), str(item_id[1]), int(item_id[2])) in candidate_item_ids
     )
 
 
@@ -360,10 +365,12 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
                 route="sqlite",
                 params=sql_scope_params,
             )
-            sql_candidate_item_ids = _candidate_item_ids_from_result(
-                sql_scope_result.rows
+            sql_candidate_item_ids = _candidate_target_keys_from_result(
+                sql_scope_result.rows,
+                target="sql_row",
+                scope="docs",
             )
-            sql_candidate_indexes = _candidate_indexes_for_item_ids(
+            sql_candidate_indexes = _candidate_indexes_for_target_keys(
                 sql_item_ids,
                 sql_candidate_item_ids,
             )
@@ -388,7 +395,7 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
                 repetitions=config.repetitions,
             )
             latency_summaries_ms["sql_candidate_mapping_only"] = _time_operation(
-                lambda: _candidate_indexes_for_item_ids(
+                lambda: _candidate_indexes_for_target_keys(
                     sql_item_ids,
                     sql_candidate_item_ids,
                 ),
@@ -448,10 +455,12 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
                 query_type="cypher",
                 params=cypher_scope_params,
             )
-            cypher_candidate_item_ids = _candidate_item_ids_from_result(
-                cypher_scope_result.rows
+            cypher_candidate_item_ids = _candidate_target_keys_from_result(
+                cypher_scope_result.rows,
+                target="graph_node",
+                scope="",
             )
-            cypher_candidate_indexes = _candidate_indexes_for_item_ids(
+            cypher_candidate_indexes = _candidate_indexes_for_target_keys(
                 cypher_item_ids,
                 cypher_candidate_item_ids,
             )
@@ -477,7 +486,7 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
                 repetitions=config.repetitions,
             )
             latency_summaries_ms["cypher_candidate_mapping_only"] = _time_operation(
-                lambda: _candidate_indexes_for_item_ids(
+                lambda: _candidate_indexes_for_target_keys(
                     cypher_item_ids,
                     cypher_candidate_item_ids,
                 ),

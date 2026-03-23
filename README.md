@@ -122,12 +122,16 @@ them behind a fake "single engine" narrative.
 ### Vector
 
 - SQLite-backed vector storage
+- canonical vector identity uses `target`, `scope`, and `target_id`
 - exact NumPy baseline path
 - row-scoped vector search through SQL candidate queries
 - node-scoped vector search through Cypher candidate queries
 - thin direct object API for vector-only use, with narrow metadata equality filters
 - SQL INSERTs and Cypher CREATEs can carry vector values into the canonical store
 - benchmark path toward indexed ANN where justified
+
+Direct vector search returns explicit provenance columns so mixed direct, SQL-owned,
+and graph-owned vectors can coexist safely in one SQLite database.
 
 ## ⚡ Quick example
 

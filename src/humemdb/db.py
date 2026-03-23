@@ -21,8 +21,9 @@ frontend surfaces will expand.
 from __future__ import annotations
 
 import logging
+from numbers import Integral
 from pathlib import Path
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Mapping, Protocol, Sequence, TypeAlias, TypedDict, cast
 
 from sqlglot import parse_one
 from sqlglot import errors as sqlglot_errors
@@ -37,7 +38,7 @@ from .vector import (
     encode_vector_blob,
     ensure_vector_schema,
     insert_vectors as insert_vector_rows,
-    load_filtered_vector_item_ids,
+    load_filtered_vector_target_keys,
     load_vector_matrix,
     upsert_vectors,
     upsert_vector_metadata,
@@ -54,24 +55,93 @@ _READ_ONLY_KEYWORDS = {
 
 logger = logging.getLogger(__name__)
 
-_VECTOR_RESULT_COLUMNS = ("item_id", "score")
+_VECTOR_RESULT_COLUMNS = ("target", "scope", "target_id", "score")
+
+DirectVectorMetadata: TypeAlias = Mapping[str, str | int | float | bool | None]
+DirectVectorRow: TypeAlias = (
+    Sequence[float]
+    | tuple[int, Sequence[float]]
+    | Mapping[str, object]
+)
+
+
+class _SQLVectorInsertAnalysis(TypedDict):
+    """Typed analysis payload for narrow vector-bearing SQL INSERT statements.
+
+    Attributes:
+        target_name: SQL table name that owns the inserted vectors.
+        id_index: Positional parameter index for the row id when the INSERT provides
+            one explicitly, or `None` when SQLite will auto-assign the id.
+        vector_index: Positional parameter index for the embedding value.
+    """
+
+    target_name: str
+    id_index: int | None
+    vector_index: int
+
+
+class _SQLVectorUpdateAnalysis(TypedDict):
+    """Typed analysis payload for narrow vector-bearing SQL UPDATE statements.
+
+    Attributes:
+        target_name: SQL table name that owns the updated vectors.
+        vector_index: Positional parameter index for the embedding assignment.
+        id_index: Positional parameter index for the row id predicate when the UPDATE
+            binds it as a parameter.
+        id_literal: Literal row id extracted from the WHERE clause when the UPDATE
+            uses an inline constant instead of a placeholder.
+    """
+
+    target_name: str
+    vector_index: int
+    id_index: int | None
+    id_literal: int | None
+
+
+_TargetScopedVectorRow: TypeAlias = tuple[str, str, int, Sequence[float]]
+_PendingTargetScopedVectorRow: TypeAlias = tuple[
+    str,
+    str,
+    int | None,
+    Sequence[float],
+]
 
 
 class _TransactionalEngine(Protocol):
-    """Protocol for engine objects that support explicit transactions."""
+    """Protocol for engine objects that support explicit transactions.
+
+    The public `HumemDB` transaction helpers depend on this minimal surface so they
+    can work with both SQLite and DuckDB without caring about driver details.
+
+    Attributes:
+        Implementations do not expose protocol-level data attributes; only the
+        transaction lifecycle methods below are required.
+    """
 
     def begin(self) -> None:
-        """Start one explicit transaction on the engine."""
+        """Start one explicit transaction on the engine.
+
+        Raises:
+            RuntimeError: If the backing engine already has an active transaction.
+        """
 
         raise NotImplementedError
 
     def commit(self) -> None:
-        """Commit the current explicit transaction on the engine."""
+        """Commit the current explicit transaction on the engine.
+
+        Returns:
+            `None`.
+        """
 
         raise NotImplementedError
 
     def rollback(self) -> None:
-        """Roll back the current explicit transaction on the engine."""
+        """Roll back the current explicit transaction on the engine.
+
+        Returns:
+            `None`.
+        """
 
         raise NotImplementedError
 
@@ -99,7 +169,15 @@ class HumemDB:
         *,
         preload_vectors: bool = False,
     ) -> None:
-        """Open the embedded engines and initialize lazy runtime state."""
+        """Open the embedded engines and initialize lazy runtime state.
+
+        Args:
+            sqlite_path: Path to the canonical SQLite database file.
+            duckdb_path: Optional path to a DuckDB file. When omitted, DuckDB uses an
+                in-memory database.
+            preload_vectors: Whether to warm the exact vector cache immediately when
+                vector storage already exists.
+        """
 
         self.sqlite_path = sqlite_path
         self.duckdb_path = duckdb_path
@@ -188,9 +266,20 @@ class HumemDB:
             if vector_rows:
                 self._ensure_vector_schema()
                 if vector_mode == "insert":
-                    insert_vector_rows(self.sqlite, vector_rows)
+                    resolved_vector_rows = _resolved_sql_vector_rows_after_insert(
+                        self.sqlite,
+                        vector_rows,
+                    )
                 else:
-                    upsert_vectors(self.sqlite, vector_rows)
+                    resolved_vector_rows = cast(
+                        list[_TargetScopedVectorRow],
+                        vector_rows,
+                    )
+                _write_target_scoped_vector_rows(
+                    self.sqlite,
+                    resolved_vector_rows,
+                    mode=vector_mode or "insert",
+                )
                 self._invalidate_vector_cache()
             self._invalidate_vector_cache_for_sql(text, translated_text)
             return result
@@ -213,24 +302,43 @@ class HumemDB:
 
     def insert_vectors(
         self,
-        rows: Sequence[tuple[int, Sequence[float]]],
-    ) -> int:
-        """Insert vector rows into the canonical SQLite store.
+        rows: Sequence[DirectVectorRow],
+    ) -> tuple[int, ...]:
+        """Insert direct vectors into the canonical SQLite store.
 
         Args:
-            rows: Sequence of `(item_id, embedding)` tuples.
+            rows: Sequence of direct-vector inputs. Each row may be a plain embedding,
+                an explicit `(target_id, embedding)` tuple for import-style writes, or a
+                mapping with an `embedding` key plus optional `metadata` and `target_id`
+                entries.
 
         Returns:
-            The number of inserted rows.
+            The direct target ids assigned to the inserted rows, in input order.
+
+        Notes:
+            Plain embeddings are the default public path. When metadata should travel
+            with the insert, pass rows such as
+            `{"embedding": [...], "metadata": {"group": "alpha"}}`.
         """
 
         if not rows:
-            return 0
+            return ()
 
         self._ensure_vector_schema()
-        insert_vector_rows(self.sqlite, rows)
+        normalized_rows, assigned_ids, metadata_rows = _normalize_direct_vector_rows(
+            self.sqlite,
+            rows,
+        )
+        insert_vector_rows(self.sqlite, normalized_rows, target="direct", scope="")
+        if metadata_rows:
+            upsert_vector_metadata(
+                self.sqlite,
+                metadata_rows,
+                target="direct",
+                scope="",
+            )
         self._invalidate_vector_cache()
-        return len(rows)
+        return assigned_ids
 
     def search_vectors(
         self,
@@ -240,7 +348,17 @@ class HumemDB:
         metric: VectorMetric = "cosine",
         filters: Mapping[str, str | int | float | bool | None] | None = None,
     ) -> QueryResult:
-        """Search the current SQLite-backed vector set with exact NumPy search."""
+        """Search the current SQLite-backed vector set with exact NumPy search.
+
+        Args:
+            query: Query embedding to rank against the current vector set.
+            top_k: Maximum number of nearest matches to return.
+            metric: Similarity metric to use for ranking.
+            filters: Optional equality metadata filters for direct-vector rows.
+
+        Returns:
+            A normalized `QueryResult` with `(target, scope, target_id, score)` rows.
+        """
 
         params: dict[str, Any] = {
             "query": query,
@@ -261,17 +379,30 @@ class HumemDB:
         self,
         rows: Sequence[tuple[int, Mapping[str, str | int | float | bool | None]]],
     ) -> int:
-        """Insert or replace narrow equality-filterable vector metadata."""
+        """Insert or replace narrow equality-filterable direct-vector metadata.
+
+        Args:
+            rows: Sequence of `(target_id, metadata)` pairs for existing direct
+                vectors.
+
+        Returns:
+            The total number of metadata key/value pairs written.
+        """
 
         if not rows:
             return 0
 
         self._ensure_vector_schema()
-        upsert_vector_metadata(self.sqlite, rows)
+        upsert_vector_metadata(self.sqlite, rows, target="direct", scope="")
         return sum(len(metadata) for _, metadata in rows)
 
     def preload_vectors(self) -> bool:
-        """Eagerly load the current vector set into the in-memory exact-search cache."""
+        """Eagerly load the current vector set into the exact-search cache.
+
+        Returns:
+            `True` when vector storage exists and the cache was loaded, or `False`
+            when no vector tables are present yet.
+        """
 
         if not self._has_vector_table():
             return False
@@ -280,7 +411,11 @@ class HumemDB:
         return True
 
     def vectors_cached(self) -> bool:
-        """Return whether the current vector set is loaded in memory."""
+        """Return whether the current vector set is loaded in memory.
+
+        Returns:
+            `True` when the vector matrix cache is populated, otherwise `False`.
+        """
 
         return self._vector_matrix_cache is not None
 
@@ -358,6 +493,12 @@ class HumemDB:
         scope_route = params.get("scope_route", "sqlite")
         scope_params = params.get("scope_params")
 
+        if filters is not None and scope_query_type is not None:
+            raise ValueError(
+                "HumemVector v0 currently supports metadata filters only for the "
+                "direct vector path, not combined SQL or Cypher scopes."
+            )
+
         index = self._vector_index_for(metric=metric)
         candidate_indexes = self._candidate_indexes_for_vector_query(
             scope_text=_text,
@@ -380,7 +521,10 @@ class HumemDB:
             top_k=top_k,
             candidate_indexes=candidate_indexes,
         )
-        rows = tuple((match.item_id, match.score) for match in matches)
+        rows = tuple(
+            (match.target, match.scope, match.target_id, match.score)
+            for match in matches
+        )
         return QueryResult(
             rows=rows,
             columns=_VECTOR_RESULT_COLUMNS,
@@ -427,12 +571,17 @@ class HumemDB:
     ) -> Any:
         """Resolve optional SQL/Cypher/vector-metadata scope into matrix indexes."""
 
-        candidate_item_ids: set[int] | None = None
+        candidate_keys: set[tuple[str, str, int]] | None = None
 
         if filters:
             self._ensure_vector_schema()
-            candidate_item_ids = set(
-                load_filtered_vector_item_ids(self.sqlite, filters)
+            candidate_keys = set(
+                load_filtered_vector_target_keys(
+                    self.sqlite,
+                    filters,
+                    target="direct",
+                    scope="",
+                )
             )
 
         if scope_query_type is not None:
@@ -467,37 +616,68 @@ class HumemDB:
                 query_type=scope_query_type,
                 params=scope_params,
             )
-            scoped_item_ids = set(
-                self._vector_candidate_item_ids_from_result(scoped_result)
+            target, scope = _target_scope_for_vector_query(
+                scope_text,
+                scope_query_type=scope_query_type,
             )
-            if candidate_item_ids is None:
-                candidate_item_ids = scoped_item_ids
+            scoped_keys = set(
+                self._vector_candidate_keys_from_result(
+                    scoped_result,
+                    target=target,
+                    scope=scope,
+                )
+            )
+            if candidate_keys is None:
+                candidate_keys = scoped_keys
             else:
-                candidate_item_ids &= scoped_item_ids
+                candidate_keys &= scoped_keys
+        elif candidate_keys is None:
+            return self._candidate_indexes_for_target(target="direct", scope="")
 
-        if candidate_item_ids is None:
+        if candidate_keys is None:
             return None
 
-        if not candidate_item_ids:
+        if not candidate_keys:
             return ()
 
-        return self._candidate_indexes_for_item_ids(candidate_item_ids)
+        return self._candidate_indexes_for_target_keys(candidate_keys)
 
-    def _candidate_indexes_for_item_ids(self, item_ids: set[int]) -> Any:
-        """Map candidate item ids onto cached matrix row indexes."""
+    def _candidate_indexes_for_target(
+        self,
+        *,
+        target: str,
+        scope: str,
+    ) -> Any:
+        """Return cached matrix indexes for one logical vector namespace."""
 
         vector_item_ids, _matrix = self._load_vector_matrix()
         return tuple(
             index
             for index, item_id in enumerate(vector_item_ids.tolist())
-            if int(item_id) in item_ids
+            if item_id[0] == target and item_id[1] == scope
         )
 
-    def _vector_candidate_item_ids_from_result(
+    def _candidate_indexes_for_target_keys(
+        self,
+        item_ids: set[tuple[str, str, int]],
+    ) -> Any:
+        """Map candidate logical vector identifiers onto cached matrix indexes."""
+
+        vector_item_ids, _matrix = self._load_vector_matrix()
+        return tuple(
+            index
+            for index, item_id in enumerate(vector_item_ids.tolist())
+            if (str(item_id[0]), str(item_id[1]), int(item_id[2])) in item_ids
+        )
+
+    def _vector_candidate_keys_from_result(
         self,
         result: QueryResult,
-    ) -> tuple[int, ...]:
-        """Extract vector candidate item ids from a SQL or Cypher scope result."""
+        *,
+        target: str,
+        scope: str,
+    ) -> tuple[tuple[str, str, int], ...]:
+        """Extract logical vector identifiers from a SQL or Cypher scope result."""
 
         if not result.columns:
             raise ValueError(
@@ -526,9 +706,9 @@ class HumemDB:
                     "named 'item_id', 'id', or '*.id'."
                 )
 
-        item_ids: list[int] = []
+        item_ids: list[tuple[str, str, int]] = []
         for row in result.rows:
-            item_ids.append(int(row[id_index]))
+            item_ids.append((target, scope, int(row[id_index])))
         return tuple(item_ids)
 
     def _has_vector_table(self) -> bool:
@@ -565,19 +745,31 @@ class HumemDB:
         self._invalidate_vector_cache()
 
     def begin(self, *, route: Route) -> None:
-        """Begin an explicit transaction on the selected route."""
+        """Begin an explicit transaction on the selected route.
+
+        Args:
+            route: Backend route whose transaction should begin.
+        """
 
         logger.debug("Beginning transaction on route=%s", route)
         self._engine_for_route(route).begin()
 
     def commit(self, *, route: Route) -> None:
-        """Commit the active transaction on the selected route."""
+        """Commit the active transaction on the selected route.
+
+        Args:
+            route: Backend route whose transaction should commit.
+        """
 
         logger.debug("Committing transaction on route=%s", route)
         self._engine_for_route(route).commit()
 
     def rollback(self, *, route: Route) -> None:
-        """Roll back the active transaction on the selected route."""
+        """Roll back the active transaction on the selected route.
+
+        Args:
+            route: Backend route whose transaction should roll back.
+        """
 
         logger.debug("Rolling back transaction on route=%s", route)
         self._engine_for_route(route).rollback()
@@ -587,6 +779,11 @@ class HumemDB:
 
         A successful context commits on exit. An exception inside the context triggers a
         rollback before the exception continues to propagate.
+        Args:
+            route: Backend route whose transaction lifecycle should be managed.
+
+        Returns:
+            A `_TransactionContext` bound to the selected route.
         """
 
         return _TransactionContext(self, route)
@@ -635,6 +832,41 @@ class HumemDB:
                 text,
                 params_seq,
             )
+            if vector_rows and any(row[2] is None for row in vector_rows):
+                total_rowcount = 0
+                resolved_vector_rows: list[_TargetScopedVectorRow] = []
+                for normalized_params, pending_row in zip(
+                    normalized_params_seq,
+                    vector_rows,
+                    strict=True,
+                ):
+                    result = self.sqlite.execute(
+                        translated_text,
+                        normalized_params,
+                        query_type=query_type,
+                    )
+                    total_rowcount += result.rowcount
+                    resolved_vector_rows.extend(
+                        _resolved_sql_vector_rows_after_insert(
+                            self.sqlite,
+                            [pending_row],
+                        )
+                    )
+                self._ensure_vector_schema()
+                _write_target_scoped_vector_rows(
+                    self.sqlite,
+                    resolved_vector_rows,
+                    mode="insert",
+                )
+                self._invalidate_vector_cache()
+                self._invalidate_vector_cache_for_sql(text, translated_text)
+                return QueryResult(
+                    rows=(),
+                    columns=(),
+                    route="sqlite",
+                    query_type=query_type,
+                    rowcount=total_rowcount,
+                )
             result = self.sqlite.executemany(
                 translated_text,
                 normalized_params_seq,
@@ -642,7 +874,11 @@ class HumemDB:
             )
             if vector_rows:
                 self._ensure_vector_schema()
-                insert_vector_rows(self.sqlite, vector_rows)
+                _write_target_scoped_vector_rows(
+                    self.sqlite,
+                    cast(list[_TargetScopedVectorRow], vector_rows),
+                    mode="insert",
+                )
                 self._invalidate_vector_cache()
             self._invalidate_vector_cache_for_sql(text, translated_text)
             return result
@@ -657,19 +893,33 @@ class HumemDB:
         raise ValueError(f"Unsupported route: {route!r}")
 
     def close(self) -> None:
-        """Close both embedded database connections."""
+        """Close both embedded database connections.
+
+        Returns:
+            `None`.
+        """
 
         logger.debug("Closing HumemDB connections")
         self.sqlite.close()
         self.duckdb.close()
 
     def __enter__(self) -> HumemDB:
-        """Return `self` for context-manager usage."""
+        """Return `self` for context-manager usage.
+
+        Returns:
+            The current `HumemDB` instance.
+        """
 
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        """Close connections when leaving a `with HumemDB(...)` block."""
+        """Close connections when leaving a `with HumemDB(...)` block.
+
+        Args:
+            exc_type: Exception type raised inside the context, if any.
+            exc: Exception instance raised inside the context, if any.
+            tb: Traceback for the raised exception, if any.
+        """
 
         self.close()
 
@@ -690,22 +940,41 @@ class _TransactionContext:
 
     This helper keeps the public transaction API ergonomic while making the
     commit-or-rollback behavior explicit and testable.
+
+    Attributes:
+        db: Owning `HumemDB` instance.
+        route: Backend route whose transaction lifecycle is being managed.
     """
 
     def __init__(self, db: HumemDB, route: Route) -> None:
-        """Bind the context manager to one database instance and route."""
+        """Bind the context manager to one database instance and route.
+
+        Args:
+            db: Owning database instance.
+            route: Backend route whose transaction should be managed.
+        """
 
         self.db = db
         self.route: Route = route
 
     def __enter__(self) -> HumemDB:
-        """Begin the transaction and return the owning `HumemDB` instance."""
+        """Begin the transaction and return the owning `HumemDB` instance.
+
+        Returns:
+            The owning `HumemDB` instance for use inside the context.
+        """
 
         self.db.begin(route=self.route)
         return self.db
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        """Commit on success or roll back when an exception occurs."""
+        """Commit on success or roll back when an exception occurs.
+
+        Args:
+            exc_type: Exception type raised inside the context, if any.
+            exc: Exception instance raised inside the context, if any.
+            tb: Traceback for the raised exception, if any.
+        """
 
         if exc_type is None:
             self.db.commit(route=self.route)
@@ -735,10 +1004,263 @@ def _touches_vector_entries(text: str) -> bool:
     return "vector_entries" in text.casefold()
 
 
+def _write_target_scoped_vector_rows(
+    sqlite: SQLiteEngine,
+    vector_rows: Sequence[tuple[str, str, int, Sequence[float]]],
+    *,
+    mode: str,
+) -> None:
+    """Persist one batch of logical target-scoped vector rows."""
+
+    grouped: dict[tuple[str, str], list[tuple[int, Sequence[float]]]] = {}
+    for target, scope, target_id, vector in vector_rows:
+        grouped.setdefault((target, scope), []).append((target_id, vector))
+
+    for (target, scope), rows in grouped.items():
+        if mode == "insert":
+            insert_vector_rows(sqlite, rows, target=target, scope=scope)
+        else:
+            upsert_vectors(sqlite, rows, target=target, scope=scope)
+
+
+def _normalize_direct_vector_rows(
+    sqlite: SQLiteEngine,
+    rows: Sequence[DirectVectorRow],
+) -> tuple[
+    list[tuple[int, Sequence[float]]],
+    tuple[int, ...],
+    list[tuple[int, DirectVectorMetadata]],
+]:
+    """Normalize direct vector inserts into stored rows plus optional metadata.
+
+    Args:
+        sqlite: Canonical SQLite engine used to discover the next direct id.
+        rows: Direct-vector inputs in plain-embedding, explicit-id tuple, or
+            mapping-record form.
+
+    Returns:
+        A tuple containing resolved `(target_id, embedding)` rows, the assigned ids in
+        input order, and any metadata rows keyed by their resolved direct ids.
+    """
+
+    normalized: list[
+        tuple[int | None, Sequence[float], DirectVectorMetadata | None]
+    ] = []
+    explicit_ids: list[int] = []
+    for row in rows:
+        record = _direct_vector_record(row)
+        if record is not None:
+            target_id, vector, metadata = record
+            if target_id is not None:
+                explicit_ids.append(target_id)
+            normalized.append((target_id, vector, metadata))
+            continue
+
+        if isinstance(row, Mapping):
+            raise ValueError(
+                "Direct vector record rows must include an 'embedding' key."
+            )
+
+        explicit = _explicit_direct_vector_row(row)
+        if explicit is None:
+            normalized.append((None, _plain_direct_vector(row), None))
+            continue
+
+        explicit_ids.append(explicit[0])
+        normalized.append((explicit[0], explicit[1], None))
+
+    next_id = _next_direct_target_id(sqlite, floor=max(explicit_ids, default=0))
+    assigned_ids: list[int] = []
+    resolved_rows: list[tuple[int, Sequence[float]]] = []
+    metadata_rows: list[tuple[int, DirectVectorMetadata]] = []
+    for target_id, vector, metadata in normalized:
+        if target_id is None:
+            target_id = next_id
+            next_id += 1
+        assigned_ids.append(int(target_id))
+        resolved_rows.append((int(target_id), vector))
+        if metadata:
+            metadata_rows.append((int(target_id), metadata))
+
+    return resolved_rows, tuple(assigned_ids), metadata_rows
+
+
+def _direct_vector_record(
+    row: DirectVectorRow,
+) -> tuple[int | None, Sequence[float], DirectVectorMetadata | None] | None:
+    """Return one direct-vector record mapping if the row uses record syntax.
+
+    Args:
+        row: Candidate direct-vector input row.
+
+    Returns:
+        `(target_id, embedding, metadata)` when the row uses mapping-record syntax, or
+        `None` when the row should be handled by the plain embedding or tuple path.
+
+    Raises:
+        ValueError: If the mapping omits `embedding`, uses a non-integral `target_id`,
+            or provides non-mapping metadata.
+    """
+
+    if not isinstance(row, Mapping):
+        return None
+
+    if "embedding" not in row:
+        raise ValueError(
+            "Direct vector record rows must include an 'embedding' key."
+        )
+
+    embedding = row["embedding"]
+    if isinstance(embedding, (str, bytes, bytearray)) or not isinstance(
+        embedding, Sequence
+    ):
+        raise ValueError(
+            "Direct vector record 'embedding' values must be numeric sequences."
+        )
+
+    raw_target_id = row.get("target_id")
+    target_id: int | None
+    if raw_target_id is None:
+        target_id = None
+    elif isinstance(raw_target_id, Integral):
+        target_id = int(raw_target_id)
+    else:
+        raise ValueError(
+            "Direct vector record 'target_id' values must be integers when provided."
+        )
+
+    raw_metadata = row.get("metadata")
+    metadata: DirectVectorMetadata | None
+    if raw_metadata is None:
+        metadata = None
+    elif isinstance(raw_metadata, Mapping):
+        metadata = dict(raw_metadata)
+    else:
+        raise ValueError(
+            "Direct vector record 'metadata' values must be mappings when provided."
+        )
+
+    return target_id, embedding, metadata
+
+
+def _explicit_direct_vector_row(
+    row: Sequence[float] | tuple[int, Sequence[float]],
+) -> tuple[int, Sequence[float]] | None:
+    """Return one explicit `(target_id, embedding)` direct vector row if present."""
+
+    if len(row) != 2:
+        return None
+
+    target_id, vector = row
+    if not isinstance(target_id, Integral):
+        return None
+    if isinstance(vector, (str, bytes, bytearray)):
+        return None
+    if not isinstance(vector, Sequence):
+        return None
+    return (int(target_id), vector)
+
+
+def _plain_direct_vector(
+    row: Sequence[float] | tuple[int, Sequence[float]],
+) -> Sequence[float]:
+    """Return the embedding sequence for a plain direct-vector input row.
+
+    Args:
+        row: Candidate non-record direct-vector input row.
+
+    Returns:
+        The embedding sequence for plain direct inserts.
+
+    Raises:
+        ValueError: If the row looks like an explicit-id tuple or otherwise does not
+            represent a plain embedding sequence.
+    """
+
+    if _explicit_direct_vector_row(row) is not None:
+        raise ValueError(
+            "Plain direct vector rows cannot use explicit `(target_id, embedding)` "
+            "shape."
+        )
+
+    return cast(Sequence[float], row)
+
+
+def _next_direct_target_id(sqlite: SQLiteEngine, *, floor: int) -> int:
+    """Return the next auto-assigned direct target id, starting from 1."""
+
+    result = sqlite.execute(
+        (
+            "SELECT COALESCE(MAX(target_id), 0) "
+            "FROM vector_entries "
+            "WHERE target = 'direct' AND scope = ''"
+        ),
+        query_type="vector",
+    )
+    first_row = result.first()
+    current_max = int(first_row[0]) if first_row is not None else 0
+    return max(current_max, floor) + 1
+
+
+def _target_scope_for_vector_query(
+    text: str,
+    *,
+    scope_query_type: Any,
+) -> tuple[str, str]:
+    """Resolve vector target metadata for one SQL or Cypher scope query."""
+
+    if scope_query_type == "cypher":
+        return "graph_node", ""
+
+    table_name = _sql_scope_table_name(text)
+    return "sql_row", table_name
+
+
+def _sql_scope_table_name(text: str) -> str:
+    """Return the single table name referenced by a narrow SQL vector scope query."""
+
+    try:
+        expression = parse_one(text, read="postgres")
+    except sqlglot_errors.ParseError as exc:
+        raise ValueError(
+            "HumemVector v0 SQL vector scope must be valid HumemSQL v0."
+        ) from exc
+
+    if type(expression).__name__ != "Select":
+        raise ValueError(
+            "HumemVector v0 SQL vector scope must be a SELECT over one table."
+        )
+
+    joins = expression.args.get("joins") or []
+    if joins:
+        raise ValueError(
+            "HumemVector v0 SQL vector scope currently supports one base table, "
+            "not joins."
+        )
+
+    from_clause = expression.args.get("from") or expression.args.get("from_")
+    source = getattr(from_clause, "this", None)
+    table_name = (
+        getattr(source, "name", None)
+        or getattr(getattr(source, "this", None), "name", None)
+        or str(source or "")
+    )
+    if not table_name:
+        raise ValueError(
+            "HumemVector v0 SQL vector scope currently requires a concrete table "
+            "name in FROM."
+        )
+    return table_name
+
+
 def _prepare_sql_vector_write(
     text: str,
     params: QueryParameters,
-) -> tuple[QueryParameters, list[tuple[int, Sequence[float]]], str | None]:
+) -> tuple[
+    QueryParameters,
+    list[_PendingTargetScopedVectorRow],
+    str | None,
+]:
     """Convert vector-bearing SQL INSERT params into SQLite blobs plus vector rows."""
 
     if params is None or isinstance(params, Mapping):
@@ -751,7 +1273,11 @@ def _prepare_sql_vector_write(
             id_index=analysis["id_index"],
             vector_index=analysis["vector_index"],
         )
-        return normalized_params, [vector_row], "insert"
+        return (
+            normalized_params,
+            [("sql_row", analysis["target_name"], vector_row[0], vector_row[1])],
+            "insert",
+        )
 
     update_analysis = _analyze_sql_vector_update(text)
     if update_analysis is not None:
@@ -768,7 +1294,18 @@ def _prepare_sql_vector_write(
             id_index=id_index,
             id_literal=update_analysis["id_literal"],
         )
-        return normalized_params, [vector_row], "upsert"
+        return (
+            normalized_params,
+            [
+                (
+                    "sql_row",
+                    update_analysis["target_name"],
+                    vector_row[0],
+                    vector_row[1],
+                )
+            ],
+            "upsert",
+        )
 
     return params, [], None
 
@@ -776,7 +1313,7 @@ def _prepare_sql_vector_write(
 def _prepare_sql_vector_write_batch(
     text: str,
     params_seq: BatchParameters,
-) -> tuple[BatchParameters, list[tuple[int, Sequence[float]]]]:
+) -> tuple[BatchParameters, list[_PendingTargetScopedVectorRow]]:
     """Convert batched vector-bearing SQL INSERT params into blobs plus vector rows."""
 
     analysis = _analyze_sql_vector_insert(text)
@@ -784,7 +1321,7 @@ def _prepare_sql_vector_write_batch(
         return params_seq, []
 
     normalized_params_seq: list[Sequence[Any]] = []
-    vector_rows: list[tuple[int, Sequence[float]]] = []
+    vector_rows: list[_PendingTargetScopedVectorRow] = []
     for params in params_seq:
         if isinstance(params, Mapping):
             raise ValueError(
@@ -796,12 +1333,14 @@ def _prepare_sql_vector_write_batch(
             vector_index=analysis["vector_index"],
         )
         normalized_params_seq.append(normalized_params)
-        vector_rows.append(vector_row)
+        vector_rows.append(
+            ("sql_row", analysis["target_name"], vector_row[0], vector_row[1])
+        )
 
     return normalized_params_seq, vector_rows
 
 
-def _analyze_sql_vector_insert(text: str) -> dict[str, int] | None:
+def _analyze_sql_vector_insert(text: str) -> _SQLVectorInsertAnalysis | None:
     """Return id/vector param indexes for narrow vector-bearing SQL INSERTs."""
 
     try:
@@ -840,9 +1379,7 @@ def _analyze_sql_vector_insert(text: str) -> dict[str, int] | None:
     elif "item_id" in normalized_columns:
         id_index = normalized_columns.index("item_id")
     else:
-        raise ValueError(
-            "HumemVector v0 SQL inserts require an 'id' or 'item_id' column."
-        )
+        id_index = None
 
     values = expression.args.get("expression")
     row_count = len(getattr(values, "expressions", [])) if values is not None else 0
@@ -852,10 +1389,14 @@ def _analyze_sql_vector_insert(text: str) -> dict[str, int] | None:
             "use executemany for batches."
         )
 
-    return {"id_index": id_index, "vector_index": vector_indexes[0]}
+    return {
+        "target_name": target_name,
+        "id_index": id_index,
+        "vector_index": vector_indexes[0],
+    }
 
 
-def _analyze_sql_vector_update(text: str) -> dict[str, int | None] | None:
+def _analyze_sql_vector_update(text: str) -> _SQLVectorUpdateAnalysis | None:
     """Return id/vector param indexes for narrow vector-bearing SQL UPDATEs."""
 
     try:
@@ -930,6 +1471,7 @@ def _analyze_sql_vector_update(text: str) -> dict[str, int | None] | None:
         id_literal = int(str(getattr(right, "this", right)))
 
     return {
+        "target_name": target_name,
         "vector_index": vector_indexes[0],
         "id_index": id_index,
         "id_literal": id_literal,
@@ -939,22 +1481,49 @@ def _analyze_sql_vector_update(text: str) -> dict[str, int | None] | None:
 def _normalize_sql_vector_row(
     params: Sequence[Any],
     *,
-    id_index: int,
+    id_index: int | None,
     vector_index: int,
-) -> tuple[tuple[Any, ...], tuple[int, Sequence[float]]]:
+) -> tuple[tuple[Any, ...], tuple[int | None, Sequence[float]]]:
     """Encode one SQL row's embedding param and extract its canonical vector row."""
 
     bound = list(params)
-    if max(id_index, vector_index) >= len(bound):
+    required_indexes = [vector_index]
+    if id_index is not None:
+        required_indexes.append(id_index)
+    if max(required_indexes) >= len(bound):
         raise ValueError(
             "HumemVector v0 SQL vector inserts did not receive enough "
             "positional params."
         )
 
     vector_value = _coerce_vector_param(bound[vector_index], context="SQL")
-    row_id = int(bound[id_index])
+    row_id = int(bound[id_index]) if id_index is not None else None
     bound[vector_index] = encode_vector_blob(vector_value)
     return tuple(bound), (row_id, vector_value)
+
+
+def _resolved_sql_vector_rows_after_insert(
+    sqlite: SQLiteEngine,
+    vector_rows: Sequence[_PendingTargetScopedVectorRow],
+) -> list[_TargetScopedVectorRow]:
+    """Resolve SQLite-assigned row ids for freshly inserted SQL-owned vectors."""
+
+    resolved: list[_TargetScopedVectorRow] = []
+    for target, scope, target_id, vector in vector_rows:
+        if target_id is None:
+            first_row = sqlite.execute(
+                "SELECT last_insert_rowid() AS row_id",
+                query_type="sql",
+            ).first()
+            if first_row is None:
+                raise ValueError(
+                    "HumemVector v0 SQL inserts could not resolve the assigned row "
+                    "id."
+                )
+            target_id = int(first_row[0])
+        resolved.append((target, scope, int(target_id), vector))
+
+    return resolved
 
 
 def _normalize_sql_vector_update(

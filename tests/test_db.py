@@ -802,13 +802,14 @@ class HumemDBTest(unittest.TestCase):
             sqlite_path = Path(tmpdir) / "humem.sqlite3"
 
             with HumemDB(str(sqlite_path)) as db:
-                db.insert_vectors(
+                inserted_ids = db.insert_vectors(
                     [
-                        (1, [1.0, 0.0]),
-                        (2, [0.8, 0.2]),
-                        (3, [0.0, 1.0]),
+                        [1.0, 0.0],
+                        [0.8, 0.2],
+                        [0.0, 1.0],
                     ]
                 )
+                self.assertEqual(inserted_ids, (1, 2, 3))
 
                 result = db.query(
                     "",
@@ -817,10 +818,16 @@ class HumemDBTest(unittest.TestCase):
                     params={"query": [1.0, 0.0], "top_k": 2},
                 )
 
-                self.assertEqual(result.columns, ("item_id", "score"))
+                self.assertEqual(
+                    result.columns,
+                    ("target", "scope", "target_id", "score"),
+                )
                 self.assertEqual(result.route, "sqlite")
                 self.assertEqual(result.query_type, "vector")
-                self.assertEqual(tuple(row[0] for row in result.rows), (1, 2))
+                self.assertEqual(
+                    tuple(row[:3] for row in result.rows),
+                    (("direct", "", 1), ("direct", "", 2)),
+                )
 
     def test_search_vectors_returns_expected_matches(self) -> None:
         HumemDB = _humemdb_class()
@@ -829,17 +836,18 @@ class HumemDBTest(unittest.TestCase):
             sqlite_path = Path(tmpdir) / "humem.sqlite3"
 
             with HumemDB(str(sqlite_path)) as db:
-                db.insert_vectors(
+                inserted_ids = db.insert_vectors(
                     [
-                        (1, [1.0, 0.0]),
-                        (2, [0.8, 0.2]),
-                        (3, [0.0, 1.0]),
+                        [1.0, 0.0],
+                        [0.8, 0.2],
+                        [0.0, 1.0],
                     ]
                 )
+                self.assertEqual(inserted_ids, (1, 2, 3))
 
                 result = db.search_vectors([1.0, 0.0], top_k=2)
 
-                self.assertEqual(tuple(row[0] for row in result.rows), (1, 2))
+                self.assertEqual(tuple(row[2] for row in result.rows), (1, 2))
 
     def test_insert_vectors_invalidates_cached_index(self) -> None:
         HumemDB = _humemdb_class()
@@ -848,20 +856,44 @@ class HumemDBTest(unittest.TestCase):
             sqlite_path = Path(tmpdir) / "humem.sqlite3"
 
             with HumemDB(str(sqlite_path)) as db:
-                db.insert_vectors(
+                inserted_ids = db.insert_vectors(
                     [
-                        (1, [0.8, 0.2]),
-                        (2, [0.0, 1.0]),
+                        [0.8, 0.2],
+                        [0.0, 1.0],
+                    ]
+                )
+                self.assertEqual(inserted_ids, (1, 2))
+
+                first_result = db.search_vectors([1.0, 0.0], top_k=1)
+                self.assertEqual(first_result.rows[0][2], 1)
+
+                inserted_ids = db.insert_vectors([[1.0, 0.0]])
+                self.assertEqual(inserted_ids, (3,))
+
+                second_result = db.search_vectors([1.0, 0.0], top_k=1)
+                self.assertEqual(second_result.rows[0][2], 3)
+
+    def test_insert_vectors_can_use_explicit_direct_ids(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+
+            with HumemDB(str(sqlite_path)) as db:
+                inserted_ids = db.insert_vectors(
+                    [
+                        (11, [1.0, 0.0]),
+                        (14, [0.8, 0.2]),
                     ]
                 )
 
-                first_result = db.search_vectors([1.0, 0.0], top_k=1)
-                self.assertEqual(first_result.rows[0][0], 1)
+                self.assertEqual(inserted_ids, (11, 14))
 
-                db.insert_vectors([(3, [1.0, 0.0])])
-
-                second_result = db.search_vectors([1.0, 0.0], top_k=1)
-                self.assertEqual(second_result.rows[0][0], 3)
+                result = db.search_vectors([1.0, 0.0], top_k=2)
+                self.assertEqual(
+                    tuple(row[:3] for row in result.rows),
+                    (("direct", "", 11), ("direct", "", 14)),
+                )
 
     def test_search_vectors_supports_direct_metadata_filters(self) -> None:
         HumemDB = _humemdb_class()
@@ -870,18 +902,19 @@ class HumemDBTest(unittest.TestCase):
             sqlite_path = Path(tmpdir) / "humem.sqlite3"
 
             with HumemDB(str(sqlite_path)) as db:
-                db.insert_vectors(
+                inserted_ids = db.insert_vectors(
                     [
-                        (1, [1.0, 0.0]),
-                        (2, [0.9, 0.1]),
-                        (3, [0.0, 1.0]),
+                        [1.0, 0.0],
+                        [0.9, 0.1],
+                        [0.0, 1.0],
                     ]
                 )
+                self.assertEqual(inserted_ids, (1, 2, 3))
                 db.set_vector_metadata(
                     [
-                        (1, {"group": "alpha", "active": True}),
-                        (2, {"group": "alpha", "active": False}),
-                        (3, {"group": "beta", "active": True}),
+                        (inserted_ids[0], {"group": "alpha", "active": True}),
+                        (inserted_ids[1], {"group": "alpha", "active": False}),
+                        (inserted_ids[2], {"group": "beta", "active": True}),
                     ]
                 )
 
@@ -891,7 +924,104 @@ class HumemDBTest(unittest.TestCase):
                     filters={"group": "alpha", "active": True},
                 )
 
-                self.assertEqual(result.rows, ((1, 1.0),))
+                self.assertEqual(result.rows, (("direct", "", 1, 1.0),))
+
+    def test_insert_vectors_accepts_record_rows_with_inline_metadata(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+
+            with HumemDB(str(sqlite_path)) as db:
+                inserted_ids = db.insert_vectors(
+                    [
+                        {
+                            "embedding": [1.0, 0.0],
+                            "metadata": {"group": "alpha", "active": True},
+                        },
+                        {
+                            "embedding": [0.9, 0.1],
+                            "metadata": {"group": "alpha", "active": False},
+                        },
+                        {
+                            "embedding": [0.0, 1.0],
+                            "metadata": {"group": "beta", "active": True},
+                        },
+                    ]
+                )
+
+                self.assertEqual(inserted_ids, (1, 2, 3))
+
+                result = db.search_vectors(
+                    [1.0, 0.0],
+                    top_k=3,
+                    filters={"group": "alpha", "active": True},
+                )
+
+                self.assertEqual(result.rows, (("direct", "", 1, 1.0),))
+
+    def test_vector_targets_can_reuse_same_numeric_id_in_one_database(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+
+            with HumemDB(str(sqlite_path)) as db:
+                inserted_ids = db.insert_vectors([[1.0, 0.0]])
+                self.assertEqual(inserted_ids, (1,))
+
+                db.query(
+                    (
+                        "CREATE TABLE docs ("
+                        "id INTEGER PRIMARY KEY, topic TEXT NOT NULL, embedding BLOB)"
+                    ),
+                    route="sqlite",
+                )
+                db.query(
+                    "INSERT INTO docs (id, topic, embedding) VALUES (?, ?, ?)",
+                    route="sqlite",
+                    params=(1, "alpha", [0.0, 1.0]),
+                )
+
+                created = db.query(
+                    (
+                        "CREATE (u:User {"
+                        "name: 'Alice', cohort: 'alpha', embedding: $embedding})"
+                    ),
+                    route="sqlite",
+                    query_type="cypher",
+                    params={"embedding": [0.8, 0.2]},
+                )
+                node_id = created.rows[0][0]
+                self.assertEqual(node_id, 1)
+
+                direct = db.search_vectors([1.0, 0.0], top_k=1)
+                self.assertEqual(direct.rows[0][:3], ("direct", "", 1))
+
+                sql_scoped = db.query(
+                    "SELECT id FROM docs WHERE topic = ? ORDER BY id",
+                    route="sqlite",
+                    query_type="vector",
+                    params={
+                        "query": [0.0, 1.0],
+                        "top_k": 1,
+                        "scope_query_type": "sql",
+                        "scope_params": ("alpha",),
+                    },
+                )
+                self.assertEqual(sql_scoped.rows[0][:3], ("sql_row", "docs", 1))
+
+                cypher_scoped = db.query(
+                    "MATCH (u:User {cohort: 'alpha'}) RETURN u.id ORDER BY u.id",
+                    route="sqlite",
+                    query_type="vector",
+                    params={
+                        "query": [0.8, 0.2],
+                        "top_k": 1,
+                        "scope_query_type": "cypher",
+                    },
+                )
+                self.assertEqual(cypher_scoped.rows[0][:3], ("graph_node", "", 1))
 
     def test_sql_insert_with_embedding_updates_row_and_vector_store(self) -> None:
         HumemDB = _humemdb_class()
@@ -948,7 +1078,109 @@ class HumemDBTest(unittest.TestCase):
                         "scope_params": ("alpha",),
                     },
                 )
-                self.assertEqual(tuple(row[0] for row in vector_result.rows), (1, 2))
+                self.assertEqual(
+                    tuple(row[:3] for row in vector_result.rows),
+                    (("sql_row", "docs", 1), ("sql_row", "docs", 2)),
+                )
+
+    def test_sql_insert_with_auto_ids_updates_vector_store(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+
+            with HumemDB(str(sqlite_path)) as db:
+                db.query(
+                    (
+                        "CREATE TABLE docs ("
+                        "id INTEGER PRIMARY KEY, "
+                        "title TEXT NOT NULL, topic TEXT NOT NULL, embedding BLOB)"
+                    ),
+                    route="sqlite",
+                )
+
+                inserted = db.executemany(
+                    (
+                        "INSERT INTO docs (title, topic, embedding) "
+                        "VALUES (?, ?, ?)"
+                    ),
+                    [
+                        ("Alpha one", "alpha", [1.0, 0.0]),
+                        ("Alpha two", "alpha", [0.8, 0.2]),
+                        ("Beta one", "beta", [0.0, 1.0]),
+                    ],
+                    route="sqlite",
+                )
+
+                self.assertEqual(inserted.rowcount, 3)
+
+                relational = db.query(
+                    "SELECT id, title, topic FROM docs ORDER BY id",
+                    route="sqlite",
+                )
+                self.assertEqual(
+                    relational.rows,
+                    (
+                        (1, "Alpha one", "alpha"),
+                        (2, "Alpha two", "alpha"),
+                        (3, "Beta one", "beta"),
+                    ),
+                )
+
+                vector_result = db.query(
+                    "SELECT id FROM docs WHERE topic = ? ORDER BY id",
+                    route="sqlite",
+                    query_type="vector",
+                    params={
+                        "query": [1.0, 0.0],
+                        "top_k": 3,
+                        "scope_query_type": "sql",
+                        "scope_params": ("alpha",),
+                    },
+                )
+                self.assertEqual(
+                    tuple(row[:3] for row in vector_result.rows),
+                    (("sql_row", "docs", 1), ("sql_row", "docs", 2)),
+                )
+
+    def test_sql_single_insert_with_auto_id_updates_vector_store(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+
+            with HumemDB(str(sqlite_path)) as db:
+                db.query(
+                    (
+                        "CREATE TABLE docs ("
+                        "id INTEGER PRIMARY KEY, title TEXT NOT NULL, embedding BLOB)"
+                    ),
+                    route="sqlite",
+                )
+
+                db.query(
+                    "INSERT INTO docs (title, embedding) VALUES (?, ?)",
+                    route="sqlite",
+                    params=("Alpha", [1.0, 0.0]),
+                )
+
+                relational = db.query(
+                    "SELECT id, title FROM docs ORDER BY id",
+                    route="sqlite",
+                )
+                self.assertEqual(relational.rows, ((1, "Alpha"),))
+
+                vector_result = db.query(
+                    "SELECT id FROM docs ORDER BY id",
+                    route="sqlite",
+                    query_type="vector",
+                    params={
+                        "query": [1.0, 0.0],
+                        "top_k": 1,
+                        "scope_query_type": "sql",
+                    },
+                )
+                self.assertEqual(vector_result.rows[0][:3], ("sql_row", "docs", 1))
 
     def test_sql_update_with_embedding_updates_vector_store(self) -> None:
         HumemDB = _humemdb_class()
@@ -970,8 +1202,17 @@ class HumemDBTest(unittest.TestCase):
                     params=(1, "Alpha", [0.0, 1.0]),
                 )
 
-                first = db.search_vectors([1.0, 0.0], top_k=1)
-                self.assertEqual(first.rows[0][0], 1)
+                first = db.query(
+                    "SELECT id FROM docs ORDER BY id",
+                    route="sqlite",
+                    query_type="vector",
+                    params={
+                        "query": [1.0, 0.0],
+                        "top_k": 1,
+                        "scope_query_type": "sql",
+                    },
+                )
+                self.assertEqual(first.rows[0][:3], ("sql_row", "docs", 1))
 
                 db.query(
                     "UPDATE docs SET embedding = ? WHERE id = ?",
@@ -979,9 +1220,18 @@ class HumemDBTest(unittest.TestCase):
                     params=([1.0, 0.0], 1),
                 )
 
-                second = db.search_vectors([1.0, 0.0], top_k=1)
-                self.assertEqual(second.rows[0][0], 1)
-                self.assertAlmostEqual(second.rows[0][1], 1.0, places=6)
+                second = db.query(
+                    "SELECT id FROM docs ORDER BY id",
+                    route="sqlite",
+                    query_type="vector",
+                    params={
+                        "query": [1.0, 0.0],
+                        "top_k": 1,
+                        "scope_query_type": "sql",
+                    },
+                )
+                self.assertEqual(second.rows[0][:3], ("sql_row", "docs", 1))
+                self.assertAlmostEqual(second.rows[0][3], 1.0, places=6)
 
     def test_cypher_create_with_embedding_keeps_node_and_vector_write_together(
         self,
@@ -1041,8 +1291,11 @@ class HumemDBTest(unittest.TestCase):
                     },
                 )
                 self.assertEqual(
-                    tuple(row[0] for row in vector_result.rows),
-                    (node_ids[0], node_ids[1]),
+                    tuple(row[:3] for row in vector_result.rows),
+                    (
+                        ("graph_node", "", node_ids[0]),
+                        ("graph_node", "", node_ids[1]),
+                    ),
                 )
 
     def test_cypher_match_set_embedding_updates_vector_store(self) -> None:
@@ -1084,8 +1337,8 @@ class HumemDBTest(unittest.TestCase):
                         "scope_query_type": "cypher",
                     },
                 )
-                self.assertEqual(result.rows[0][0], node_id)
-                self.assertAlmostEqual(result.rows[0][1], 1.0, places=6)
+                self.assertEqual(result.rows[0][2], node_id)
+                self.assertAlmostEqual(result.rows[0][3], 1.0, places=6)
 
     def test_vector_query_type_supports_sql_candidate_scope(self) -> None:
         HumemDB = _humemdb_class()
@@ -1095,20 +1348,20 @@ class HumemDBTest(unittest.TestCase):
 
             with HumemDB(str(sqlite_path)) as db:
                 db.query(
-                    "CREATE TABLE docs (id INTEGER PRIMARY KEY, topic TEXT NOT NULL)",
+                    (
+                        "CREATE TABLE docs ("
+                        "id INTEGER PRIMARY KEY, topic TEXT NOT NULL, embedding BLOB)"
+                    ),
                     route="sqlite",
                 )
                 db.executemany(
-                    "INSERT INTO docs (id, topic) VALUES (?, ?)",
-                    [(1, "alpha"), (2, "alpha"), (3, "beta")],
-                    route="sqlite",
-                )
-                db.insert_vectors(
+                    "INSERT INTO docs (id, topic, embedding) VALUES (?, ?, ?)",
                     [
-                        (1, [1.0, 0.0]),
-                        (2, [0.8, 0.2]),
-                        (3, [1.0, 0.0]),
-                    ]
+                        (1, "alpha", [1.0, 0.0]),
+                        (2, "alpha", [0.8, 0.2]),
+                        (3, "beta", [1.0, 0.0]),
+                    ],
+                    route="sqlite",
                 )
 
                 result = db.query(
@@ -1123,7 +1376,10 @@ class HumemDBTest(unittest.TestCase):
                     },
                 )
 
-                self.assertEqual(tuple(row[0] for row in result.rows), (1, 2))
+                self.assertEqual(
+                    tuple(row[:3] for row in result.rows),
+                    (("sql_row", "docs", 1), ("sql_row", "docs", 2)),
+                )
 
     def test_vector_query_type_supports_cypher_candidate_scope(self) -> None:
         HumemDB = _humemdb_class()
@@ -1133,26 +1389,31 @@ class HumemDBTest(unittest.TestCase):
 
             with HumemDB(str(sqlite_path)) as db:
                 alice = db.query(
-                    "CREATE (u:User {name: 'Alice', cohort: 'alpha'})",
+                    (
+                        "CREATE (u:User {"
+                        "name: 'Alice', cohort: 'alpha', embedding: $embedding})"
+                    ),
                     route="sqlite",
                     query_type="cypher",
+                    params={"embedding": [1.0, 0.0]},
                 )
                 bob = db.query(
-                    "CREATE (u:User {name: 'Bob', cohort: 'alpha'})",
+                    (
+                        "CREATE (u:User {"
+                        "name: 'Bob', cohort: 'alpha', embedding: $embedding})"
+                    ),
                     route="sqlite",
                     query_type="cypher",
+                    params={"embedding": [0.85, 0.15]},
                 )
-                carol = db.query(
-                    "CREATE (u:User {name: 'Carol', cohort: 'beta'})",
+                db.query(
+                    (
+                        "CREATE (u:User {"
+                        "name: 'Carol', cohort: 'beta', embedding: $embedding})"
+                    ),
                     route="sqlite",
                     query_type="cypher",
-                )
-                db.insert_vectors(
-                    [
-                        (alice.rows[0][0], [1.0, 0.0]),
-                        (bob.rows[0][0], [0.85, 0.15]),
-                        (carol.rows[0][0], [1.0, 0.0]),
-                    ]
+                    params={"embedding": [1.0, 0.0]},
                 )
 
                 result = db.query(
@@ -1167,8 +1428,11 @@ class HumemDBTest(unittest.TestCase):
                 )
 
                 self.assertEqual(
-                    tuple(row[0] for row in result.rows),
-                    (alice.rows[0][0], bob.rows[0][0]),
+                    tuple(row[:3] for row in result.rows),
+                    (
+                        ("graph_node", "", alice.rows[0][0]),
+                        ("graph_node", "", bob.rows[0][0]),
+                    ),
                 )
 
     def test_raw_sql_vector_write_invalidates_cached_index(self) -> None:
@@ -1179,24 +1443,27 @@ class HumemDBTest(unittest.TestCase):
             sqlite_path = Path(tmpdir) / "humem.sqlite3"
 
             with HumemDB(str(sqlite_path)) as db:
-                db.insert_vectors(
+                inserted_ids = db.insert_vectors(
                     [
-                        (1, [0.8, 0.2]),
-                        (2, [0.0, 1.0]),
+                        [0.8, 0.2],
+                        [0.0, 1.0],
                     ]
                 )
+                self.assertEqual(inserted_ids, (1, 2))
 
                 first_result = db.search_vectors([1.0, 0.0], top_k=1)
-                self.assertEqual(first_result.rows[0][0], 1)
+                self.assertEqual(first_result.rows[0][2], 1)
 
                 db.query(
                     (
                         "INSERT INTO vector_entries "
-                        "(item_id, dimensions, embedding) "
-                        "VALUES (?, ?, ?)"
+                        "(target, scope, target_id, dimensions, embedding) "
+                        "VALUES (?, ?, ?, ?, ?)"
                     ),
                     route="sqlite",
                     params=(
+                        "direct",
+                        "",
                         3,
                         2,
                         vector.encode_vector_blob([1.0, 0.0]),
@@ -1204,7 +1471,7 @@ class HumemDBTest(unittest.TestCase):
                 )
 
                 second_result = db.search_vectors([1.0, 0.0], top_k=1)
-                self.assertEqual(second_result.rows[0][0], 3)
+                self.assertEqual(second_result.rows[0][2], 3)
 
     def test_preload_vectors_warms_existing_vector_set(self) -> None:
         HumemDB = _humemdb_class()
@@ -1213,18 +1480,19 @@ class HumemDBTest(unittest.TestCase):
             sqlite_path = Path(tmpdir) / "humem.sqlite3"
 
             with HumemDB(str(sqlite_path)) as db:
-                db.insert_vectors(
+                inserted_ids = db.insert_vectors(
                     [
-                        (1, [1.0, 0.0]),
-                        (2, [0.0, 1.0]),
+                        [1.0, 0.0],
+                        [0.0, 1.0],
                     ]
                 )
+                self.assertEqual(inserted_ids, (1, 2))
 
             with HumemDB(str(sqlite_path), preload_vectors=True) as db:
                 self.assertTrue(db.vectors_cached())
 
                 result = db.search_vectors([1.0, 0.0], top_k=1)
-                self.assertEqual(result.rows[0][0], 1)
+                self.assertEqual(result.rows[0][2], 1)
 
     def test_preload_vectors_ignores_missing_vector_table(self) -> None:
         HumemDB = _humemdb_class()

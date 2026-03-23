@@ -53,6 +53,11 @@ class SQLiteEngine:
     - executing SQL with DB-API style parameters
     - auto-committing write statements when no explicit transaction is active
     - exposing a small transaction lifecycle surface to `HumemDB`
+
+    Attributes:
+        path: Filesystem path to the SQLite database file.
+        connection: Live `sqlite3.Connection` bound to `path`.
+        _in_transaction: Whether an explicit transaction is currently active.
     """
 
     path: str
@@ -60,7 +65,11 @@ class SQLiteEngine:
     _in_transaction: bool = field(init=False, default=False)
 
     def __post_init__(self) -> None:
-        """Open the SQLite connection for the configured database path."""
+        """Open the SQLite connection for the configured database path.
+
+        Returns:
+            `None`.
+        """
 
         self.connection = sqlite3.connect(self.path)
         logger.debug("Opened SQLite connection path=%s", self.path)
@@ -144,21 +153,33 @@ class SQLiteEngine:
         logger.debug("SQLite transaction started")
 
     def commit(self) -> None:
-        """Commit the current SQLite transaction."""
+        """Commit the current SQLite transaction.
+
+        Returns:
+            `None`.
+        """
 
         self.connection.commit()
         self._in_transaction = False
         logger.debug("SQLite transaction committed")
 
     def rollback(self) -> None:
-        """Roll back the current SQLite transaction."""
+        """Roll back the current SQLite transaction.
+
+        Returns:
+            `None`.
+        """
 
         self.connection.rollback()
         self._in_transaction = False
         logger.debug("SQLite transaction rolled back")
 
     def close(self) -> None:
-        """Close the SQLite connection."""
+        """Close the SQLite connection.
+
+        Returns:
+            `None`.
+        """
 
         self.connection.close()
         logger.debug("Closed SQLite connection")
@@ -170,6 +191,12 @@ class DuckDBEngine:
 
     This engine provides the same lifecycle surface as `SQLiteEngine` so the
     higher-level `HumemDB` object can manage both engines consistently.
+
+    Attributes:
+        path: Optional DuckDB database path. `None` selects an in-memory database.
+        connection: Live DuckDB connection.
+        _in_transaction: Whether an explicit transaction is currently active.
+        _sqlite_alias: Attached schema name used for SQLite passthrough reads.
     """
 
     path: str | None = None
@@ -178,7 +205,11 @@ class DuckDBEngine:
     _sqlite_alias: str = field(init=False, default="sqlite_db")
 
     def __post_init__(self) -> None:
-        """Open the DuckDB connection for a file path or in-memory database."""
+        """Open the DuckDB connection for a file path or in-memory database.
+
+        Returns:
+            `None`.
+        """
 
         database = self.path or ":memory:"
         self.connection = duckdb.connect(database=database)
@@ -209,6 +240,9 @@ class DuckDBEngine:
         The attached SQLite database is placed first in DuckDB's search path so
         unqualified read queries resolve to SQLite tables before falling back to
         DuckDB's local `main` schema.
+
+        Args:
+            path: Filesystem path to the SQLite database that DuckDB should attach.
         """
 
         self.connection.execute("INSTALL sqlite")
@@ -270,21 +304,33 @@ class DuckDBEngine:
         logger.debug("DuckDB transaction started")
 
     def commit(self) -> None:
-        """Commit the current DuckDB transaction."""
+        """Commit the current DuckDB transaction.
+
+        Returns:
+            `None`.
+        """
 
         self.connection.commit()
         self._in_transaction = False
         logger.debug("DuckDB transaction committed")
 
     def rollback(self) -> None:
-        """Roll back the current DuckDB transaction."""
+        """Roll back the current DuckDB transaction.
+
+        Returns:
+            `None`.
+        """
 
         self.connection.rollback()
         self._in_transaction = False
         logger.debug("DuckDB transaction rolled back")
 
     def close(self) -> None:
-        """Close the DuckDB connection."""
+        """Close the DuckDB connection.
+
+        Returns:
+            `None`.
+        """
 
         self.connection.close()
         logger.debug("Closed DuckDB connection")

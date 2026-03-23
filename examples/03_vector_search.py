@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from humemdb import HumemDB
 
@@ -18,9 +19,10 @@ def _embedding(base: float, secondary: float, tertiary: float) -> list[float]:
 REFRESH_VECTOR = _embedding(0.88, 0.44, 0.22)
 
 
-def build_vectors() -> list[tuple[int, list[float]]]:
-    rows: list[tuple[int, list[float]]] = []
-    for item_id in range(1, EARLY_CLUSTER_SIZE + 1):
+def build_vectors() -> list[list[float]]:
+    rows: list[list[float]] = []
+    for index in range(EARLY_CLUSTER_SIZE):
+        item_id = index + 1
         if item_id <= 8_000:
             secondary = item_id / 100_000.0
             vector = _embedding(1.0, secondary, 0.0)
@@ -30,13 +32,45 @@ def build_vectors() -> list[tuple[int, list[float]]]:
         else:
             tertiary = (item_id - 16_000) / 20_000.0
             vector = _embedding(0.1, 0.0, 0.9 - tertiary)
-        rows.append((item_id, vector))
+        rows.append(vector)
 
-    start_id = EARLY_CLUSTER_SIZE + 1
     for offset in range(LATE_CLUSTER_SIZE):
-        item_id = start_id + offset
-        rows.append((item_id, _embedding(0.0, 0.0, 1.0 - offset / 100_000.0)))
+        rows.append(_embedding(0.0, 0.0, 1.0 - offset / 100_000.0))
     return rows
+
+
+def _direct_record(
+    embedding: list[float],
+    *,
+    metadata: dict[str, str],
+) -> dict[str, object]:
+    return {"embedding": embedding, "metadata": metadata}
+
+
+def _create_vector_node(
+    db: Any,
+    *,
+    name: str,
+    cluster: str,
+    embedding: list[float],
+) -> int:
+    created = db.query(
+        (
+            "CREATE (u:VectorNode {"
+            "name: $name, cluster: $cluster, embedding: $embedding})"
+        ),
+        route="sqlite",
+        query_type="cypher",
+        params={
+            "name": name,
+            "cluster": cluster,
+            "embedding": embedding,
+        },
+    )
+    first_row = created.first()
+    if first_row is None:
+        raise ValueError("Cypher CREATE did not return the created node id.")
+    return int(first_row[0])
 
 
 def main() -> None:
@@ -46,14 +80,21 @@ def main() -> None:
         graph_sqlite_path = Path(tmpdir) / "vectors-graph.sqlite3"
 
         with HumemDB(str(direct_sqlite_path)) as db:
-            db.insert_vectors(build_vectors())
-            db.set_vector_metadata(
-                [
-                    (1, {"cluster": "early", "tier": "primary"}),
-                    (2, {"cluster": "early", "tier": "primary"}),
-                    (24_001, {"cluster": "late", "tier": "secondary"}),
-                ]
+            base_direct_rows = build_vectors()
+            direct_rows: list[dict[str, object] | list[float]] = list(base_direct_rows)
+            direct_rows[0] = _direct_record(
+                base_direct_rows[0],
+                metadata={"cluster": "early", "tier": "primary"},
             )
+            direct_rows[1] = _direct_record(
+                base_direct_rows[1],
+                metadata={"cluster": "early", "tier": "primary"},
+            )
+            direct_rows[EARLY_CLUSTER_SIZE] = _direct_record(
+                base_direct_rows[EARLY_CLUSTER_SIZE],
+                metadata={"cluster": "late", "tier": "secondary"},
+            )
+            db.insert_vectors(direct_rows)
             top_matches = db.search_vectors(
                 _embedding(1.0, 0.0, 0.0),
                 top_k=5,
@@ -80,7 +121,7 @@ def main() -> None:
                 top_k=3,
                 metric="cosine",
             )
-            db.insert_vectors([(99_001, REFRESH_VECTOR)])
+            refreshed_ids = db.insert_vectors([REFRESH_VECTOR])
             refreshed_result = db.search_vectors(
                 REFRESH_VECTOR,
                 top_k=1,
@@ -96,13 +137,20 @@ def main() -> None:
                 route="sqlite",
             )
             db.executemany(
-                "INSERT INTO vector_scope (id, cluster, embedding) VALUES (?, ?, ?)",
+                "INSERT INTO vector_scope (cluster, embedding) VALUES (?, ?)",
                 [
-                    (101_001, "early", _embedding(1.0, 0.0, 0.0)),
-                    (101_002, "early", _embedding(1.0, 0.0, 0.0)),
-                    (101_003, "late", _embedding(0.0, 0.0, 1.0)),
+                    ("early", _embedding(1.0, 0.0, 0.0)),
+                    ("early", _embedding(1.0, 0.0, 0.0)),
+                    ("late", _embedding(0.0, 0.0, 1.0)),
                 ],
                 route="sqlite",
+            )
+            sql_row_ids = tuple(
+                row[0]
+                for row in db.query(
+                    "SELECT id FROM vector_scope ORDER BY id",
+                    route="sqlite",
+                ).rows
             )
             sql_scoped_result = db.query(
                 "SELECT id FROM vector_scope WHERE cluster = ? ORDER BY id",
@@ -118,27 +166,19 @@ def main() -> None:
             )
 
         with HumemDB(str(graph_sqlite_path)) as db:
-            graph_ids = []
-            for name, cluster, embedding in (
-                ("early-a", "early", _embedding(1.0, 0.0, 0.0)),
-                ("early-b", "early", _embedding(1.0, 0.0, 0.0)),
-                ("late-a", "late", _embedding(0.0, 0.0, 1.0)),
-            ):
-                created = db.query(
-                    (
-                        "CREATE (u:VectorNode {"
-                        "name: $name, cluster: $cluster, embedding: $embedding})"
-                    ),
-                    route="sqlite",
-                    query_type="cypher",
-                    params={
-                        "name": name,
-                        "cluster": cluster,
-                        "embedding": embedding,
-                    },
+            graph_ids = tuple(
+                _create_vector_node(
+                    db,
+                    name=name,
+                    cluster=cluster,
+                    embedding=embedding,
                 )
-                graph_ids.append(created.rows[0][0])
-            graph_ids = tuple(graph_ids)
+                for name, cluster, embedding in (
+                    ("early-a", "early", _embedding(1.0, 0.0, 0.0)),
+                    ("early-b", "early", _embedding(1.0, 0.0, 0.0)),
+                    ("late-a", "late", _embedding(0.0, 0.0, 1.0)),
+                )
+            )
             cypher_scoped_result = db.query(
                 "MATCH (u:VectorNode {cluster: 'early'}) RETURN u.id ORDER BY u.id",
                 route="sqlite",
@@ -152,18 +192,26 @@ def main() -> None:
             )
 
         assert len(top_matches.rows) == 5
-        assert all(row[0] <= 8_000 for row in top_matches.rows)
-        assert all(abs(row[1] - 1.0) < 1e-6 for row in top_matches.rows)
-        assert tuple(row[0] for row in filtered_matches.rows) == (1, 2)
-        assert all(row[0] <= 8_000 for row in raw_query_result.rows)
-        assert all(abs(row[1] - 1.0) < 1e-6 for row in raw_query_result.rows)
-        assert tuple(row[0] for row in sql_scoped_result.rows) == (101_001, 101_002)
-        assert tuple(row[0] for row in cypher_scoped_result.rows) == graph_ids[:2]
-        assert all(row[0] > EARLY_CLUSTER_SIZE for row in late_cluster_result.rows)
-        assert all(abs(row[1] - 1.0) < 1e-6 for row in late_cluster_result.rows)
+        assert all(row[0] == "direct" for row in top_matches.rows)
+        assert all(row[2] <= 8_000 for row in top_matches.rows)
+        assert all(abs(row[3] - 1.0) < 1e-6 for row in top_matches.rows)
+        assert tuple(row[2] for row in filtered_matches.rows) == (1, 2)
+        assert all(row[0] == "direct" for row in raw_query_result.rows)
+        assert all(row[2] <= 8_000 for row in raw_query_result.rows)
+        assert all(abs(row[3] - 1.0) < 1e-6 for row in raw_query_result.rows)
+        assert tuple(row[:3] for row in sql_scoped_result.rows) == (
+            ("sql_row", "vector_scope", sql_row_ids[0]),
+            ("sql_row", "vector_scope", sql_row_ids[1]),
+        )
+        assert tuple(row[:3] for row in cypher_scoped_result.rows) == (
+            ("graph_node", "", graph_ids[0]),
+            ("graph_node", "", graph_ids[1]),
+        )
+        assert all(row[2] > EARLY_CLUSTER_SIZE for row in late_cluster_result.rows)
+        assert all(abs(row[3] - 1.0) < 1e-6 for row in late_cluster_result.rows)
         assert len(refreshed_result.rows) == 1
-        assert refreshed_result.rows[0][0] == 99_001
-        assert abs(refreshed_result.rows[0][1] - 1.0) < 1e-6
+        assert refreshed_result.rows[0][:3] == ("direct", "", refreshed_ids[0])
+        assert abs(refreshed_result.rows[0][3] - 1.0) < 1e-6
 
         print("Top matches:", top_matches.rows)
         print("Filtered matches:", filtered_matches.rows)

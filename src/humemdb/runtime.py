@@ -46,7 +46,15 @@ _THREADPOOL_STATE: dict[str, Any] = {
 
 @dataclass(frozen=True, slots=True)
 class RuntimeThreadBudget:
-    """Resolved HumemDB runtime thread-budget details."""
+    """Resolved HumemDB runtime thread-budget details.
+
+    Attributes:
+        source_env: Environment variable name that supplied the thread budget, if any.
+        thread_count: Requested global worker limit.
+        arrow_cpu_count: Effective PyArrow CPU thread count after configuration.
+        arrow_io_thread_count: Effective PyArrow IO thread count after configuration.
+        numpy_thread_limit: Effective `threadpoolctl` limit for loaded numeric pools.
+    """
 
     source_env: str | None
     thread_count: int | None
@@ -59,7 +67,15 @@ def configure_runtime_threads_from_env(
     *,
     fallback_env_names: Sequence[str] = (),
 ) -> RuntimeThreadBudget:
-    """Apply the runtime thread budget from HumemDB environment variables."""
+    """Apply the runtime thread budget from HumemDB environment variables.
+
+    Args:
+        fallback_env_names: Additional environment variable names to check after
+            `HUMEMDB_THREADS`.
+
+    Returns:
+        A `RuntimeThreadBudget` describing the applied runtime state.
+    """
 
     source_env, thread_count = resolve_thread_budget_from_env(
         fallback_env_names=fallback_env_names,
@@ -74,7 +90,18 @@ def resolve_thread_budget_from_env(
     *,
     fallback_env_names: Sequence[str] = (),
 ) -> tuple[str | None, int | None]:
-    """Resolve the first configured HumemDB thread-budget env var."""
+    """Resolve the first configured HumemDB thread-budget env var.
+
+    Args:
+        fallback_env_names: Additional environment variable names to check after the
+            canonical HumemDB variable.
+
+    Returns:
+        A `(source_env, thread_count)` tuple, or `(None, None)` when no budget is set.
+
+    Raises:
+        ValueError: If a configured value is not a positive integer.
+    """
 
     for env_name in (HUMEMDB_THREADS_ENV, *fallback_env_names):
         raw_value = os.environ.get(env_name)
@@ -101,7 +128,16 @@ def configure_runtime_threads(
     thread_count: int | None,
     source_env: str | None = None,
 ) -> RuntimeThreadBudget:
-    """Apply a HumemDB runtime thread budget to supported libraries."""
+    """Apply a HumemDB runtime thread budget to supported libraries.
+
+    Args:
+        thread_count: Requested global worker limit, or `None` to leave the runtime
+            unchanged.
+        source_env: Environment variable name that supplied `thread_count`, if any.
+
+    Returns:
+        A `RuntimeThreadBudget` describing the resulting runtime state.
+    """
 
     if thread_count is None:
         return RuntimeThreadBudget(

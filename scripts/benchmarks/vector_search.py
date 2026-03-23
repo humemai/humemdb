@@ -268,8 +268,9 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
             )
             numpy_sq8_build_ms = (time.perf_counter() - started) * 1000.0
 
-        filtered_cutoff = int(item_ids[len(item_ids) // 2])
-        filtered_candidates = np.flatnonzero(item_ids <= filtered_cutoff)
+        numeric_item_ids = _numeric_item_ids(item_ids)
+        filtered_cutoff = int(numeric_item_ids[len(numeric_item_ids) // 2])
+        filtered_candidates = np.flatnonzero(numeric_item_ids <= filtered_cutoff)
 
         exact_truth = _exact_truth(
             exact_index,
@@ -567,9 +568,11 @@ def _seed_lancedb_table(
     )
     table = pa.table(
         {
-            "item_id": pa.array(item_ids.tolist(), type=pa.int64()),
+            "item_id": pa.array(_numeric_item_ids(item_ids).tolist(), type=pa.int64()),
             "prefilter_group": pa.array(
-                (item_ids <= filtered_cutoff).astype(np.int8).tolist(),
+                (_numeric_item_ids(item_ids) <= filtered_cutoff)
+                .astype(np.int8)
+                .tolist(),
                 type=pa.int8(),
             ),
             "vector": pa.array(
@@ -700,12 +703,12 @@ def _exact_truth(
 ) -> dict[str, list[tuple[int, ...]]]:
     return {
         "global": [
-            tuple(match.item_id for match in exact_index.search(query, top_k=top_k))
+            tuple(match.target_id for match in exact_index.search(query, top_k=top_k))
             for query in queries
         ],
         "filtered": [
             tuple(
-                match.item_id
+                match.target_id
                 for match in exact_index.search(
                     query,
                     top_k=top_k,
@@ -758,9 +761,15 @@ def _recall_at_k(
 
 
 def _match_ids(matches) -> tuple[int, ...]:
-    return tuple(int(match.item_id) for match in matches)
+    return tuple(int(match.target_id) for match in matches)
+
+
+def _numeric_item_ids(item_ids: Any) -> np.ndarray:
+    return np.asarray(
+        [int(item_id[2]) for item_id in item_ids.tolist()],
+        dtype=np.int64,
+    )
 
 
 if __name__ == "__main__":
     main()
-

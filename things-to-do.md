@@ -178,7 +178,7 @@ Status: complete for the exact baseline path.
 
 Settle the simple public vector model, then harden docs/package.
 
-Status: next.
+Status: done.
 
 - Decide one simple vector story that maps cleanly onto SQLite storage.
 - Treat vectors as attached to rows, nodes, or minimal vector-only records.
@@ -195,12 +195,16 @@ Status: next.
 - Let Cypher vector writes also live in Cypher itself: vector-bearing node creates and
   narrow `MATCH ... SET n.embedding = ...` flows should work through the Cypher
   surface instead of helper-only methods.
-- Keep a minimal direct object API for vector-only users, but treat it as convenience,
-  not as the conceptual center of the vector model.
-- Let vector-only users categorize vectors through metadata and filters instead of
-  reintroducing `collection` as the main public abstraction.
+- Keep a minimal direct vector runtime for internal testing, benchmarking, and narrow
+  experimental use, but do not treat it as a main public product surface.
+- Let the internal direct vector runtime use distinct object-style APIs and metadata
+  filters without forcing that model onto the main public `HumemDB` story.
 - Keep the first vector-only categorization step narrow: one canonical SQLite-backed
   vector table plus simple metadata/filter support.
+- Make the canonical vector identity explicit before release: vectors should be keyed by
+  `target`, `scope`, and `target_id` instead of one shared bare integer id so direct
+  vectors, SQL row-owned vectors, and graph node-owned vectors can safely coexist in
+  one SQLite database.
 - Keep the first SQL/Cypher vector write step narrow too: support the mainstream
   PostgreSQL-like and Neo4j-like ownership model as a subset without claiming full
   pgvector or full Neo4j Cypher compatibility.
@@ -212,8 +216,8 @@ Status: next.
 - Keep SQLite as the canonical persisted vector store and exact NumPy as the shipped
   search baseline.
 - Do not expose internal storage normalization choices as the main public abstraction.
-- Keep `query_type` explicit in this phase even if SQL-versus-Cypher inference is added
-  later.
+- Keep `route`, `query_type`, and low-level param plumbing as internal scaffolding in
+  this phase even if the current implementation still uses them under the hood.
 - Make the top-level README fully consistent with the current SQL, Cypher, and vector
   runtime behavior.
 - Add minimal public examples for `HumemSQL v0`, `HumemCypher v0`, and `HumemVector v0`.
@@ -226,11 +230,11 @@ Status: next.
 - Make the vector wording explicit enough that users can tell the current path is an
   exact SQLite-plus-NumPy baseline rather than an indexed ANN runtime.
 - Make the vector wording explicit enough that users can tell what is supported now:
-  row-oriented SQL vector search, node-oriented Cypher vector search, and a minimal
-  vector-only object API, with edge vectors deferred.
-- Make the vector wording explicit enough that users can tell vector search is intended
-  to exist through SQL, Cypher, and a thin object API, even if implementation lands
-  incrementally.
+  row-oriented SQL vector search and node-oriented Cypher vector search, with direct
+  vector APIs treated as internal/experimental and edge vectors deferred.
+- Make the public API direction explicit enough that early users can understand that
+  `HumemDB` is heading toward `db.query(...)` and later `db.ask(...)`, while the
+  current low-level routing/query-type controls remain implementation details.
 - Make the benchmark scripts and benchmark README reproducible enough to justify the
   current routing story.
 - Ensure package metadata, docs entry points, and dependency notices are ready for a
@@ -240,33 +244,21 @@ Status: next.
 
 ## Phase 7
 
-Release `v0.1.0`.
+Simplify the public surface around `db.query(...)`.
 
-Status: release immediately after Phase 6.
-
-- Cut the GitHub `v0.1.0` release once the repo is a clean, reproducible public
-  snapshot.
-- Publish the same `v0.1.0` to PyPI once the README, MkDocs setup, package metadata, and
-  examples are aligned with the shipped runtime.
-- Treat this as the first coherent public preview of the current SQL, graph, and exact
-  vector baseline.
-- Require the simple public vector model to be settled before release; do not ship a
-  placeholder abstraction that is likely to be renamed immediately.
-- Require the near-term vector story to be clear before release: SQL vector search is
-  row-oriented, Cypher vector search is node-oriented, and the direct object API is the
-  thin vector-only convenience path.
-- Require the direct vector-only story to be clear before release: categorization uses
-  metadata/filtering, not named collections.
-- Require the public `v0` paths to be green in tests before release.
-- Do not block `v0.1.0` on indexed LanceDB runtime integration, automatic routing, or
-  later planning work.
+- Treat `db.query(...)` as the explicit public text-query surface for SQL or Cypher.
+- Start pulling `route`, `query_type`, and low-level param plumbing out of the public
+  mental model even if the implementation still uses them internally.
+- Make the public API direction clearer: `db.query(...)` is the explicit surface and
+  `db.ask(...)` is the later NL surface.
+- Keep direct-vector runtime details off the main public path.
+- Keep the current runtime deterministic and testable while the public API shape is
+  cleaned up.
 
 ## Phase 8
 
-Do the internal planning / IR cleanup after `v0.1.0`.
+Do the internal planning / IR cleanup.
 
-- Keep this post-release on purpose; do not let Phase 6 expand into a parser/compiler
-  rewrite.
 - Replace the current narrow mix of SQL AST inspection and Cypher string parsing with a
   small explicit internal plan layer for the supported subset.
 - Use that cleanup to consolidate SQL vector writes, Cypher vector writes, and vector
@@ -277,44 +269,32 @@ Do the internal planning / IR cleanup after `v0.1.0`.
 - Revisit broad-candidate scoped search behavior once the execution boundaries are
   clearer, especially when SQL or Cypher filtering keeps a large fraction of the vector
   set.
+- Keep `route`, `query_type`, and low-level params internal to this layer.
 - Expect HumemDB to eventually need an internal plan or IR layer, but keep it thin and
   incremental rather than starting with a full compiler architecture.
-- Design earlier seams so this plan layer can be inserted cleanly instead of forcing a
-  later rewrite from scratch.
 
 ## Phase 9
 
-Add indexed vector runtime and vector index lifecycle once indexed search is real.
-
-- Keep this out of the current exact-baseline work.
-- Add explicit vector index build, rebuild, refresh, inspect, and drop operations once
-  HumemDB ships a real indexed vector path.
-- Expose vector index lifecycle through the Python object API first.
-- Add matching SQL and Cypher support later so vector indexing is not permanently
-  object-API-only.
-- Keep exact search free of mandatory index-build steps.
-- Treat this as the phase where indexed ANN semantics and lifecycle are defined
-  together, not separately.
-
-## Phase 10
-
 Add query classification, optional inference, and automatic routing.
 
-- Keep `query_type` as an explicit override even if inference is added.
+- Keep `route` internal even if inference and automatic routing are added.
+- Do not require public `query_type` once `db.query(...)` and `db.ask(...)` are the
+  intended surfaces.
 - Detect SQL versus Cypher with lightweight parsing or heuristics, not an LLM.
 - Treat query-type inference as a convenience feature, not as part of the core vector
   model.
-- Keep direct vector-object calls explicit instead of trying to infer vector intent from
-  arbitrary free-form text.
+- Keep internal direct vector-object calls explicit instead of trying to infer vector
+  intent from arbitrary free-form text.
 - Classify read versus write queries safely.
 - Detect simple OLTP versus OLAP query shapes.
 - Validate the supported portable SQL subset.
 - Keep the first implementation in Python.
 - Point reads and transactional queries to SQLite.
 - Send broader scans, aggregates, and analytics to DuckDB.
-- Keep routing explainable and overridable.
+- Keep routing explainable and overridable internally, even if it is no longer a main
+  public knob.
 
-## Phase 11
+## Phase 10
 
 Add larger ingestion strategies.
 
@@ -343,7 +323,7 @@ Add larger ingestion strategies.
   assuming one bulk-load path fits everything.
 - Keep this as an ingestion/runtime phase, not a change to the public query surfaces.
 
-## Phase 12
+## Phase 11
 
 Broaden SQL and Cypher grammar coverage.
 
@@ -354,9 +334,9 @@ Broaden SQL and Cypher grammar coverage.
 - Keep rejecting unsupported constructs clearly instead of pretending to support full
   PostgreSQL or full Cypher compatibility before the implementation is actually there.
 - Treat this as the phase where grammar breadth is reconsidered seriously, not as part
-  of the initial `v0.1.0` release bar.
+  of the initial public snapshot.
 
-## Phase 13
+## Phase 12
 
 Evaluate broader graph property values.
 
@@ -365,35 +345,73 @@ Evaluate broader graph property values.
 - Treat this as a data-model decision, not just a parser or grammar extension.
 - Define the storage, indexing, filtering, ordering, and return semantics before
   claiming support for broader graph properties.
-- Keep this explicitly out of the initial `v0.1.0` scope.
+- Keep this explicitly out of the initial public snapshot.
+
+## Phase 13
+
+Add indexed vector runtime and vector index lifecycle once indexed search is real.
+
+- Keep this out of the current exact-baseline work.
+- Add explicit vector index build, rebuild, refresh, inspect, and drop operations once
+  HumemDB ships a real indexed vector path.
+- Expose vector index lifecycle through the internal/advanced vector object API first.
+- Add matching SQL and Cypher support later so vector indexing is not permanently
+  object-API-only.
+- Keep exact search free of mandatory index-build steps.
+- Treat this as the phase where indexed ANN semantics and lifecycle are defined
+  together, not separately.
 
 ## Phase 14
 
-Evaluate `v1` readiness and harden the public surfaces.
+Harden the public surfaces for `v0.1.0`.
 
-- Review whether `HumemSQL v0`, `HumemCypher v0`, and `HumemVector v0` are stable enough
-  to promote to `v1`.
+- Review whether `HumemSQL v0`, `HumemCypher v0`, and `HumemVector v0` are stable,
+  coherent, and documented enough to ship as one explicit `v0.1.0` snapshot.
 - Use surface maturity, benchmark evidence, and routing stability as the bar for
-  promotion, not raw feature count alone.
-- Promote a frontend to `v1` only when HumemDB is ready to preserve its semantics as a
-  real compatibility commitment.
+  release hardening, not raw feature count alone.
 - Tighten unsupported-case behavior and error messages across SQL, Cypher, and vector
   paths.
-- Make result shapes, parameter behavior, and route/query-type semantics explicit.
+- Make result shapes and explicit query semantics stable and well documented.
 - Re-run benchmark-backed routing checks when runtime behavior changes materially.
 - Revisit the SQLite-to-NumPy vector load and exact-index materialization path if later
   benchmarks show it has become a real bottleneck, but keep the current simple loader
   unless measured evidence justifies lower-level optimization work.
 - Add public-surface tests that defend the documented semantics instead of only the
   current happy paths.
-- Use this phase to close the gap between a useful `v0` and a frontend that is stable
-  enough to promote to `v1`.
+- Use this phase to close the gap between a useful `v0` implementation and a release
+  candidate that is stable enough to publish.
 
 ## Phase 15
 
-Add natural language support later.
+Release `v0.1.0`.
 
-- Start with a small model or parser that maps natural language into structured HumemDB
-  requests.
-- Compile that structured request into SQL, Cypher, or vector operations.
-- Do not make raw natural-language-to-backend-SQL the core interface.
+- Cut the GitHub `v0.1.0` release once `db.query(...)`, the docs, and the explicit
+  SQL/Cypher/vector baseline form one coherent public snapshot.
+- Publish the same `v0.1.0` to PyPI once the README, MkDocs setup, package metadata,
+  and examples match that public snapshot.
+- Require the simple public vector model to be settled before release; do not ship a
+  placeholder abstraction that is likely to be renamed immediately.
+- Require the near-term vector story to be clear before release: SQL vector search is
+  row-oriented and Cypher vector search is node-oriented; keep direct-vector runtime
+  details out of the main public product narrative.
+- Require the direct vector-only story to be clear before release: it is an
+  internal/experimental runtime, not the main public abstraction.
+- Require the public `v0` paths to be green in tests before release.
+- Do not block `v0.1.0` on `db.ask(...)`, later model work, or future planner
+  refinement.
+
+## Phase 16
+
+Add `db.ask(...)` as the final major public surface.
+
+- Keep `db.ask(...)` as the natural-language public surface built on top of the
+  already-cleaned `db.query(...)` surface and internal plan layer.
+- Do not expose `route`, `query_type`, or low-level param plumbing from `db.ask(...)`.
+- Let `db.ask(...)` own intent understanding and planner selection instead of forcing
+  users to think in terms of SQL versus Cypher versus vector execution.
+- Start narrow: make `db.ask(...)` good at the supported SQL/Cypher/vector subset
+  instead of pretending to solve arbitrary natural-language database questions.
+- Start with an existing model or constrained NL-to-plan flow before considering any
+  model training.
+- Keep this phase focused on the first coherent NL UX, not on perfect automation or a
+  fully general planner.

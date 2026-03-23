@@ -44,7 +44,11 @@ PropertyValue = ScalarPropertyValue | VectorPropertyValue
 
 @dataclass(frozen=True, slots=True)
 class ParameterRef:
-    """Named Cypher parameter reference such as `$name`."""
+    """Named Cypher parameter reference such as `$name`.
+
+    Attributes:
+        name: Parameter name without the leading `$` prefix.
+    """
 
     name: str
 
@@ -55,7 +59,13 @@ PropertyItems = tuple[tuple[str, CypherValue], ...]
 
 @dataclass(frozen=True, slots=True)
 class Predicate:
-    """Simple equality predicate used by the initial Cypher `WHERE` subset."""
+    """Simple equality predicate used by the initial Cypher `WHERE` subset.
+
+    Attributes:
+        alias: Bound node or relationship alias the predicate targets.
+        field: Property name being compared.
+        value: Literal or parameter-backed Cypher value to compare against.
+    """
 
     alias: str
     field: str
@@ -64,7 +74,13 @@ class Predicate:
 
 @dataclass(frozen=True, slots=True)
 class PropertyConstraint:
-    """Bound property equality constraint used during Cypher compilation."""
+    """Bound property equality constraint used during Cypher compilation.
+
+    Attributes:
+        alias: Bound node or relationship alias the constraint targets.
+        field: Property name constrained during compilation.
+        value: Bound scalar or vector property value.
+    """
 
     alias: str
     field: str
@@ -73,7 +89,13 @@ class PropertyConstraint:
 
 @dataclass(frozen=True, slots=True)
 class NodePattern:
-    """Parsed node pattern for the initial Cypher subset."""
+    """Parsed node pattern for the initial Cypher subset.
+
+    Attributes:
+        alias: Pattern alias used by the query.
+        label: Optional node label required by the narrow v0 surface.
+        properties: Inline property items attached to the pattern.
+    """
 
     alias: str
     label: str | None
@@ -82,7 +104,14 @@ class NodePattern:
 
 @dataclass(frozen=True, slots=True)
 class RelationshipPattern:
-    """Parsed directed relationship pattern for the initial Cypher subset."""
+    """Parsed directed relationship pattern for the initial Cypher subset.
+
+    Attributes:
+        alias: Optional relationship alias bound by the query.
+        type_name: Relationship type name.
+        direction: Relationship direction relative to the left node.
+        properties: Inline property items attached to the relationship pattern.
+    """
 
     alias: str | None
     type_name: str
@@ -92,21 +121,36 @@ class RelationshipPattern:
 
 @dataclass(frozen=True, slots=True)
 class ReturnItem:
-    """Requested return binding for a Cypher `RETURN` clause."""
+    """Requested return binding for a Cypher `RETURN` clause.
+
+    Attributes:
+        alias: Alias being projected.
+        field: Field requested from the alias.
+    """
 
     alias: str
     field: str
 
     @property
     def column_name(self) -> str:
-        """Return the public result column name for this item."""
+        """Return the public result column name for this item.
+
+        Returns:
+            A stable `alias.field` column name.
+        """
 
         return f"{self.alias}.{self.field}"
 
 
 @dataclass(frozen=True, slots=True)
 class OrderItem:
-    """Requested sort binding for a Cypher `ORDER BY` clause."""
+    """Requested sort binding for a Cypher `ORDER BY` clause.
+
+    Attributes:
+        alias: Alias being ordered.
+        field: Field requested for ordering.
+        direction: Sort direction.
+    """
 
     alias: str
     field: str
@@ -115,14 +159,24 @@ class OrderItem:
 
 @dataclass(frozen=True, slots=True)
 class CreateNodePlan:
-    """Plan for creating a single labeled node."""
+    """Plan for creating a single labeled node.
+
+    Attributes:
+        node: Parsed node pattern to create.
+    """
 
     node: NodePattern
 
 
 @dataclass(frozen=True, slots=True)
 class CreateRelationshipPlan:
-    """Plan for creating two nodes and one directed edge between them."""
+    """Plan for creating two nodes and one directed edge between them.
+
+    Attributes:
+        left: Left node pattern.
+        relationship: Relationship pattern to create.
+        right: Right node pattern.
+    """
 
     left: NodePattern
     relationship: RelationshipPattern
@@ -131,7 +185,15 @@ class CreateRelationshipPlan:
 
 @dataclass(frozen=True, slots=True)
 class MatchNodePlan:
-    """Plan for matching labeled nodes and projecting bound values."""
+    """Plan for matching labeled nodes and projecting bound values.
+
+    Attributes:
+        node: Node pattern to match.
+        predicates: Additional equality predicates from `WHERE`.
+        returns: Requested projections.
+        order_by: Optional sort items.
+        limit: Optional row limit.
+    """
 
     node: NodePattern
     predicates: tuple[Predicate, ...]
@@ -142,7 +204,17 @@ class MatchNodePlan:
 
 @dataclass(frozen=True, slots=True)
 class MatchRelationshipPlan:
-    """Plan for matching one directed relationship and projecting node values."""
+    """Plan for matching one directed relationship and projecting node values.
+
+    Attributes:
+        left: Left node pattern.
+        relationship: Relationship pattern to match.
+        right: Right node pattern.
+        predicates: Additional equality predicates from `WHERE`.
+        returns: Requested projections.
+        order_by: Optional sort items.
+        limit: Optional row limit.
+    """
 
     left: NodePattern
     relationship: RelationshipPattern
@@ -155,7 +227,13 @@ class MatchRelationshipPlan:
 
 @dataclass(frozen=True, slots=True)
 class SetItem:
-    """Requested property assignment for a narrow Cypher `SET` clause."""
+    """Requested property assignment for a narrow Cypher `SET` clause.
+
+    Attributes:
+        alias: Alias whose property is being updated.
+        field: Property name to assign.
+        value: Literal or parameter-backed Cypher value to store.
+    """
 
     alias: str
     field: str
@@ -164,7 +242,13 @@ class SetItem:
 
 @dataclass(frozen=True, slots=True)
 class SetNodePlan:
-    """Plan for matching labeled nodes and updating node properties."""
+    """Plan for matching labeled nodes and updating node properties.
+
+    Attributes:
+        node: Node pattern that anchors the update.
+        predicates: Equality predicates that select target nodes.
+        assignments: Property assignments to apply.
+    """
 
     node: NodePattern
     predicates: tuple[Predicate, ...]
@@ -182,7 +266,12 @@ GraphPlan = (
 
 @dataclass(frozen=True, slots=True)
 class _CompiledReturnItem:
-    """Compiled return metadata used to decode SQL result rows."""
+    """Compiled return metadata used to decode SQL result rows.
+
+    Attributes:
+        column_name: Public column name to expose in the decoded result.
+        kind: Whether the column maps to a raw graph field or typed property.
+    """
 
     column_name: str
     kind: Literal["raw", "property"]
@@ -190,7 +279,13 @@ class _CompiledReturnItem:
 
 @dataclass(frozen=True, slots=True)
 class _CompiledMatchQuery:
-    """Backend SQL plus result decoding metadata for a Cypher match."""
+    """Backend SQL plus result decoding metadata for a Cypher match.
+
+    Attributes:
+        sql: Backend SQL statement to execute.
+        params: Positional parameters for `sql`.
+        returns: Compiled return descriptors used during decoding.
+    """
 
     sql: str
     params: tuple[str | int | float | None, ...]
@@ -252,7 +347,11 @@ _GRAPH_SCHEMA_SQL = (
 
 
 def ensure_graph_schema(sqlite: SQLiteEngine) -> None:
-    """Create the SQLite-backed graph storage tables if they do not exist yet."""
+    """Create the SQLite-backed graph storage tables if they do not exist yet.
+
+    Args:
+        sqlite: Canonical SQLite engine that owns graph storage.
+    """
 
     logger.debug("Ensuring SQLite-backed graph schema exists")
     for statement in _GRAPH_SCHEMA_SQL:
@@ -267,7 +366,22 @@ def execute_cypher(
     sqlite: SQLiteEngine,
     duckdb: DuckDBEngine,
 ) -> QueryResult:
-    """Execute a minimal Cypher statement through the HumemDB graph path."""
+    """Execute a minimal Cypher statement through the HumemDB graph path.
+
+    Args:
+        text: Cypher statement to execute.
+        route: Backend route selected by the caller.
+        params: Optional named or positional Cypher parameters.
+        sqlite: Canonical SQLite engine that owns graph storage.
+        duckdb: DuckDB engine used for read-only graph queries.
+
+    Returns:
+        A normalized `QueryResult`.
+
+    Raises:
+        ValueError: If the route is unsupported or a Cypher write is directed to
+            DuckDB.
+    """
 
     plan = _bind_plan_values(parse_cypher(text), _normalize_params(params))
     logger.debug(
@@ -312,7 +426,17 @@ def execute_cypher(
 
 
 def parse_cypher(text: str) -> GraphPlan:
-    """Parse a `HumemCypher v0` statement into a small internal graph plan."""
+    """Parse a `HumemCypher v0` statement into a small internal graph plan.
+
+    Args:
+        text: Cypher statement text.
+
+    Returns:
+        Parsed `GraphPlan` for the supported Cypher subset.
+
+    Raises:
+        ValueError: If the statement is empty or outside the supported v0 subset.
+    """
 
     statement = text.strip().rstrip(";").strip()
     if not statement:
@@ -1240,7 +1364,7 @@ def _insert_node(sqlite: SQLiteEngine, node: NodePattern) -> int:
         )
     if vector_rows:
         ensure_vector_schema(sqlite)
-        insert_vector_rows(sqlite, vector_rows)
+        insert_vector_rows(sqlite, vector_rows, target="graph_node", scope="")
 
     return int(node_id)
 
@@ -1294,7 +1418,12 @@ def _upsert_node_property(
     )
     if value_type == "vector":
         ensure_vector_schema(sqlite)
-        upsert_vectors(sqlite, [(int(node_id), value)])
+        upsert_vectors(
+            sqlite,
+            [(int(node_id), value)],
+            target="graph_node",
+            scope="",
+        )
 
 
 def _parse_node_pattern(text: str, *, require_label: bool = False) -> NodePattern:

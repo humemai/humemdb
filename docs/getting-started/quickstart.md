@@ -58,18 +58,11 @@ with HumemDB("graph.sqlite3", "graph.duckdb") as db:
 from humemdb import HumemDB
 
 with HumemDB("vectors.sqlite3") as db:
-    db.insert_vectors(
+    assigned_direct_ids = db.insert_vectors(
         [
-            (1, [1.0, 0.0]),
-            (2, [0.9, 0.1]),
-            (3, [0.0, 1.0]),
-        ]
-    )
-    db.set_vector_metadata(
-        [
-            (1, {"group": "alpha"}),
-            (2, {"group": "alpha"}),
-            (3, {"group": "beta"}),
+            {"embedding": [1.0, 0.0], "metadata": {"group": "alpha"}},
+            {"embedding": [0.9, 0.1], "metadata": {"group": "alpha"}},
+            {"embedding": [0.0, 1.0], "metadata": {"group": "beta"}},
         ]
     )
     db.query(
@@ -77,10 +70,11 @@ with HumemDB("vectors.sqlite3") as db:
         route="sqlite",
     )
     db.executemany(
-        "INSERT INTO docs (id, topic) VALUES (?, ?)",
-        [(1, "alpha"), (2, "alpha"), (3, "beta")],
+        "INSERT INTO docs (topic) VALUES (?)",
+        [("alpha",), ("alpha",), ("beta",)],
         route="sqlite",
     )
+    doc_rows = db.query("SELECT id, topic FROM docs ORDER BY id", route="sqlite")
 
     direct_result = db.search_vectors(
         [1.0, 0.0],
@@ -102,7 +96,19 @@ with HumemDB("vectors.sqlite3") as db:
 
     print(direct_result.rows)
     print(sql_scoped_result.rows)
+    print(doc_rows.rows)
 ```
+
+Vector result rows are explicit:
+
+- direct search returns rows like `("direct", "", 1, score)`
+- SQL-scoped search returns rows like `("sql_row", "docs", 1, score)`
+- Cypher-scoped search returns rows like `("graph_node", "", 7, score)`
+
+The direct API auto-assigns ids starting at `1` and returns them from
+`insert_vectors(...)`. For the common path, insert record-like rows with an
+`embedding` and optional `metadata` map. Explicit direct ids are still allowed when
+you need them for import or migration.
 
 If you want vectors to feel attached to rows or nodes at write time, use the narrow SQL
 and Cypher frontends directly instead of the raw direct vector API:
@@ -119,10 +125,10 @@ with HumemDB("app.sqlite3") as db:
         route="sqlite",
     )
     db.executemany(
-        "INSERT INTO docs (id, title, embedding) VALUES (?, ?, ?)",
+        "INSERT INTO docs (title, embedding) VALUES (?, ?)",
         [
-            (1, "Alpha", [1.0, 0.0]),
-            (2, "Beta", [0.0, 1.0]),
+            ("Alpha", [1.0, 0.0]),
+            ("Beta", [0.0, 1.0]),
         ],
         route="sqlite",
     )
@@ -155,6 +161,9 @@ with HumemDB("app.sqlite3") as db:
 These write forms are intentionally narrow `v0` subset features. They follow a
 PostgreSQL-like row ownership model and a Neo4j-style node-property ownership model
 without claiming full pgvector or full Neo4j Cypher compatibility.
+
+Internally, that ownership is stored as `target`, `scope`, and `target_id` rather than
+one shared bare integer id.
 
 ## Read the surface boundaries
 

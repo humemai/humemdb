@@ -27,23 +27,32 @@ inside the current public `v0` surface.
 
 ```python
 with HumemDB("vectors.sqlite3") as db:
-    db.insert_vectors(build_vectors())
+    direct_rows = build_vectors()
+    direct_rows[0] = _direct_record(
+    direct_rows[0],
+    metadata={"cluster": "early", "tier": "primary"},
+    )
+    db.insert_vectors(direct_rows)
 
     result = db.search_vectors(
-        _embedding(1.0, 0.0, 0.0),
-        top_k=5,
-        metric="cosine",
+      _embedding(1.0, 0.0, 0.0),
+      top_k=5,
+      metric="cosine",
     )
 ```
 
 ## What this means in practice
 
 - SQLite is the canonical vector store.
+- The canonical vector identity is `target`, `scope`, and `target_id`.
 - The public path is exact, not ANN.
-- The current direct vector path searches one vector-only set loaded from SQLite.
+- The current direct vector path auto-assigns direct ids starting at `1`, accepts
+  insert-time metadata records, and searches one vector-only set loaded from SQLite.
 - Narrow vector-only categorization comes from metadata equality filters.
-- SQL and Cypher vector scope both resolve candidate ids, then reuse the same exact
+- SQL rows and Cypher nodes can keep their ids system-assigned, then resolve candidate ids and reuse the same exact
   ranking path.
+- Vector results expose their provenance explicitly, so mixed direct, row-owned, and
+  graph-owned vectors do not rely on one shared global id space.
 - When vectors belong to rows or nodes, the intended write surface is still SQL or
   Cypher themselves, not extra helper APIs.
 - Exact-vector caches are invalidated automatically after SQL writes that touch vector

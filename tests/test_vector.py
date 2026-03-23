@@ -32,7 +32,14 @@ class HumemVectorTest(unittest.TestCase):
         vector = _vector_module()
 
         index = vector.ExactVectorIndex(
-            item_ids=np.array([101, 102, 103]),
+            item_ids=np.array(
+                [
+                    ("direct", "", 101),
+                    ("direct", "", 102),
+                    ("direct", "", 103),
+                ],
+                dtype=object,
+            ),
             matrix=np.array(
                 [
                     [1.0, 0.0],
@@ -46,13 +53,20 @@ class HumemVectorTest(unittest.TestCase):
 
         result = index.search([1.0, 0.0], top_k=2)
 
-        self.assertEqual(tuple(match.item_id for match in result), (101, 102))
+        self.assertEqual(tuple(match.target_id for match in result), (101, 102))
 
     def test_exact_vector_index_supports_candidate_filtering(self) -> None:
         vector = _vector_module()
 
         index = vector.ExactVectorIndex(
-            item_ids=np.array([1, 2, 3]),
+            item_ids=np.array(
+                [
+                    ("direct", "", 1),
+                    ("direct", "", 2),
+                    ("direct", "", 3),
+                ],
+                dtype=object,
+            ),
             matrix=np.array(
                 [
                     [1.0, 0.0],
@@ -66,7 +80,7 @@ class HumemVectorTest(unittest.TestCase):
 
         result = index.search([1.0, 0.0], top_k=2, candidate_indexes=[1, 2])
 
-        self.assertEqual(tuple(match.item_id for match in result), (2, 3))
+        self.assertEqual(tuple(match.target_id for match in result), (2, 3))
 
     def test_scalar_quantized_vector_index_keeps_top_match_on_simple_input(
         self,
@@ -74,7 +88,14 @@ class HumemVectorTest(unittest.TestCase):
         vector = _vector_module()
 
         index = vector.ScalarQuantizedVectorIndex.from_matrix(
-            item_ids=np.array([11, 12, 13]),
+            item_ids=np.array(
+                [
+                    ("direct", "", 11),
+                    ("direct", "", 12),
+                    ("direct", "", 13),
+                ],
+                dtype=object,
+            ),
             matrix=np.array(
                 [
                     [1.0, 0.0, 0.0],
@@ -88,7 +109,7 @@ class HumemVectorTest(unittest.TestCase):
 
         result = index.search([1.0, 0.0, 0.0], top_k=2)
 
-        self.assertEqual(result[0].item_id, 11)
+        self.assertEqual(result[0].target_id, 11)
 
     def test_vector_sqlite_roundtrip_loads_vector_set(self) -> None:
         vector = _vector_module()
@@ -110,7 +131,10 @@ class HumemVectorTest(unittest.TestCase):
 
                 item_ids, matrix = vector.load_vector_matrix(db.sqlite)
 
-        np.testing.assert_array_equal(item_ids, np.array([1, 2], dtype=np.int64))
+        self.assertEqual(
+            item_ids.tolist(),
+            [("direct", "", 1), ("direct", "", 2)],
+        )
         np.testing.assert_allclose(
             matrix,
             np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
@@ -176,10 +200,10 @@ class HumemVectorTest(unittest.TestCase):
                 )
 
                 self.assertEqual(
-                    tuple(row[0] for row in vector_result.rows),
-                    (1, 2),
+                    tuple(row[:3] for row in vector_result.rows),
+                    (("sql_row", "docs", 1), ("sql_row", "docs", 2)),
                 )
-                self.assertAlmostEqual(vector_result.rows[0][1], 1.0, places=6)
+                self.assertAlmostEqual(vector_result.rows[0][3], 1.0, places=6)
 
     def test_cypher_owned_vectors_work_through_cypher_and_vector_query(self) -> None:
         HumemDB = _humemdb_class()
@@ -217,7 +241,10 @@ class HumemVectorTest(unittest.TestCase):
                 )
 
                 graph_result = db.query(
-                    "MATCH (u:User {cohort: 'alpha'}) RETURN u.id, u.name ORDER BY u.id",
+                    (
+                        "MATCH (u:User {cohort: 'alpha'}) "
+                        "RETURN u.id, u.name ORDER BY u.id"
+                    ),
                     route="sqlite",
                     query_type="cypher",
                 )
@@ -238,10 +265,13 @@ class HumemVectorTest(unittest.TestCase):
                 )
 
                 self.assertEqual(
-                    tuple(row[0] for row in vector_result.rows),
-                    (created[0], created[1]),
+                    tuple((row[0], row[1], row[2]) for row in vector_result.rows),
+                    (
+                        ("graph_node", "", created[0]),
+                        ("graph_node", "", created[1]),
+                    ),
                 )
-                self.assertAlmostEqual(vector_result.rows[0][1], 1.0, places=6)
+                self.assertAlmostEqual(vector_result.rows[0][3], 1.0, places=6)
 
 
 if __name__ == "__main__":

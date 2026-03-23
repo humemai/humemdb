@@ -247,6 +247,9 @@ Status: done.
 Simplify the public surface around `db.query(...)`.
 
 - Treat `db.query(...)` as the explicit public text-query surface for SQL or Cypher.
+- Separate the direct vector path from `db.query(...)` now instead of carrying that
+  overlap forward: direct vectors should live behind their own explicit vector API,
+  while `db.query(...)` stays focused on text-query surfaces.
 - Start pulling `route`, `query_type`, and low-level param plumbing out of the public
   mental model even if the implementation still uses them internally.
 - Make the public API direction clearer: `db.query(...)` is the explicit surface and
@@ -275,6 +278,19 @@ Do the internal planning / IR cleanup.
 
 ## Phase 9
 
+Broaden SQL and Cypher grammar coverage.
+
+- Expand `HumemSQL v0` beyond the initial statement subset toward a broader
+  PostgreSQL-like portable grammar where the semantics are clear and testable.
+- Expand `HumemCypher v0` beyond the initial narrow `CREATE` and `MATCH` subset toward a
+  broader Cypher grammar where the relational lowering remains defensible.
+- Keep rejecting unsupported constructs clearly instead of pretending to support full
+  PostgreSQL or full Cypher compatibility before the implementation is actually there.
+- Treat this as the phase where grammar breadth is reconsidered seriously, not as part
+  of the initial public snapshot.
+
+## Phase 10
+
 Add query classification, optional inference, and automatic routing.
 
 - Keep `route` internal even if inference and automatic routing are added.
@@ -294,7 +310,7 @@ Add query classification, optional inference, and automatic routing.
 - Keep routing explainable and overridable internally, even if it is no longer a main
   public knob.
 
-## Phase 10
+## Phase 11
 
 Add larger ingestion strategies.
 
@@ -322,19 +338,6 @@ Add larger ingestion strategies.
 - Choose ingest strategies based on data size, source format, and workload instead of
   assuming one bulk-load path fits everything.
 - Keep this as an ingestion/runtime phase, not a change to the public query surfaces.
-
-## Phase 11
-
-Broaden SQL and Cypher grammar coverage.
-
-- Expand `HumemSQL v0` beyond the initial statement subset toward a broader
-  PostgreSQL-like portable grammar where the semantics are clear and testable.
-- Expand `HumemCypher v0` beyond the initial narrow `CREATE` and `MATCH` subset toward a
-  broader Cypher grammar where the relational lowering remains defensible.
-- Keep rejecting unsupported constructs clearly instead of pretending to support full
-  PostgreSQL or full Cypher compatibility before the implementation is actually there.
-- Treat this as the phase where grammar breadth is reconsidered seriously, not as part
-  of the initial public snapshot.
 
 ## Phase 12
 

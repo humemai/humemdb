@@ -345,7 +345,6 @@ def _insert_nodes(
     db.sqlite.executemany(
         "INSERT INTO graph_nodes (id, label) VALUES (?, ?)",
         node_rows,
-        query_type="cypher",
     )
     db.sqlite.executemany(
         (
@@ -353,7 +352,6 @@ def _insert_nodes(
             "VALUES (?, ?, ?, ?)"
         ),
         property_rows,
-        query_type="cypher",
     )
 
 
@@ -457,7 +455,6 @@ def _flush_edge_batches(
             "VALUES (?, ?, ?, ?)"
         ),
         edge_rows,
-        query_type="cypher",
     )
     db.sqlite.executemany(
         (
@@ -465,7 +462,6 @@ def _flush_edge_batches(
             "VALUES (?, ?, ?, ?)"
         ),
         property_rows,
-        query_type="cypher",
     )
 
 
@@ -567,7 +563,6 @@ def main() -> None:
                     lambda compiled=compiled: db.sqlite.execute(
                         compiled.sql,
                         compiled.params,
-                        query_type="cypher",
                     ),
                     warmup=args.warmup,
                     repetitions=args.repetitions,
@@ -576,7 +571,6 @@ def main() -> None:
                     lambda compiled=compiled: db.duckdb.execute(
                         compiled.sql,
                         compiled.params,
-                        query_type="cypher",
                     ),
                     warmup=args.warmup,
                     repetitions=args.repetitions,
@@ -585,7 +579,6 @@ def main() -> None:
                     lambda workload=workload: db.query(
                         workload.query,
                         route="sqlite",
-                        query_type="cypher",
                         params=workload.params,
                     ),
                     warmup=args.warmup,
@@ -595,7 +588,6 @@ def main() -> None:
                     lambda workload=workload: db.query(
                         workload.query,
                         route="duckdb",
-                        query_type="cypher",
                         params=workload.params,
                     ),
                     warmup=args.warmup,

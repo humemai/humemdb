@@ -59,8 +59,6 @@ def _create_vector_node(
             "CREATE (u:VectorNode {"
             "name: $name, cluster: $cluster, embedding: $embedding})"
         ),
-        route="sqlite",
-        query_type="cypher",
         params={
             "name": name,
             "cluster": cluster,
@@ -106,16 +104,6 @@ def main() -> None:
                 metric="cosine",
                 filters={"cluster": "early", "tier": "primary"},
             )
-            raw_query_result = db.query(
-                "",
-                route="sqlite",
-                query_type="vector",
-                params={
-                    "query": _embedding(1.0, 0.0, 0.0),
-                    "top_k": 5,
-                    "metric": "cosine",
-                },
-            )
             late_cluster_result = db.search_vectors(
                 _embedding(0.0, 0.0, 1.0),
                 top_k=3,
@@ -133,35 +121,31 @@ def main() -> None:
                 (
                     "CREATE TABLE vector_scope ("
                     "id INTEGER PRIMARY KEY, cluster TEXT NOT NULL, embedding BLOB)"
-                ),
-                route="sqlite",
+                )
             )
             db.executemany(
-                "INSERT INTO vector_scope (cluster, embedding) VALUES (?, ?)",
+                (
+                    "INSERT INTO vector_scope (cluster, embedding) "
+                    "VALUES ($cluster, $embedding)"
+                ),
                 [
-                    ("early", _embedding(1.0, 0.0, 0.0)),
-                    ("early", _embedding(1.0, 0.0, 0.0)),
-                    ("late", _embedding(0.0, 0.0, 1.0)),
+                    {"cluster": "early", "embedding": _embedding(1.0, 0.0, 0.0)},
+                    {"cluster": "early", "embedding": _embedding(1.0, 0.0, 0.0)},
+                    {"cluster": "late", "embedding": _embedding(0.0, 0.0, 1.0)},
                 ],
-                route="sqlite",
             )
             sql_row_ids = tuple(
                 row[0]
-                for row in db.query(
-                    "SELECT id FROM vector_scope ORDER BY id",
-                    route="sqlite",
-                ).rows
+                for row in db.query("SELECT id FROM vector_scope ORDER BY id").rows
             )
-            sql_scoped_result = db.query(
-                "SELECT id FROM vector_scope WHERE cluster = ? ORDER BY id",
-                route="sqlite",
-                query_type="vector",
+            sql_candidate_filtered_result = db.query(
+                (
+                    "SELECT id FROM vector_scope WHERE cluster = $cluster "
+                    "ORDER BY embedding <=> $query LIMIT 5"
+                ),
                 params={
                     "query": _embedding(1.0, 0.0, 0.0),
-                    "top_k": 5,
-                    "metric": "cosine",
-                    "scope_query_type": "sql",
-                    "scope_params": ("early",),
+                    "cluster": "early",
                 },
             )
 
@@ -179,15 +163,14 @@ def main() -> None:
                     ("late-a", "late", _embedding(0.0, 0.0, 1.0)),
                 )
             )
-            cypher_scoped_result = db.query(
-                "MATCH (u:VectorNode {cluster: 'early'}) RETURN u.id ORDER BY u.id",
-                route="sqlite",
-                query_type="vector",
+            cypher_candidate_filtered_result = db.query(
+                (
+                    "MATCH (u:VectorNode {cluster: 'early'}) "
+                    "SEARCH u IN (VECTOR INDEX embedding FOR $query LIMIT 5) "
+                    "RETURN u.id ORDER BY u.id"
+                ),
                 params={
                     "query": _embedding(1.0, 0.0, 0.0),
-                    "top_k": 5,
-                    "metric": "cosine",
-                    "scope_query_type": "cypher",
                 },
             )
 
@@ -196,14 +179,11 @@ def main() -> None:
         assert all(row[2] <= 8_000 for row in top_matches.rows)
         assert all(abs(row[3] - 1.0) < 1e-6 for row in top_matches.rows)
         assert tuple(row[2] for row in filtered_matches.rows) == (1, 2)
-        assert all(row[0] == "direct" for row in raw_query_result.rows)
-        assert all(row[2] <= 8_000 for row in raw_query_result.rows)
-        assert all(abs(row[3] - 1.0) < 1e-6 for row in raw_query_result.rows)
-        assert tuple(row[:3] for row in sql_scoped_result.rows) == (
+        assert tuple(row[:3] for row in sql_candidate_filtered_result.rows) == (
             ("sql_row", "vector_scope", sql_row_ids[0]),
             ("sql_row", "vector_scope", sql_row_ids[1]),
         )
-        assert tuple(row[:3] for row in cypher_scoped_result.rows) == (
+        assert tuple(row[:3] for row in cypher_candidate_filtered_result.rows) == (
             ("graph_node", "", graph_ids[0]),
             ("graph_node", "", graph_ids[1]),
         )
@@ -215,9 +195,14 @@ def main() -> None:
 
         print("Top matches:", top_matches.rows)
         print("Filtered matches:", filtered_matches.rows)
-        print("Raw vector query result:", raw_query_result.rows)
-        print("SQL-scoped result:", sql_scoped_result.rows)
-        print("Cypher-scoped result:", cypher_scoped_result.rows)
+        print(
+            "SQL candidate-filtered result:",
+            sql_candidate_filtered_result.rows,
+        )
+        print(
+            "Cypher candidate-filtered result:",
+            cypher_candidate_filtered_result.rows,
+        )
         print("Late-cluster result:", late_cluster_result.rows)
         print("Refreshed result:", refreshed_result.rows)
 

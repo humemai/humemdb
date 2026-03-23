@@ -8,8 +8,8 @@ Purpose:
   end-to-end paths
 - measure ingest cost for direct vectors, SQL-owned vectors, and Cypher-owned vectors
 - measure frontend overhead for SQL translation and Cypher parse/bind+compile
-- measure scope-query execution, candidate-id mapping, pure NumPy vector search, and
-  end-to-end scoped vector query latency
+- measure candidate-query execution, candidate-id mapping, pure NumPy vector search, and
+  end-to-end candidate-filtered vector query latency
 
 Representative command used for the current intermediate result:
 
@@ -26,7 +26,7 @@ python scripts/benchmarks/vector_query_steps.py \
 Current status:
 
 - these are intermediate measurements, not a final routing policy
-- the scoped path is still expected to improve with later optimization work
+- the candidate-filtered path is still expected to improve with later optimization work
 - Cypher ingest is currently transactional but still statement-oriented rather than a
   true batched bulk-ingest path
 
@@ -38,7 +38,7 @@ Scenario:
 | Dimensions | 768 |
 | Queries | 50 |
 | `top_k` | 10 |
-| Scoped candidate count | 50,000 |
+| Candidate-filtered count | 50,000 |
 
 One-time stage timings:
 
@@ -59,13 +59,13 @@ Per-query timing means:
 | Direct vector search only | 7.76 ms |
 | SQL cached translation | 0.0007 ms |
 | SQL uncached translation | 0.0982 ms |
-| SQL scope query only | 109.10 ms |
+| SQL candidate query only | 109.10 ms |
 | SQL candidate mapping only | 5.11 ms |
 | SQL vector search only | 19.20 ms |
 | SQL vector query end-to-end | 150.56 ms |
 | Cypher parse only | 0.0149 ms |
 | Cypher bind+compile | 0.0077 ms |
-| Cypher scope query only | 28.55 ms |
+| Cypher candidate query only | 28.55 ms |
 | Cypher candidate mapping only | 5.12 ms |
 | Cypher vector search only | 349.70 ms |
 | Cypher vector query end-to-end | 432.36 ms |
@@ -75,10 +75,10 @@ Interim interpretation:
 | Question | Current answer |
 | -------- | -------------- |
 | Is frontend translation/planning the bottleneck? | No. SQL uncached translation stayed around `0.10 ms`, and Cypher parse plus bind+compile stayed around `0.02 ms` combined. |
-| What dominates scoped vector latency today? | For SQL-scoped search, the scope query dominates first. For Cypher-scoped search in this run, the vector search over the large candidate subset dominated heavily. |
-| Did scoping help in this run? | No. The scope kept 50,000 of 100,000 vectors, so the filter was still too broad to pay for the extra frontend and candidate-mapping work. |
+| What dominates candidate-filtered vector latency today? | For SQL candidate-filtered search, the candidate query dominates first. For Cypher candidate-filtered search in this run, the vector search over the large candidate subset dominated heavily. |
+| Did candidate filtering help in this run? | No. The candidate filter kept 50,000 of 100,000 vectors, so the filter was still too broad to pay for the extra frontend and candidate-mapping work. |
 | Why is Cypher-owned ingest much slower? | The current Cypher write path is transactional but still one `CREATE` per node, not a true batched bulk-ingest surface. |
-| What should be optimized next? | Scoped-path execution, candidate mapping, selectivity-sensitive vector search, and later bulk graph ingest rather than parser/compiler micro-optimizations. |
+| What should be optimized next? | Candidate-filtered path execution, candidate mapping, selectivity-sensitive vector search, and later bulk graph ingest rather than parser/compiler micro-optimizations. |
 
 What this benchmark is useful for:
 

@@ -6,13 +6,13 @@ current lifecycle semantics for queries and transactions.
 
 The current public surface is intentionally conservative:
 
-- `query_type="sql"` maps to `HumemSQL v0`
-- `query_type="cypher"` maps to `HumemCypher v0`
-- `query_type="vector"` maps to the exact `HumemVector v0` search path on SQLite
+- `db.query(...)` infers `HumemSQL v0` versus `HumemCypher v0` for the currently
+- `db.query(...)` also infers language-level vector search from PostgreSQL-like SQL
+    vector ordering or Neo4j-like Cypher `SEARCH ... VECTOR INDEX ...` text
 - SQLite is the canonical public write target, including vectors
 - DuckDB is read-only through the public API
 - PostgreSQL-like SQL is translated into backend SQL before execution
-- transaction control is explicit and route-scoped
+- transaction control is explicit and route-bound
 
 As the project grows, this module is where routing, query validation, and the portable
 frontend surfaces will expand.
@@ -20,14 +20,28 @@ frontend surfaces will expand.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
+import re
 from numbers import Integral
 from pathlib import Path
-from typing import Any, Mapping, Protocol, Sequence, TypeAlias, TypedDict, cast
+from typing import Any, Mapping, Protocol, Sequence, TypeAlias, cast
 
-from sqlglot import parse_one
-from sqlglot import errors as sqlglot_errors
-
+from ._vector_runtime import (
+    DirectVectorSearchPlan as _DirectVectorSearchPlan,
+    PendingTargetNamespacedVectorRow as _PendingTargetNamespacedVectorRow,
+    ResolvedVectorCandidates as _ResolvedVectorCandidates,
+    CandidateVectorQueryResult as _CandidateVectorQueryResult,
+    CandidateVectorQueryPlan as _CandidateVectorQueryPlan,
+    TargetNamespacedVectorRow as _TargetNamespacedVectorRow,
+    VECTOR_RESULT_COLUMNS as _VECTOR_RESULT_COLUMNS,
+    candidate_vector_result_from_query_result,
+    is_vector_query_text as _is_vector_query_text,
+    plan_candidate_vector_query as _plan_candidate_vector_query,
+    plan_direct_vector_search as _plan_direct_vector_search,
+    plan_sql_vector_write as _vectorrt_plan_sql_vector_write,
+    plan_sql_vector_write_batch as _vectorrt_plan_sql_vector_write_batch,
+)
 from .cypher import ensure_graph_schema, execute_cypher
 from .engines import DuckDBEngine, SQLiteEngine
 from .sql import translate_sql
@@ -35,7 +49,6 @@ from .types import BatchParameters, QueryParameters, QueryResult, QueryType, Rou
 from .vector import (
     ExactVectorIndex,
     VectorMetric,
-    encode_vector_blob,
     ensure_vector_schema,
     insert_vectors as insert_vector_rows,
     load_filtered_vector_target_keys,
@@ -55,7 +68,8 @@ _READ_ONLY_KEYWORDS = {
 
 logger = logging.getLogger(__name__)
 
-_VECTOR_RESULT_COLUMNS = ("target", "scope", "target_id", "score")
+_CYPHER_MATCH_PREFIX = re.compile(r"^MATCH\b")
+_CYPHER_CREATE_PATTERN = re.compile(r"^CREATE\s*\(")
 
 DirectVectorMetadata: TypeAlias = Mapping[str, str | int | float | bool | None]
 DirectVectorRow: TypeAlias = (
@@ -65,46 +79,26 @@ DirectVectorRow: TypeAlias = (
 )
 
 
-class _SQLVectorInsertAnalysis(TypedDict):
-    """Typed analysis payload for narrow vector-bearing SQL INSERT statements.
+@dataclass(frozen=True, slots=True)
+class _QueryExecutionPlan:
+    """Thin internal plan for one public `db.query(...)` call."""
 
-    Attributes:
-        target_name: SQL table name that owns the inserted vectors.
-        id_index: Positional parameter index for the row id when the INSERT provides
-            one explicitly, or `None` when SQLite will auto-assign the id.
-        vector_index: Positional parameter index for the embedding value.
-    """
-
-    target_name: str
-    id_index: int | None
-    vector_index: int
+    text: str
+    route: Route
+    query_type: QueryType
+    params: QueryParameters
+    translated_text: str | None = None
 
 
-class _SQLVectorUpdateAnalysis(TypedDict):
-    """Typed analysis payload for narrow vector-bearing SQL UPDATE statements.
+@dataclass(frozen=True, slots=True)
+class _BatchExecutionPlan:
+    """Thin internal plan for one public `executemany(...)` call."""
 
-    Attributes:
-        target_name: SQL table name that owns the updated vectors.
-        vector_index: Positional parameter index for the embedding assignment.
-        id_index: Positional parameter index for the row id predicate when the UPDATE
-            binds it as a parameter.
-        id_literal: Literal row id extracted from the WHERE clause when the UPDATE
-            uses an inline constant instead of a placeholder.
-    """
-
-    target_name: str
-    vector_index: int
-    id_index: int | None
-    id_literal: int | None
-
-
-_TargetScopedVectorRow: TypeAlias = tuple[str, str, int, Sequence[float]]
-_PendingTargetScopedVectorRow: TypeAlias = tuple[
-    str,
-    str,
-    int | None,
-    Sequence[float],
-]
+    text: str
+    route: Route
+    query_type: QueryType
+    params_seq: BatchParameters
+    translated_text: str
 
 
 class _TransactionalEngine(Protocol):
@@ -184,6 +178,10 @@ class HumemDB:
         self._graph_schema_ready = False
         self._vector_schema_ready = False
         self._vector_matrix_cache: tuple[Any, Any] | None = None
+        self._vector_item_index_cache: dict[tuple[str, str, int], int] | None = None
+        self._vector_namespace_index_cache: (
+            dict[tuple[str, str], tuple[int, ...]] | None
+        ) = None
         self._vector_index_cache: dict[VectorMetric, ExactVectorIndex] = {}
 
         sqlite_path_obj = Path(self.sqlite_path)
@@ -204,19 +202,23 @@ class HumemDB:
         self,
         text: str,
         *,
-        route: Route,
-        query_type: QueryType = "sql",
+        route: Route = "sqlite",
         params: QueryParameters = None,
     ) -> QueryResult:
         """Execute a query against the explicitly selected engine.
 
         Args:
-            text: Query text to execute. For `query_type="vector"`, this value is
-                currently ignored and the request is defined by `params`.
-            route: Engine route. This must be `sqlite` or `duckdb`.
-            query_type: Logical query type. `sql` maps to `HumemSQL v0` and `cypher`
-                maps to `HumemCypher v0`.
-            params: Optional DB-API parameters.
+            text: Query text to execute.
+            route: Engine route. Defaults to `sqlite`. Use `duckdb` explicitly for
+                analytical reads.
+            params: Optional named parameters. Public SQL, Cypher, and language-level
+                vector queries use mapping-style params such as
+                `{ "name": "Alice" }`.
+
+                Vector intent is inferred from the query text itself. HumemSQL uses
+                PostgreSQL-like `ORDER BY embedding <->|<=>|<#> $query LIMIT ...`
+                forms. HumemCypher uses Neo4j-like
+                `SEARCH ... VECTOR INDEX embedding FOR $query LIMIT ...` forms.
 
         Returns:
             A normalized `QueryResult`.
@@ -226,79 +228,12 @@ class HumemDB:
             ValueError: If the route is unsupported or a public write is sent to DuckDB.
         """
 
-        if query_type == "vector":
-            logger.debug("Routing vector query to exact SQLite/NumPy path")
-            return self._execute_vector_query(text, route=route, params=params)
-
-        if query_type == "cypher":
-            self._ensure_graph_schema()
-            logger.debug("Routing Cypher query to graph path on route=%s", route)
-            return execute_cypher(
-                text,
-                route=route,
-                params=params,
-                sqlite=self.sqlite,
-                duckdb=self.duckdb,
-            )
-
-        if query_type != "sql":
-            logger.debug("Rejected unsupported query_type=%s", query_type)
-            raise NotImplementedError(
-                "HumemDB currently supports query_type='sql' for HumemSQL v0, "
-                "query_type='cypher' for HumemCypher v0, and "
-                "query_type='vector' for exact HumemVector v0 search; "
-                f"got {query_type!r}."
-            )
-
-        translated_text = translate_sql(text, target=route)
-
-        if route == "sqlite":
-            logger.debug("Routing SQL query to SQLite")
-            normalized_params, vector_rows, vector_mode = _prepare_sql_vector_write(
-                text,
-                params,
-            )
-            result = self.sqlite.execute(
-                translated_text,
-                normalized_params,
-                query_type=query_type,
-            )
-            if vector_rows:
-                self._ensure_vector_schema()
-                if vector_mode == "insert":
-                    resolved_vector_rows = _resolved_sql_vector_rows_after_insert(
-                        self.sqlite,
-                        vector_rows,
-                    )
-                else:
-                    resolved_vector_rows = cast(
-                        list[_TargetScopedVectorRow],
-                        vector_rows,
-                    )
-                _write_target_scoped_vector_rows(
-                    self.sqlite,
-                    resolved_vector_rows,
-                    mode=vector_mode or "insert",
-                )
-                self._invalidate_vector_cache()
-            self._invalidate_vector_cache_for_sql(text, translated_text)
-            return result
-
-        if route == "duckdb":
-            if not _is_read_only_query(text):
-                logger.debug("Rejected direct write routed to DuckDB")
-                raise ValueError(
-                    "HumemDB does not allow direct writes to DuckDB; "
-                    "SQLite is the source of truth."
-                )
-            logger.debug("Routing read-only SQL query to DuckDB")
-            return self.duckdb.execute(
-                translated_text,
-                params,
-                query_type=query_type,
-            )
-
-        raise ValueError(f"Unsupported route: {route!r}")
+        plan = _plan_query(
+            text,
+            route=route,
+            params=params,
+        )
+        return self._execute_query_plan(plan)
 
     def insert_vectors(
         self,
@@ -329,13 +264,18 @@ class HumemDB:
             self.sqlite,
             rows,
         )
-        insert_vector_rows(self.sqlite, normalized_rows, target="direct", scope="")
+        insert_vector_rows(
+            self.sqlite,
+            normalized_rows,
+            target="direct",
+            namespace="",
+        )
         if metadata_rows:
             upsert_vector_metadata(
                 self.sqlite,
                 metadata_rows,
                 target="direct",
-                scope="",
+                namespace="",
             )
         self._invalidate_vector_cache()
         return assigned_ids
@@ -357,22 +297,27 @@ class HumemDB:
             filters: Optional equality metadata filters for direct-vector rows.
 
         Returns:
-            A normalized `QueryResult` with `(target, scope, target_id, score)` rows.
+            A normalized `QueryResult` with
+            `(target, namespace, target_id, score)` rows.
+
+        Notes:
+            `search_vectors(...)` is the public direct-vector search surface. Vector
+            search over SQL rows or graph nodes now lives on language-level
+            SQL and Cypher query syntax through `query(...)`.
         """
 
-        params: dict[str, Any] = {
-            "query": query,
-            "top_k": top_k,
-            "metric": metric,
-        }
-        if filters is not None:
-            params["filters"] = dict(filters)
-
-        return self.query(
-            "",
-            route="sqlite",
-            query_type="vector",
-            params=params,
+        direct_plan = _plan_direct_vector_search(
+            query,
+            top_k=top_k,
+            metric=metric,
+            filters=filters,
+        )
+        resolved_candidates = self._resolve_direct_vector_search(direct_plan)
+        return self._execute_exact_vector_search(
+            query=direct_plan.query,
+            top_k=direct_plan.top_k,
+            metric=direct_plan.metric,
+            resolved_candidates=resolved_candidates,
         )
 
     def set_vector_metadata(
@@ -393,7 +338,12 @@ class HumemDB:
             return 0
 
         self._ensure_vector_schema()
-        upsert_vector_metadata(self.sqlite, rows, target="direct", scope="")
+        upsert_vector_metadata(
+            self.sqlite,
+            rows,
+            target="direct",
+            namespace="",
+        )
         return sum(len(metadata) for _, metadata in rows)
 
     def preload_vectors(self) -> bool:
@@ -441,73 +391,193 @@ class HumemDB:
 
     def _execute_vector_query(
         self,
-        _text: str,
-        *,
-        route: Route,
-        params: QueryParameters,
+        plan: _QueryExecutionPlan,
     ) -> QueryResult:
-        """Execute the exact `HumemVector v0` search path.
+        """Execute one inferred language-level vector query."""
 
-        The vector frontend uses a mapping-style `params` object with the following
-        keys:
-
-        - `query`: required query embedding
-        - `top_k`: optional positive integer, default `10`
-        - `metric`: optional `cosine`, `dot`, or `l2`, default `cosine`
-        - `filters`: optional equality metadata filters for direct vector search
-        - `scope_query_type`: optional `sql` or `cypher` candidate scope query type
-        - `scope_route`: optional route for the candidate scope query, default `sqlite`
-        - `scope_params`: optional parameters for the candidate scope query
-        """
-
-        if route != "sqlite":
+        if plan.route != "sqlite":
             raise ValueError(
                 "HumemVector v0 currently runs only on route='sqlite'; "
                 "SQLite is the canonical vector store and exact NumPy search path."
             )
 
-        if not isinstance(params, Mapping):
-            raise ValueError(
-                "HumemVector v0 expects mapping-style params containing at least "
-                "a 'query' vector."
-            )
-
-        if "query" not in params:
-            raise ValueError("HumemVector v0 requires params['query'].")
-
-        top_k = int(params.get("top_k", 10))
-        metric = params.get("metric", "cosine")
-        if metric not in {"cosine", "dot", "l2"}:
-            raise ValueError(
-                "HumemVector v0 metric must be one of 'cosine', 'dot', or 'l2'."
-            )
-
-        filters = params.get("filters")
-        if filters is not None and not isinstance(filters, Mapping):
-            raise ValueError(
-                "HumemVector v0 expects params['filters'] to be a mapping "
-                "when provided."
-            )
-
-        scope_query_type = params.get("scope_query_type")
-        scope_route = params.get("scope_route", "sqlite")
-        scope_params = params.get("scope_params")
-
-        if filters is not None and scope_query_type is not None:
-            raise ValueError(
-                "HumemVector v0 currently supports metadata filters only for the "
-                "direct vector path, not combined SQL or Cypher scopes."
-            )
-
-        index = self._vector_index_for(metric=metric)
-        candidate_indexes = self._candidate_indexes_for_vector_query(
-            scope_text=_text,
-            scope_query_type=scope_query_type,
-            scope_route=scope_route,
-            scope_params=scope_params,
-            filters=filters,
+        vector_plan = _plan_candidate_vector_query(plan.text, plan.params)
+        resolved_candidates = self._resolve_candidate_vector_query(
+            vector_plan,
         )
-        if candidate_indexes is not None and len(candidate_indexes) == 0:
+        return self._execute_exact_vector_search(
+            vector_plan.query,
+            top_k=vector_plan.top_k,
+            metric=vector_plan.metric,
+            resolved_candidates=resolved_candidates,
+        )
+
+    def _execute_query_plan(self, plan: _QueryExecutionPlan) -> QueryResult:
+        """Dispatch one normalized query plan onto the correct execution path."""
+
+        if plan.query_type == "vector":
+            logger.debug("Routing vector query to exact SQLite/NumPy path")
+            return self._execute_vector_query(plan)
+
+        if plan.query_type == "cypher":
+            return self._execute_cypher_query_plan(plan)
+
+        if plan.query_type == "sql":
+            return self._execute_sql_query_plan(plan)
+
+        logger.debug("Rejected unsupported query_type=%s", plan.query_type)
+        raise NotImplementedError(
+            "HumemDB currently supports query_type='sql' for HumemSQL v0, "
+            "query_type='cypher' for HumemCypher v0, and "
+            "query_type='vector' for exact HumemVector v0 search; "
+            f"got {plan.query_type!r}."
+        )
+
+    def _execute_cypher_query_plan(self, plan: _QueryExecutionPlan) -> QueryResult:
+        """Execute one normalized Cypher query plan."""
+
+        self._ensure_graph_schema()
+        logger.debug("Routing Cypher query to graph path on route=%s", plan.route)
+        return execute_cypher(
+            plan.text,
+            route=plan.route,
+            params=plan.params,
+            sqlite=self.sqlite,
+            duckdb=self.duckdb,
+        )
+
+    def _execute_sql_query_plan(self, plan: _QueryExecutionPlan) -> QueryResult:
+        """Execute one normalized SQL query plan."""
+
+        translated_text = plan.translated_text
+        if translated_text is None:
+            raise ValueError("HumemDB internal SQL plans require translated SQL text.")
+
+        if plan.route == "sqlite":
+            logger.debug("Routing SQL query to SQLite")
+            write_plan = _vectorrt_plan_sql_vector_write(plan.text, plan.params)
+            result = self.sqlite.execute(
+                translated_text,
+                write_plan.normalized_params,
+                query_type=plan.query_type,
+            )
+            if write_plan.vector_rows:
+                self._ensure_vector_schema()
+                if write_plan.vector_mode == "insert":
+                    resolved_vector_rows = _resolved_sql_vector_rows_after_insert(
+                        self.sqlite,
+                        write_plan.vector_rows,
+                    )
+                else:
+                    resolved_vector_rows = cast(
+                        list[_TargetNamespacedVectorRow],
+                        write_plan.vector_rows,
+                    )
+                _write_target_namespaced_vector_rows(
+                    self.sqlite,
+                    resolved_vector_rows,
+                    mode=write_plan.vector_mode or "insert",
+                )
+                self._invalidate_vector_cache()
+            self._invalidate_vector_cache_for_sql(plan.text, translated_text)
+            return result
+
+        if plan.route == "duckdb":
+            if not _is_read_only_query(plan.text):
+                logger.debug("Rejected direct write routed to DuckDB")
+                raise ValueError(
+                    "HumemDB does not allow direct writes to DuckDB; "
+                    "SQLite is the source of truth."
+                )
+            logger.debug("Routing read-only SQL query to DuckDB")
+            return self.duckdb.execute(
+                translated_text,
+                plan.params,
+                query_type=plan.query_type,
+            )
+
+        raise ValueError(f"Unsupported route: {plan.route!r}")
+
+    def _execute_batch_query_plan(self, plan: _BatchExecutionPlan) -> QueryResult:
+        """Execute one normalized batched SQL query plan."""
+
+        if plan.route == "sqlite":
+            logger.debug("Routing batched SQL query to SQLite")
+            batch_plan = _vectorrt_plan_sql_vector_write_batch(
+                plan.text,
+                plan.params_seq,
+            )
+            if batch_plan.requires_rowwise_execution:
+                total_rowcount = 0
+                resolved_vector_rows: list[_TargetNamespacedVectorRow] = []
+                for normalized_params, pending_row in zip(
+                    batch_plan.normalized_params_seq,
+                    batch_plan.vector_rows,
+                    strict=True,
+                ):
+                    result = self.sqlite.execute(
+                        plan.translated_text,
+                        normalized_params,
+                        query_type=plan.query_type,
+                    )
+                    total_rowcount += result.rowcount
+                    resolved_vector_rows.extend(
+                        _resolved_sql_vector_rows_after_insert(
+                            self.sqlite,
+                            [pending_row],
+                        )
+                    )
+                self._ensure_vector_schema()
+                _write_target_namespaced_vector_rows(
+                    self.sqlite,
+                    resolved_vector_rows,
+                    mode="insert",
+                )
+                self._invalidate_vector_cache()
+                self._invalidate_vector_cache_for_sql(plan.text, plan.translated_text)
+                return QueryResult(
+                    rows=(),
+                    columns=(),
+                    route="sqlite",
+                    query_type=plan.query_type,
+                    rowcount=total_rowcount,
+                )
+            result = self.sqlite.executemany(
+                plan.translated_text,
+                batch_plan.normalized_params_seq,
+                query_type=plan.query_type,
+            )
+            if batch_plan.vector_rows:
+                self._ensure_vector_schema()
+                _write_target_namespaced_vector_rows(
+                    self.sqlite,
+                    cast(list[_TargetNamespacedVectorRow], batch_plan.vector_rows),
+                    mode="insert",
+                )
+                self._invalidate_vector_cache()
+            self._invalidate_vector_cache_for_sql(plan.text, plan.translated_text)
+            return result
+
+        if plan.route == "duckdb":
+            logger.debug("Rejected batched write routed to DuckDB")
+            raise ValueError(
+                "HumemDB does not allow direct batch writes to DuckDB; "
+                "SQLite is the source of truth."
+            )
+
+        raise ValueError(f"Unsupported route: {plan.route!r}")
+
+    def _execute_exact_vector_search(
+        self,
+        query: Sequence[float],
+        *,
+        top_k: int,
+        metric: VectorMetric,
+        resolved_candidates: _ResolvedVectorCandidates,
+    ) -> QueryResult:
+        """Execute one exact vector search against resolved candidate indexes."""
+
+        if len(resolved_candidates.candidate_indexes) == 0:
             return QueryResult(
                 rows=(),
                 columns=_VECTOR_RESULT_COLUMNS,
@@ -516,13 +586,22 @@ class HumemDB:
                 rowcount=0,
             )
 
+        if resolved_candidates.uses_full_namespace:
+            logger.debug(
+                "Using full namespace candidate set target=%s namespace=%s size=%s",
+                resolved_candidates.target,
+                resolved_candidates.namespace,
+                resolved_candidates.namespace_size,
+            )
+
+        index = self._vector_index_for(metric=metric)
         matches = index.search(
-            params["query"],
+            query,
             top_k=top_k,
-            candidate_indexes=candidate_indexes,
+            candidate_indexes=resolved_candidates.candidate_indexes,
         )
         rows = tuple(
-            (match.target, match.scope, match.target_id, match.score)
+            (match.target, match.namespace, match.target_id, match.score)
             for match in matches
         )
         return QueryResult(
@@ -558,158 +637,185 @@ class HumemDB:
         self._ensure_vector_schema()
         cached = load_vector_matrix(self.sqlite)
         self._vector_matrix_cache = cached
+        self._prime_vector_lookup_caches(cached[0])
         return cached
 
-    def _candidate_indexes_for_vector_query(
+    def _prime_vector_lookup_caches(self, item_ids: Any) -> None:
+        """Build cached logical-id lookup tables for the loaded vector set."""
+
+        item_index_cache: dict[tuple[str, str, int], int] = {}
+        namespace_index_cache: dict[tuple[str, str], list[int]] = {}
+        for index, item_id in enumerate(item_ids.tolist()):
+            key = (str(item_id[0]), str(item_id[1]), int(item_id[2]))
+            item_index_cache[key] = index
+            namespace_index_cache.setdefault((key[0], key[1]), []).append(index)
+
+        self._vector_item_index_cache = item_index_cache
+        self._vector_namespace_index_cache = {
+            namespace: tuple(indexes)
+            for namespace, indexes in namespace_index_cache.items()
+        }
+
+    def _resolve_candidate_vector_query(
+        self,
+        plan: _CandidateVectorQueryPlan,
+    ) -> _ResolvedVectorCandidates:
+        """Resolve one candidate-query vector search into candidate metadata."""
+
+        candidate_result = self._execute_candidate_vector_query(plan)
+
+        return self._resolved_vector_candidates(
+            target=candidate_result.target,
+            namespace=candidate_result.namespace,
+            candidate_keys=candidate_result.candidate_keys,
+        )
+
+    def _execute_candidate_vector_query(
+        self,
+        plan: _CandidateVectorQueryPlan,
+    ) -> _CandidateVectorQueryResult:
+        """Execute one candidate query and normalize it for vector resolution."""
+
+        candidate_query = plan.candidate_query
+
+        if candidate_query.query_type == "sql" and not _is_read_only_query(
+            candidate_query.text
+        ):
+            raise ValueError(
+                "HumemVector v0 SQL vector candidate query must be a read-only "
+                "SQL query."
+            )
+        normalized_candidate_query = candidate_query.text.lstrip()
+        if candidate_query.query_type == "cypher" and not _CYPHER_MATCH_PREFIX.match(
+            normalized_candidate_query
+        ):
+            raise ValueError(
+                "HumemVector v0 Cypher vector candidate query must be a MATCH query."
+            )
+
+        candidate_result = self._execute_query_plan(
+            _plan_query(
+                candidate_query.text,
+                route=candidate_query.route,
+                query_type=candidate_query.query_type,
+                params=candidate_query.params,
+            )
+        )
+        return candidate_vector_result_from_query_result(
+            candidate_result,
+            candidate_query_text=candidate_query.text,
+            candidate_query_type=candidate_query.query_type,
+        )
+
+    def _resolve_direct_vector_search(
+        self,
+        plan: _DirectVectorSearchPlan,
+    ) -> _ResolvedVectorCandidates:
+        """Resolve one direct-vector search into explicit candidate metadata."""
+
+        if plan.filters is None:
+            namespace_indexes = self._candidate_indexes_for_target(
+                target="direct",
+                namespace="",
+            )
+            return _ResolvedVectorCandidates(
+                target="direct",
+                namespace="",
+                candidate_keys=(),
+                candidate_indexes=namespace_indexes,
+                candidate_count=len(namespace_indexes),
+                namespace_size=len(namespace_indexes),
+                uses_full_namespace=True,
+            )
+
+        self._ensure_vector_schema()
+        candidate_keys = tuple(
+            load_filtered_vector_target_keys(
+                self.sqlite,
+                plan.filters,
+                target="direct",
+                namespace="",
+            )
+        )
+        return self._resolved_vector_candidates(
+            target="direct",
+            namespace="",
+            candidate_keys=candidate_keys,
+        )
+
+    def _resolved_vector_candidates(
         self,
         *,
-        scope_text: str,
-        scope_query_type: Any,
-        scope_route: Any,
-        scope_params: QueryParameters,
-        filters: Mapping[str, str | int | float | bool | None] | None,
-    ) -> Any:
-        """Resolve optional SQL/Cypher/vector-metadata scope into matrix indexes."""
-
-        candidate_keys: set[tuple[str, str, int]] | None = None
-
-        if filters:
-            self._ensure_vector_schema()
-            candidate_keys = set(
-                load_filtered_vector_target_keys(
-                    self.sqlite,
-                    filters,
-                    target="direct",
-                    scope="",
-                )
-            )
-
-        if scope_query_type is not None:
-            if scope_query_type not in {"sql", "cypher"}:
-                raise ValueError(
-                    "HumemVector v0 scope_query_type must be 'sql' or 'cypher'."
-                )
-            if not scope_text.strip():
-                raise ValueError(
-                    "HumemVector v0 scoped vector queries require scope SQL "
-                    "or Cypher text."
-                )
-            if scope_route not in {"sqlite", "duckdb"}:
-                raise ValueError(
-                    "HumemVector v0 scope_route must be 'sqlite' or 'duckdb'."
-                )
-            if scope_query_type == "sql" and not _is_read_only_query(scope_text):
-                raise ValueError(
-                    "HumemVector v0 SQL vector scope must be a read-only SQL query."
-                )
-            normalized_scope_text = scope_text.lstrip().casefold()
-            if scope_query_type == "cypher" and not normalized_scope_text.startswith(
-                "match "
-            ):
-                raise ValueError(
-                    "HumemVector v0 Cypher vector scope must be a MATCH query."
-                )
-
-            scoped_result = self.query(
-                scope_text,
-                route=scope_route,
-                query_type=scope_query_type,
-                params=scope_params,
-            )
-            target, scope = _target_scope_for_vector_query(
-                scope_text,
-                scope_query_type=scope_query_type,
-            )
-            scoped_keys = set(
-                self._vector_candidate_keys_from_result(
-                    scoped_result,
-                    target=target,
-                    scope=scope,
-                )
-            )
-            if candidate_keys is None:
-                candidate_keys = scoped_keys
-            else:
-                candidate_keys &= scoped_keys
-        elif candidate_keys is None:
-            return self._candidate_indexes_for_target(target="direct", scope="")
-
-        if candidate_keys is None:
-            return None
+        target: str,
+        namespace: str,
+        candidate_keys: tuple[tuple[str, str, int], ...],
+    ) -> _ResolvedVectorCandidates:
+        """Build one resolved vector-candidate object from logical keys."""
 
         if not candidate_keys:
-            return ()
+            namespace_size = len(
+                self._candidate_indexes_for_target(target=target, namespace=namespace)
+            )
+            return _ResolvedVectorCandidates(
+                target=target,
+                namespace=namespace,
+                candidate_keys=(),
+                candidate_indexes=(),
+                candidate_count=0,
+                namespace_size=namespace_size,
+                uses_full_namespace=False,
+            )
 
-        return self._candidate_indexes_for_target_keys(candidate_keys)
+        namespace_indexes = self._candidate_indexes_for_target(
+            target=target,
+            namespace=namespace,
+        )
+        candidate_indexes = self._candidate_indexes_for_target_keys(candidate_keys)
+        candidate_count = len(candidate_indexes)
+        namespace_size = len(namespace_indexes)
+        uses_full_namespace = candidate_count == namespace_size
+
+        return _ResolvedVectorCandidates(
+            target=target,
+            namespace=namespace,
+            candidate_keys=candidate_keys,
+            candidate_indexes=(
+                namespace_indexes if uses_full_namespace else candidate_indexes
+            ),
+            candidate_count=candidate_count,
+            namespace_size=namespace_size,
+            uses_full_namespace=uses_full_namespace,
+        )
 
     def _candidate_indexes_for_target(
         self,
         *,
         target: str,
-        scope: str,
+        namespace: str,
     ) -> Any:
         """Return cached matrix indexes for one logical vector namespace."""
 
-        vector_item_ids, _matrix = self._load_vector_matrix()
-        return tuple(
-            index
-            for index, item_id in enumerate(vector_item_ids.tolist())
-            if item_id[0] == target and item_id[1] == scope
-        )
+        self._load_vector_matrix()
+        if self._vector_namespace_index_cache is None:
+            return ()
+        return self._vector_namespace_index_cache.get((target, namespace), ())
 
     def _candidate_indexes_for_target_keys(
         self,
-        item_ids: set[tuple[str, str, int]],
+        item_ids: Sequence[tuple[str, str, int]],
     ) -> Any:
         """Map candidate logical vector identifiers onto cached matrix indexes."""
 
-        vector_item_ids, _matrix = self._load_vector_matrix()
-        return tuple(
-            index
-            for index, item_id in enumerate(vector_item_ids.tolist())
-            if (str(item_id[0]), str(item_id[1]), int(item_id[2])) in item_ids
-        )
-
-    def _vector_candidate_keys_from_result(
-        self,
-        result: QueryResult,
-        *,
-        target: str,
-        scope: str,
-    ) -> tuple[tuple[str, str, int], ...]:
-        """Extract logical vector identifiers from a SQL or Cypher scope result."""
-
-        if not result.columns:
-            raise ValueError(
-                "HumemVector v0 candidate scope queries must return at least "
-                "one column."
-            )
-
-        lowered_columns = tuple(column.casefold() for column in result.columns)
-        if "item_id" in lowered_columns:
-            id_index = lowered_columns.index("item_id")
-        elif "id" in lowered_columns:
-            id_index = lowered_columns.index("id")
-        else:
-            matching_indexes = [
-                index
-                for index, column in enumerate(lowered_columns)
-                if column.endswith(".id")
-            ]
-            if len(matching_indexes) == 1:
-                id_index = matching_indexes[0]
-            elif len(result.columns) == 1:
-                id_index = 0
-            else:
-                raise ValueError(
-                    "HumemVector v0 candidate scope queries must return one id column "
-                    "named 'item_id', 'id', or '*.id'."
-                )
-
-        item_ids: list[tuple[str, str, int]] = []
-        for row in result.rows:
-            item_ids.append((target, scope, int(row[id_index])))
-        return tuple(item_ids)
+        self._load_vector_matrix()
+        if self._vector_item_index_cache is None:
+            return ()
+        resolved_indexes = [
+            self._vector_item_index_cache[item_id]
+            for item_id in set(item_ids)
+            if item_id in self._vector_item_index_cache
+        ]
+        resolved_indexes.sort()
+        return tuple(resolved_indexes)
 
     def _has_vector_table(self) -> bool:
         """Return whether the current SQLite database already has vector storage."""
@@ -727,6 +833,8 @@ class HumemDB:
         """Drop cached exact vector data after vector storage changes."""
 
         self._vector_matrix_cache = None
+        self._vector_item_index_cache = None
+        self._vector_namespace_index_cache = None
         self._vector_index_cache.clear()
 
     def _invalidate_vector_cache_for_sql(
@@ -744,43 +852,47 @@ class HumemDB:
         logger.debug("Invalidating all vector cache entries after SQL write")
         self._invalidate_vector_cache()
 
-    def begin(self, *, route: Route) -> None:
+    def begin(self, *, route: Route = "sqlite") -> None:
         """Begin an explicit transaction on the selected route.
 
         Args:
-            route: Backend route whose transaction should begin.
+            route: Backend route whose transaction should begin. Defaults to
+                `sqlite`.
         """
 
         logger.debug("Beginning transaction on route=%s", route)
         self._engine_for_route(route).begin()
 
-    def commit(self, *, route: Route) -> None:
+    def commit(self, *, route: Route = "sqlite") -> None:
         """Commit the active transaction on the selected route.
 
         Args:
-            route: Backend route whose transaction should commit.
+            route: Backend route whose transaction should commit. Defaults to
+                `sqlite`.
         """
 
         logger.debug("Committing transaction on route=%s", route)
         self._engine_for_route(route).commit()
 
-    def rollback(self, *, route: Route) -> None:
+    def rollback(self, *, route: Route = "sqlite") -> None:
         """Roll back the active transaction on the selected route.
 
         Args:
-            route: Backend route whose transaction should roll back.
+            route: Backend route whose transaction should roll back. Defaults to
+                `sqlite`.
         """
 
         logger.debug("Rolling back transaction on route=%s", route)
         self._engine_for_route(route).rollback()
 
-    def transaction(self, *, route: Route) -> _TransactionContext:
+    def transaction(self, *, route: Route = "sqlite") -> _TransactionContext:
         """Return a transaction context manager for the selected route.
 
         A successful context commits on exit. An exception inside the context triggers a
         rollback before the exception continues to propagate.
         Args:
             route: Backend route whose transaction lifecycle should be managed.
+                Defaults to `sqlite`.
 
         Returns:
             A `_TransactionContext` bound to the selected route.
@@ -793,7 +905,7 @@ class HumemDB:
         text: str,
         params_seq: BatchParameters,
         *,
-        route: Route,
+        route: Route = "sqlite",
         query_type: QueryType = "sql",
     ) -> QueryResult:
         """Execute the same statement repeatedly for a batch of parameters.
@@ -803,8 +915,9 @@ class HumemDB:
 
         Args:
             text: SQL statement to execute repeatedly.
-            params_seq: Sequence of DB-API parameter sets.
-            route: Execution route. Must be `sqlite`.
+            params_seq: Sequence of mapping-style parameter sets.
+            route: Execution route. Defaults to `sqlite` and batch execution still
+                supports only the SQLite path.
             query_type: Logical query type. Batch execution currently supports only
                 `sql` / `HumemSQL v0`.
 
@@ -817,80 +930,13 @@ class HumemDB:
                 to DuckDB.
         """
 
-        if query_type != "sql":
-            logger.debug("Rejected unsupported batch query_type=%s", query_type)
-            raise NotImplementedError(
-                "HumemDB batch execution currently supports only query_type='sql' "
-                f"for HumemSQL v0; got {query_type!r}."
-            )
-
-        translated_text = translate_sql(text, target=route)
-
-        if route == "sqlite":
-            logger.debug("Routing batched SQL query to SQLite")
-            normalized_params_seq, vector_rows = _prepare_sql_vector_write_batch(
-                text,
-                params_seq,
-            )
-            if vector_rows and any(row[2] is None for row in vector_rows):
-                total_rowcount = 0
-                resolved_vector_rows: list[_TargetScopedVectorRow] = []
-                for normalized_params, pending_row in zip(
-                    normalized_params_seq,
-                    vector_rows,
-                    strict=True,
-                ):
-                    result = self.sqlite.execute(
-                        translated_text,
-                        normalized_params,
-                        query_type=query_type,
-                    )
-                    total_rowcount += result.rowcount
-                    resolved_vector_rows.extend(
-                        _resolved_sql_vector_rows_after_insert(
-                            self.sqlite,
-                            [pending_row],
-                        )
-                    )
-                self._ensure_vector_schema()
-                _write_target_scoped_vector_rows(
-                    self.sqlite,
-                    resolved_vector_rows,
-                    mode="insert",
-                )
-                self._invalidate_vector_cache()
-                self._invalidate_vector_cache_for_sql(text, translated_text)
-                return QueryResult(
-                    rows=(),
-                    columns=(),
-                    route="sqlite",
-                    query_type=query_type,
-                    rowcount=total_rowcount,
-                )
-            result = self.sqlite.executemany(
-                translated_text,
-                normalized_params_seq,
-                query_type=query_type,
-            )
-            if vector_rows:
-                self._ensure_vector_schema()
-                _write_target_scoped_vector_rows(
-                    self.sqlite,
-                    cast(list[_TargetScopedVectorRow], vector_rows),
-                    mode="insert",
-                )
-                self._invalidate_vector_cache()
-            self._invalidate_vector_cache_for_sql(text, translated_text)
-            return result
-
-        if route == "duckdb":
-            logger.debug("Rejected batched write routed to DuckDB")
-            raise ValueError(
-                "HumemDB does not allow direct batch writes to DuckDB; "
-                "SQLite is the source of truth."
-            )
-
-        raise ValueError(f"Unsupported route: {route!r}")
+        plan = _plan_batch_query(
+            text,
+            route=route,
+            query_type=query_type,
+            params_seq=params_seq,
+        )
+        return self._execute_batch_query_plan(plan)
 
     def close(self) -> None:
         """Close both embedded database connections.
@@ -936,7 +982,7 @@ class HumemDB:
 
 
 class _TransactionContext:
-    """Route-scoped transaction context manager used by `HumemDB`.
+    """Route-bound transaction context manager used by `HumemDB`.
 
     This helper keeps the public transaction API ergonomic while making the
     commit-or-rollback behavior explicit and testable.
@@ -998,29 +1044,130 @@ def _is_read_only_query(text: str) -> bool:
     return keyword in _READ_ONLY_KEYWORDS
 
 
+def _infer_query_type(text: str) -> QueryType:
+    """Infer the public query type for the current SQL/Cypher/vector subset.
+
+    The inference stays intentionally narrow. Vector intent must be explicit in the
+    query text itself, matching the current PostgreSQL-like SQL and Neo4j-like Cypher
+    vector forms.
+    """
+
+    stripped = text.lstrip()
+    if not stripped:
+        return "sql"
+
+    if _is_vector_query_text(stripped):
+        return "vector"
+
+    if _CYPHER_MATCH_PREFIX.match(stripped):
+        return "cypher"
+    if _CYPHER_CREATE_PATTERN.match(stripped):
+        return "cypher"
+    return "sql"
+
+
+def _plan_query(
+    text: str,
+    *,
+    route: Route,
+    query_type: QueryType | None = None,
+    params: QueryParameters,
+) -> _QueryExecutionPlan:
+    """Build the thin internal dispatch plan for one `db.query(...)` call."""
+
+    resolved_query_type = query_type or _infer_query_type(text)
+    _validate_public_query_params(resolved_query_type, params)
+    translated_text = None
+    if resolved_query_type == "sql" and route in {"sqlite", "duckdb"}:
+        translated_text = translate_sql(text, target=route)
+
+    return _QueryExecutionPlan(
+        text=text,
+        route=route,
+        query_type=resolved_query_type,
+        params=params,
+        translated_text=translated_text,
+    )
+
+
+def _plan_batch_query(
+    text: str,
+    *,
+    route: Route,
+    query_type: QueryType,
+    params_seq: BatchParameters,
+) -> _BatchExecutionPlan:
+    """Build the thin internal dispatch plan for one `executemany(...)` call."""
+
+    if query_type != "sql":
+        logger.debug("Rejected unsupported batch query_type=%s", query_type)
+        raise NotImplementedError(
+            "HumemDB batch execution currently supports only query_type='sql' "
+            f"for HumemSQL v0; got {query_type!r}."
+        )
+
+    _validate_public_batch_params(params_seq)
+
+    return _BatchExecutionPlan(
+        text=text,
+        route=route,
+        query_type=query_type,
+        params_seq=params_seq,
+        translated_text=translate_sql(text, target=route),
+    )
+
+
 def _touches_vector_entries(text: str) -> bool:
     """Return whether a SQL statement references the canonical vector table."""
 
     return "vector_entries" in text.casefold()
 
 
-def _write_target_scoped_vector_rows(
+def _validate_public_query_params(
+    query_type: QueryType,
+    params: QueryParameters,
+) -> None:
+    """Enforce the current public parameter conventions for each query surface."""
+
+    if query_type != "sql" or params is None:
+        return
+    if isinstance(params, Mapping):
+        return
+    raise ValueError(
+        "HumemDB SQL queries now require named mapping params with $placeholders; "
+        "positional SQL params are no longer supported through db.query(...)."
+    )
+
+
+def _validate_public_batch_params(params_seq: BatchParameters) -> None:
+    """Enforce mapping-style SQL batch params on the public executemany surface."""
+
+    for params in params_seq:
+        if isinstance(params, Mapping):
+            continue
+        raise ValueError(
+            "HumemDB SQL batch writes now require mapping params with $placeholders; "
+            "positional SQL params are no longer supported through executemany(...)."
+        )
+
+
+def _write_target_namespaced_vector_rows(
     sqlite: SQLiteEngine,
     vector_rows: Sequence[tuple[str, str, int, Sequence[float]]],
     *,
     mode: str,
 ) -> None:
-    """Persist one batch of logical target-scoped vector rows."""
+    """Persist one batch of logical target/namespace vector rows."""
 
     grouped: dict[tuple[str, str], list[tuple[int, Sequence[float]]]] = {}
-    for target, scope, target_id, vector in vector_rows:
-        grouped.setdefault((target, scope), []).append((target_id, vector))
+    for target, namespace, target_id, vector in vector_rows:
+        grouped.setdefault((target, namespace), []).append((target_id, vector))
 
-    for (target, scope), rows in grouped.items():
+    for (target, namespace), rows in grouped.items():
         if mode == "insert":
-            insert_vector_rows(sqlite, rows, target=target, scope=scope)
+            insert_vector_rows(sqlite, rows, target=target, namespace=namespace)
         else:
-            upsert_vectors(sqlite, rows, target=target, scope=scope)
+            upsert_vectors(sqlite, rows, target=target, namespace=namespace)
 
 
 def _normalize_direct_vector_rows(
@@ -1193,7 +1340,7 @@ def _next_direct_target_id(sqlite: SQLiteEngine, *, floor: int) -> int:
         (
             "SELECT COALESCE(MAX(target_id), 0) "
             "FROM vector_entries "
-            "WHERE target = 'direct' AND scope = ''"
+            "WHERE target = 'direct' AND namespace = ''"
         ),
         query_type="vector",
     )
@@ -1202,314 +1349,14 @@ def _next_direct_target_id(sqlite: SQLiteEngine, *, floor: int) -> int:
     return max(current_max, floor) + 1
 
 
-def _target_scope_for_vector_query(
-    text: str,
-    *,
-    scope_query_type: Any,
-) -> tuple[str, str]:
-    """Resolve vector target metadata for one SQL or Cypher scope query."""
-
-    if scope_query_type == "cypher":
-        return "graph_node", ""
-
-    table_name = _sql_scope_table_name(text)
-    return "sql_row", table_name
-
-
-def _sql_scope_table_name(text: str) -> str:
-    """Return the single table name referenced by a narrow SQL vector scope query."""
-
-    try:
-        expression = parse_one(text, read="postgres")
-    except sqlglot_errors.ParseError as exc:
-        raise ValueError(
-            "HumemVector v0 SQL vector scope must be valid HumemSQL v0."
-        ) from exc
-
-    if type(expression).__name__ != "Select":
-        raise ValueError(
-            "HumemVector v0 SQL vector scope must be a SELECT over one table."
-        )
-
-    joins = expression.args.get("joins") or []
-    if joins:
-        raise ValueError(
-            "HumemVector v0 SQL vector scope currently supports one base table, "
-            "not joins."
-        )
-
-    from_clause = expression.args.get("from") or expression.args.get("from_")
-    source = getattr(from_clause, "this", None)
-    table_name = (
-        getattr(source, "name", None)
-        or getattr(getattr(source, "this", None), "name", None)
-        or str(source or "")
-    )
-    if not table_name:
-        raise ValueError(
-            "HumemVector v0 SQL vector scope currently requires a concrete table "
-            "name in FROM."
-        )
-    return table_name
-
-
-def _prepare_sql_vector_write(
-    text: str,
-    params: QueryParameters,
-) -> tuple[
-    QueryParameters,
-    list[_PendingTargetScopedVectorRow],
-    str | None,
-]:
-    """Convert vector-bearing SQL INSERT params into SQLite blobs plus vector rows."""
-
-    if params is None or isinstance(params, Mapping):
-        return params, [], None
-
-    analysis = _analyze_sql_vector_insert(text)
-    if analysis is not None:
-        normalized_params, vector_row = _normalize_sql_vector_row(
-            params,
-            id_index=analysis["id_index"],
-            vector_index=analysis["vector_index"],
-        )
-        return (
-            normalized_params,
-            [("sql_row", analysis["target_name"], vector_row[0], vector_row[1])],
-            "insert",
-        )
-
-    update_analysis = _analyze_sql_vector_update(text)
-    if update_analysis is not None:
-        vector_index = update_analysis["vector_index"]
-        id_index = update_analysis["id_index"]
-        if vector_index is None or id_index is None:
-            raise ValueError(
-                "HumemVector v0 SQL updates require both an embedding target and "
-                "an id predicate."
-            )
-        normalized_params, vector_row = _normalize_sql_vector_update(
-            params,
-            vector_index=vector_index,
-            id_index=id_index,
-            id_literal=update_analysis["id_literal"],
-        )
-        return (
-            normalized_params,
-            [
-                (
-                    "sql_row",
-                    update_analysis["target_name"],
-                    vector_row[0],
-                    vector_row[1],
-                )
-            ],
-            "upsert",
-        )
-
-    return params, [], None
-
-
-def _prepare_sql_vector_write_batch(
-    text: str,
-    params_seq: BatchParameters,
-) -> tuple[BatchParameters, list[_PendingTargetScopedVectorRow]]:
-    """Convert batched vector-bearing SQL INSERT params into blobs plus vector rows."""
-
-    analysis = _analyze_sql_vector_insert(text)
-    if analysis is None:
-        return params_seq, []
-
-    normalized_params_seq: list[Sequence[Any]] = []
-    vector_rows: list[_PendingTargetScopedVectorRow] = []
-    for params in params_seq:
-        if isinstance(params, Mapping):
-            raise ValueError(
-                "HumemVector v0 SQL vector inserts currently require positional params."
-            )
-        normalized_params, vector_row = _normalize_sql_vector_row(
-            params,
-            id_index=analysis["id_index"],
-            vector_index=analysis["vector_index"],
-        )
-        normalized_params_seq.append(normalized_params)
-        vector_rows.append(
-            ("sql_row", analysis["target_name"], vector_row[0], vector_row[1])
-        )
-
-    return normalized_params_seq, vector_rows
-
-
-def _analyze_sql_vector_insert(text: str) -> _SQLVectorInsertAnalysis | None:
-    """Return id/vector param indexes for narrow vector-bearing SQL INSERTs."""
-
-    try:
-        expression = parse_one(text, read="postgres")
-    except sqlglot_errors.ParseError:
-        return None
-
-    if type(expression).__name__ != "Insert":
-        return None
-
-    target = getattr(getattr(expression, "this", None), "this", None)
-    target_name = getattr(target, "name", None) or str(target or "")
-    if target_name.casefold() == "vector_entries":
-        return None
-
-    columns = [
-        getattr(column, "name", None)
-        or getattr(getattr(column, "this", None), "name", None)
-        for column in expression.this.expressions
-    ]
-    normalized_columns = [str(column).casefold() for column in columns]
-    vector_indexes = [
-        index
-        for index, column in enumerate(normalized_columns)
-        if column == "embedding"
-    ]
-    if not vector_indexes:
-        return None
-    if len(vector_indexes) > 1:
-        raise ValueError(
-            "HumemVector v0 SQL inserts support only one embedding column."
-        )
-
-    if "id" in normalized_columns:
-        id_index = normalized_columns.index("id")
-    elif "item_id" in normalized_columns:
-        id_index = normalized_columns.index("item_id")
-    else:
-        id_index = None
-
-    values = expression.args.get("expression")
-    row_count = len(getattr(values, "expressions", [])) if values is not None else 0
-    if row_count > 1:
-        raise ValueError(
-            "HumemVector v0 SQL vector inserts support one VALUES row per statement; "
-            "use executemany for batches."
-        )
-
-    return {
-        "target_name": target_name,
-        "id_index": id_index,
-        "vector_index": vector_indexes[0],
-    }
-
-
-def _analyze_sql_vector_update(text: str) -> _SQLVectorUpdateAnalysis | None:
-    """Return id/vector param indexes for narrow vector-bearing SQL UPDATEs."""
-
-    try:
-        expression = parse_one(text, read="postgres")
-    except sqlglot_errors.ParseError:
-        return None
-
-    if type(expression).__name__ != "Update":
-        return None
-
-    target = getattr(expression, "this", None)
-    target_name = getattr(target, "name", None) or str(target or "")
-    if target_name.casefold() == "vector_entries":
-        return None
-
-    vector_indexes = []
-    param_position = 0
-    for assignment in expression.expressions:
-        column_name = getattr(getattr(assignment, "this", None), "name", None)
-        rhs = getattr(assignment, "expression", None)
-        rhs_args = getattr(rhs, "args", {}) if rhs is not None else {}
-        if type(rhs).__name__ == "Placeholder" or rhs_args.get("jdbc"):
-            current_param = param_position
-            param_position += 1
-        else:
-            current_param = None
-
-        if str(column_name).casefold() == "embedding":
-            if current_param is None:
-                raise ValueError(
-                    "HumemVector v0 SQL updates currently require embedding = ? "
-                    "with positional params."
-                )
-            vector_indexes.append(current_param)
-
-    if not vector_indexes:
-        return None
-    if len(vector_indexes) > 1:
-        raise ValueError(
-            "HumemVector v0 SQL updates support only one embedding assignment."
-        )
-
-    where = expression.args.get("where")
-    if where is None or getattr(where, "this", None) is None:
-        raise ValueError(
-            "HumemVector v0 SQL vector updates currently require WHERE id = ... "
-            "or WHERE item_id = ...."
-        )
-
-    predicate = where.this
-    if type(predicate).__name__ != "EQ":
-        raise ValueError(
-            "HumemVector v0 SQL vector updates currently require a simple id "
-            "equality predicate."
-        )
-
-    left = getattr(predicate, "this", None)
-    id_name = getattr(left, "name", None)
-    if str(id_name).casefold() not in {"id", "item_id"}:
-        raise ValueError(
-            "HumemVector v0 SQL vector updates currently require WHERE id = ... "
-            "or WHERE item_id = ...."
-        )
-
-    right = getattr(predicate, "expression", None)
-    right_args = getattr(right, "args", {}) if right is not None else {}
-    if type(right).__name__ == "Placeholder" or right_args.get("jdbc"):
-        id_index = param_position
-        id_literal = None
-    else:
-        id_index = None
-        id_literal = int(str(getattr(right, "this", right)))
-
-    return {
-        "target_name": target_name,
-        "vector_index": vector_indexes[0],
-        "id_index": id_index,
-        "id_literal": id_literal,
-    }
-
-
-def _normalize_sql_vector_row(
-    params: Sequence[Any],
-    *,
-    id_index: int | None,
-    vector_index: int,
-) -> tuple[tuple[Any, ...], tuple[int | None, Sequence[float]]]:
-    """Encode one SQL row's embedding param and extract its canonical vector row."""
-
-    bound = list(params)
-    required_indexes = [vector_index]
-    if id_index is not None:
-        required_indexes.append(id_index)
-    if max(required_indexes) >= len(bound):
-        raise ValueError(
-            "HumemVector v0 SQL vector inserts did not receive enough "
-            "positional params."
-        )
-
-    vector_value = _coerce_vector_param(bound[vector_index], context="SQL")
-    row_id = int(bound[id_index]) if id_index is not None else None
-    bound[vector_index] = encode_vector_blob(vector_value)
-    return tuple(bound), (row_id, vector_value)
-
-
 def _resolved_sql_vector_rows_after_insert(
     sqlite: SQLiteEngine,
-    vector_rows: Sequence[_PendingTargetScopedVectorRow],
-) -> list[_TargetScopedVectorRow]:
+    vector_rows: Sequence[_PendingTargetNamespacedVectorRow],
+) -> list[_TargetNamespacedVectorRow]:
     """Resolve SQLite-assigned row ids for freshly inserted SQL-owned vectors."""
 
-    resolved: list[_TargetScopedVectorRow] = []
-    for target, scope, target_id, vector in vector_rows:
+    resolved: list[_TargetNamespacedVectorRow] = []
+    for target, namespace, target_id, vector in vector_rows:
         if target_id is None:
             first_row = sqlite.execute(
                 "SELECT last_insert_rowid() AS row_id",
@@ -1521,63 +1368,6 @@ def _resolved_sql_vector_rows_after_insert(
                     "id."
                 )
             target_id = int(first_row[0])
-        resolved.append((target, scope, int(target_id), vector))
+        resolved.append((target, namespace, int(target_id), vector))
 
     return resolved
-
-
-def _normalize_sql_vector_update(
-    params: Sequence[Any],
-    *,
-    vector_index: int,
-    id_index: int | None,
-    id_literal: int | None,
-) -> tuple[tuple[Any, ...], tuple[int, Sequence[float]]]:
-    """Encode one SQL UPDATE embedding param and extract its canonical vector row."""
-
-    bound = list(params)
-    if vector_index >= len(bound):
-        raise ValueError(
-            "HumemVector v0 SQL vector updates did not receive enough positional "
-            "params."
-        )
-
-    vector_value = _coerce_vector_param(bound[vector_index], context="SQL")
-    if id_index is not None:
-        if id_index >= len(bound):
-            raise ValueError(
-                "HumemVector v0 SQL vector updates did not receive enough positional "
-                "params."
-            )
-        row_id = int(bound[id_index])
-    elif id_literal is not None:
-        row_id = int(id_literal)
-    else:
-        raise ValueError("HumemVector v0 SQL vector updates could not resolve an id.")
-
-    bound[vector_index] = encode_vector_blob(vector_value)
-    return tuple(bound), (row_id, vector_value)
-
-
-def _coerce_vector_param(value: Any, *, context: str) -> Sequence[float]:
-    """Validate one vector-bearing SQL or Cypher parameter value."""
-
-    if isinstance(value, (str, bytes, bytearray, memoryview)):
-        raise ValueError(
-            f"HumemVector v0 {context} vector values must be sequences of numbers."
-        )
-    if not isinstance(value, Sequence):
-        raise ValueError(
-            f"HumemVector v0 {context} vector values must be sequences of numbers."
-        )
-    if not value:
-        raise ValueError(f"HumemVector v0 {context} vector values cannot be empty.")
-
-    normalized = []
-    for item in value:
-        if isinstance(item, bool) or not isinstance(item, (int, float)):
-            raise ValueError(
-                f"HumemVector v0 {context} vector values must contain only numbers."
-            )
-        normalized.append(float(item))
-    return tuple(normalized)

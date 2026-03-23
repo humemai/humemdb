@@ -1,15 +1,14 @@
 # Transactions
 
-Transaction control is explicit and route-scoped.
+Transaction control is explicit and route-bound.
 
 ## Context manager
 
 ```python
-with db.transaction(route="sqlite"):
+with db.transaction():
     db.query(
-        "INSERT INTO users (name) VALUES (?)",
-        route="sqlite",
-        params=("Alice",),
+        "INSERT INTO users (name) VALUES ($name)",
+        params={"name": "Alice"},
     )
 ```
 
@@ -19,12 +18,12 @@ rolls the selected route back before the exception continues.
 ## Manual control
 
 ```python
-db.begin(route="sqlite")
+db.begin()
 try:
-    db.query("UPDATE users SET active = 1", route="sqlite")
-    db.commit(route="sqlite")
+    db.query("UPDATE users SET active = $active", params={"active": 1})
+    db.commit()
 except Exception:
-    db.rollback(route="sqlite")
+    db.rollback()
     raise
 ```
 

@@ -56,8 +56,7 @@ def main() -> None:
                     "segment TEXT NOT NULL, "
                     "city TEXT NOT NULL"
                     ")"
-                ),
-                route="sqlite",
+                )
             )
             db.query(
                 (
@@ -67,26 +66,39 @@ def main() -> None:
                     "status TEXT NOT NULL, "
                     "total_cents INTEGER NOT NULL"
                     ")"
-                ),
-                route="sqlite",
+                )
             )
 
-            with db.transaction(route="sqlite"):
+            with db.transaction():
                 db.executemany(
                     (
                         "INSERT INTO users (id, name, segment, city) "
-                        "VALUES (?, ?, ?, ?)"
+                        "VALUES ($id, $name, $segment, $city)"
                     ),
-                    users,
-                    route="sqlite",
+                    [
+                        {
+                            "id": user_id,
+                            "name": name,
+                            "segment": segment,
+                            "city": city,
+                        }
+                        for user_id, name, segment, city in users
+                    ],
                 )
                 db.executemany(
                     (
                         "INSERT INTO orders (id, user_id, status, total_cents) "
-                        "VALUES (?, ?, ?, ?)"
+                        "VALUES ($id, $user_id, $status, $total_cents)"
                     ),
-                    orders,
-                    route="sqlite",
+                    [
+                        {
+                            "id": order_id,
+                            "user_id": user_id,
+                            "status": status,
+                            "total_cents": total_cents,
+                        }
+                        for order_id, user_id, status, total_cents in orders
+                    ],
                 )
 
             sqlite_result = db.query(
@@ -96,8 +108,7 @@ def main() -> None:
                     "WHERE city ILIKE 'berlin' "
                     "ORDER BY id "
                     "LIMIT 5"
-                ),
-                route="sqlite",
+                )
             )
             duckdb_result = db.query(
                 (
@@ -124,8 +135,7 @@ def main() -> None:
                     "WHERE u.segment = 'enterprise' AND o.status = 'paid' "
                     "ORDER BY o.total_cents DESC "
                     "LIMIT 5"
-                ),
-                route="sqlite",
+                )
             )
             sqlite_counts = db.query(
                 (
@@ -133,8 +143,7 @@ def main() -> None:
                     "  COUNT(*) AS user_count, "
                     "  (SELECT COUNT(*) FROM orders) AS order_count "
                     "FROM users"
-                ),
-                route="sqlite",
+                )
             )
 
         assert sqlite_result.columns == ("id", "name", "segment", "city")

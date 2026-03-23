@@ -2,30 +2,27 @@
 
 ## SQL
 
-For `query_type="sql"`, write the PostgreSQL-like `HumemSQL v0` surface on both routes.
-`route="sqlite"` and `route="duckdb"` choose the backend engine, not a backend-specific
-SQL dialect.
+Write the PostgreSQL-like `HumemSQL v0` surface on both routes. The common path now
+defaults to SQLite. Use `route="duckdb"` explicitly when you want analytical reads.
+HumemDB prefers named `$name` SQL parameters publicly even though positional DB-API
+params still work underneath for compatibility.
 
 ```python
 from humemdb import HumemDB
 
 with HumemDB("app.sqlite3", "analytics.duckdb") as db:
-    db.query(
-        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
-        route="sqlite",
-    )
+    db.query("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
 
-    with db.transaction(route="sqlite"):
+    with db.transaction():
         db.executemany(
-            "INSERT INTO users (id, name) VALUES (?, ?)",
-            [(1, "Alice"), (2, "Bob")],
-            route="sqlite",
+            "INSERT INTO users (id, name) VALUES ($id, $name)",
+            [
+                {"id": 1, "name": "Alice"},
+                {"id": 2, "name": "Bob"},
+            ],
         )
 
-    result = db.query(
-        "SELECT id, name FROM users ORDER BY id",
-        route="sqlite",
-    )
+    result = db.query("SELECT id, name FROM users ORDER BY id")
 
     print(result.columns)
     print(result.rows)
@@ -33,26 +30,27 @@ with HumemDB("app.sqlite3", "analytics.duckdb") as db:
 
 ## Cypher
 
+`db.query(...)` now supports both SQL and the current narrow Cypher subset directly.
+The common path no longer needs any explicit query-type override or a separate Cypher
+helper.
+
 ```python
 from humemdb import HumemDB
 
 with HumemDB("graph.sqlite3", "graph.duckdb") as db:
-    db.query(
-        "CREATE (a:User {name: 'Alice'})-[:KNOWS]->(b:User {name: 'Bob'})",
-        route="sqlite",
-        query_type="cypher",
-    )
+    db.query("CREATE (a:User {name: 'Alice'})-[:KNOWS]->(b:User {name: 'Bob'})")
 
-    result = db.query(
-        "MATCH (a:User)-[:KNOWS]->(b:User) RETURN a.name, b.name",
-        route="sqlite",
-        query_type="cypher",
-    )
+    result = db.query("MATCH (a:User)-[:KNOWS]->(b:User) RETURN a.name, b.name")
 
     print(result.rows)
 ```
 
 ## Vector search
+
+Direct vector search is intentionally separate from `db.query(...)`. Use
+`search_vectors(...)` for the direct path. Candidate-filtered vector search is now inferred from
+the query text itself, using PostgreSQL-like SQL vector ordering or Neo4j-like Cypher
+`SEARCH ... VECTOR INDEX ...` syntax.
 
 ```python
 from humemdb import HumemDB
@@ -65,16 +63,16 @@ with HumemDB("vectors.sqlite3") as db:
             {"embedding": [0.0, 1.0], "metadata": {"group": "beta"}},
         ]
     )
-    db.query(
-        "CREATE TABLE docs (id INTEGER PRIMARY KEY, topic TEXT NOT NULL)",
-        route="sqlite",
-    )
+    db.query("CREATE TABLE docs (id INTEGER PRIMARY KEY, topic TEXT NOT NULL)")
     db.executemany(
-        "INSERT INTO docs (topic) VALUES (?)",
-        [("alpha",), ("alpha",), ("beta",)],
-        route="sqlite",
+        "INSERT INTO docs (topic) VALUES ($topic)",
+        [
+            {"topic": "alpha"},
+            {"topic": "alpha"},
+            {"topic": "beta"},
+        ],
     )
-    doc_rows = db.query("SELECT id, topic FROM docs ORDER BY id", route="sqlite")
+    doc_rows = db.query("SELECT id, topic FROM docs ORDER BY id")
 
     direct_result = db.search_vectors(
         [1.0, 0.0],
@@ -82,28 +80,24 @@ with HumemDB("vectors.sqlite3") as db:
         metric="cosine",
         filters={"group": "alpha"},
     )
-    sql_scoped_result = db.query(
-        "SELECT id FROM docs WHERE topic = ? ORDER BY id",
-        route="sqlite",
-        query_type="vector",
+    sql_candidate_filtered_result = db.query(
+        "SELECT id FROM docs WHERE topic = $topic ORDER BY embedding <=> $query LIMIT 2",
         params={
             "query": [1.0, 0.0],
-            "top_k": 2,
-            "scope_query_type": "sql",
-            "scope_params": ("alpha",),
+            "topic": "alpha",
         },
     )
 
     print(direct_result.rows)
-    print(sql_scoped_result.rows)
+    print(sql_candidate_filtered_result.rows)
     print(doc_rows.rows)
 ```
 
 Vector result rows are explicit:
 
 - direct search returns rows like `("direct", "", 1, score)`
-- SQL-scoped search returns rows like `("sql_row", "docs", 1, score)`
-- Cypher-scoped search returns rows like `("graph_node", "", 7, score)`
+- SQL candidate-filtered search returns rows like `("sql_row", "docs", 1, score)`
+- Cypher candidate-filtered search returns rows like `("graph_node", "", 7, score)`
 
 The direct API auto-assigns ids starting at `1` and returns them from
 `insert_vectors(...)`. For the common path, insert record-like rows with an
@@ -118,42 +112,30 @@ from humemdb import HumemDB
 
 with HumemDB("app.sqlite3") as db:
     db.query(
-        (
-            "CREATE TABLE docs ("
-            "id INTEGER PRIMARY KEY, title TEXT NOT NULL, embedding BLOB)"
-        ),
-        route="sqlite",
+        "CREATE TABLE docs (id INTEGER PRIMARY KEY, title TEXT NOT NULL, embedding BLOB)"
     )
     db.executemany(
-        "INSERT INTO docs (title, embedding) VALUES (?, ?)",
+        "INSERT INTO docs (title, embedding) VALUES ($title, $embedding)",
         [
-            ("Alpha", [1.0, 0.0]),
-            ("Beta", [0.0, 1.0]),
+            {"title": "Alpha", "embedding": [1.0, 0.0]},
+            {"title": "Beta", "embedding": [0.0, 1.0]},
         ],
-        route="sqlite",
     )
     db.query(
-        "UPDATE docs SET embedding = ? WHERE id = ?",
-        route="sqlite",
-        params=([0.8, 0.2], 2),
+        "UPDATE docs SET embedding = $embedding WHERE id = $id",
+        params={"embedding": [0.8, 0.2], "id": 2},
     )
 
     db.query(
         "CREATE (u:User {name: $name, embedding: $embedding})",
-        route="sqlite",
-        query_type="cypher",
         params={"name": "Alice", "embedding": [1.0, 0.0]},
     )
     db.query(
         "CREATE (u:User {name: $name, embedding: $embedding})",
-        route="sqlite",
-        query_type="cypher",
         params={"name": "Bob", "embedding": [0.0, 1.0]},
     )
     db.query(
         "MATCH (u:User {name: 'Bob'}) SET u.embedding = $embedding",
-        route="sqlite",
-        query_type="cypher",
         params={"embedding": [0.8, 0.2]},
     )
 ```
@@ -162,7 +144,7 @@ These write forms are intentionally narrow `v0` subset features. They follow a
 PostgreSQL-like row ownership model and a Neo4j-style node-property ownership model
 without claiming full pgvector or full Neo4j Cypher compatibility.
 
-Internally, that ownership is stored as `target`, `scope`, and `target_id` rather than
+Internally, that ownership is stored as `target`, `namespace`, and `target_id` rather than
 one shared bare integer id.
 
 ## Read the surface boundaries

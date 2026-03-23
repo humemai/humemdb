@@ -23,7 +23,7 @@ from .engines import SQLiteEngine
 
 VectorMetric: TypeAlias = Literal["cosine", "dot", "l2"]
 VectorMetadataValue: TypeAlias = str | int | float | bool | None
-VectorTargetKey: TypeAlias = tuple[str, str, int]
+VectorNamespaceKey: TypeAlias = tuple[str, str, int]
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,13 +33,13 @@ class VectorSearchMatch:
     Attributes:
         target: Logical vector namespace such as `direct`, `sql_row`, or
             `graph_node`.
-        scope: Optional namespace scope within the target, such as a SQL table name.
-        target_id: Logical identifier inside the target and scope.
+        namespace: Optional namespace within the target, such as a SQL table name.
+        target_id: Logical identifier inside the target and namespace.
         score: Similarity score used for ranking.
     """
 
     target: str
-    scope: str
+    namespace: str
     target_id: int
     score: float
 
@@ -56,11 +56,11 @@ def ensure_vector_schema(sqlite: SQLiteEngine) -> None:
             "CREATE TABLE IF NOT EXISTS vector_entries ("
             "vector_id INTEGER PRIMARY KEY AUTOINCREMENT, "
             "target TEXT NOT NULL, "
-            "scope TEXT NOT NULL DEFAULT '', "
+            "namespace TEXT NOT NULL DEFAULT '', "
             "target_id INTEGER NOT NULL, "
             "dimensions INTEGER NOT NULL, "
             "embedding BLOB NOT NULL, "
-            "UNIQUE(target, scope, target_id))"
+            "UNIQUE(target, namespace, target_id))"
         ),
         (
             "CREATE TABLE IF NOT EXISTS vector_entry_metadata ("
@@ -72,7 +72,7 @@ def ensure_vector_schema(sqlite: SQLiteEngine) -> None:
         ),
         (
             "CREATE INDEX IF NOT EXISTS idx_vector_entries_target_lookup "
-            "ON vector_entries(target, scope, target_id)"
+            "ON vector_entries(target, namespace, target_id)"
         ),
         (
             "CREATE INDEX IF NOT EXISTS idx_vector_entry_metadata_lookup "
@@ -87,7 +87,7 @@ def insert_vectors(
     rows: Sequence[tuple[int, Sequence[float]]],
     *,
     target: str = "direct",
-    scope: str = "",
+    namespace: str = "",
 ) -> None:
     """Insert vector rows into the SQLite canonical store.
 
@@ -95,7 +95,7 @@ def insert_vectors(
         sqlite: Canonical SQLite engine that owns vector storage.
         rows: `(target_id, embedding)` rows to insert.
         target: Logical target namespace for the rows.
-        scope: Optional namespace scope within the target.
+        namespace: Optional namespace within the target.
     """
 
     if not rows:
@@ -105,7 +105,7 @@ def insert_vectors(
         sqlite,
         rows,
         target=target,
-        scope=scope,
+        namespace=namespace,
         conflict_mode="insert",
     )
 
@@ -115,7 +115,7 @@ def upsert_vectors(
     rows: Sequence[tuple[int, Sequence[float]]],
     *,
     target: str = "direct",
-    scope: str = "",
+    namespace: str = "",
 ) -> None:
     """Insert or replace vector rows in the SQLite canonical store.
 
@@ -123,7 +123,7 @@ def upsert_vectors(
         sqlite: Canonical SQLite engine that owns vector storage.
         rows: `(target_id, embedding)` rows to insert or replace.
         target: Logical target namespace for the rows.
-        scope: Optional namespace scope within the target.
+        namespace: Optional namespace within the target.
     """
 
     if not rows:
@@ -133,7 +133,7 @@ def upsert_vectors(
         sqlite,
         rows,
         target=target,
-        scope=scope,
+        namespace=namespace,
         conflict_mode="upsert",
     )
 
@@ -155,9 +155,9 @@ def load_vector_matrix(
 
     result = sqlite.execute(
         (
-            "SELECT target, scope, target_id, dimensions, embedding "
+            "SELECT target, namespace, target_id, dimensions, embedding "
             "FROM vector_entries "
-            "ORDER BY target, scope, target_id"
+            "ORDER BY target, namespace, target_id"
         ),
         query_type="vector",
     )
@@ -168,7 +168,7 @@ def load_vector_matrix(
     item_ids = np.empty(len(result.rows), dtype=object)
     matrix = np.empty((len(result.rows), dimensions), dtype=np.float32)
 
-    for index, (target, scope, target_id, row_dimensions, blob) in enumerate(
+    for index, (target, namespace, target_id, row_dimensions, blob) in enumerate(
         result.rows
     ):
         if int(row_dimensions) != dimensions:
@@ -177,7 +177,7 @@ def load_vector_matrix(
                 "set; got "
                 f"{row_dimensions} and {dimensions}."
             )
-        item_ids[index] = (str(target), str(scope), int(target_id))
+        item_ids[index] = (str(target), str(namespace), int(target_id))
         matrix[index] = decode_vector_blob(blob, dimension=dimensions)
 
     return item_ids, matrix
@@ -188,7 +188,7 @@ def upsert_vector_metadata(
     rows: Sequence[tuple[int, Mapping[str, VectorMetadataValue]]],
     *,
     target: str = "direct",
-    scope: str = "",
+    namespace: str = "",
 ) -> None:
     """Insert or replace equality-filterable metadata for vector rows.
 
@@ -196,7 +196,7 @@ def upsert_vector_metadata(
         sqlite: Canonical SQLite engine that owns vector storage.
         rows: Sequence of `(target_id, metadata)` rows to write.
         target: Logical target namespace for the vectors.
-        scope: Optional namespace scope within the target.
+        namespace: Optional namespace within the target.
     """
 
     encoded_rows: list[tuple[int, str, str | None, str]] = []
@@ -204,7 +204,7 @@ def upsert_vector_metadata(
         vector_id = _load_vector_id(
             sqlite,
             target=target,
-            scope=scope,
+            namespace=namespace,
             target_id=target_id,
         )
         for key, value in metadata.items():
@@ -233,15 +233,15 @@ def load_filtered_vector_target_keys(
     filters: Mapping[str, VectorMetadataValue],
     *,
     target: str = "direct",
-    scope: str = "",
-) -> tuple[VectorTargetKey, ...]:
+    namespace: str = "",
+) -> tuple[VectorNamespaceKey, ...]:
     """Return logical vector identifiers whose metadata matches all filters.
 
     Args:
         sqlite: Canonical SQLite engine that owns vector storage.
         filters: Equality filters that must all match.
         target: Logical target namespace for the candidate vectors.
-        scope: Optional namespace scope within the target.
+        namespace: Optional namespace within the target.
 
     Returns:
         A tuple of logical target keys that satisfy every filter.
@@ -250,33 +250,33 @@ def load_filtered_vector_target_keys(
     if not filters:
         return ()
 
-    matched_ids: set[VectorTargetKey] | None = None
+    matched_ids: set[VectorNamespaceKey] | None = None
     for key, value in filters.items():
         encoded_value, value_type = _encode_metadata_value(value)
         if encoded_value is None:
             result = sqlite.execute(
                 (
-                    "SELECT e.target, e.scope, e.target_id "
+                    "SELECT e.target, e.namespace, e.target_id "
                     "FROM vector_entry_metadata AS m "
                     "JOIN vector_entries AS e ON e.vector_id = m.vector_id "
-                    "WHERE e.target = ? AND e.scope = ? "
+                    "WHERE e.target = ? AND e.namespace = ? "
                     "AND m.key = ? AND m.value_type = ? AND m.value IS NULL "
-                    "ORDER BY e.target, e.scope, e.target_id"
+                    "ORDER BY e.target, e.namespace, e.target_id"
                 ),
-                params=(target, scope, key, value_type),
+                params=(target, namespace, key, value_type),
                 query_type="vector",
             )
         else:
             result = sqlite.execute(
                 (
-                    "SELECT e.target, e.scope, e.target_id "
+                    "SELECT e.target, e.namespace, e.target_id "
                     "FROM vector_entry_metadata AS m "
                     "JOIN vector_entries AS e ON e.vector_id = m.vector_id "
-                    "WHERE e.target = ? AND e.scope = ? "
+                    "WHERE e.target = ? AND e.namespace = ? "
                     "AND m.key = ? AND m.value_type = ? AND m.value = ? "
-                    "ORDER BY e.target, e.scope, e.target_id"
+                    "ORDER BY e.target, e.namespace, e.target_id"
                 ),
-                params=(target, scope, key, value_type, encoded_value),
+                params=(target, namespace, key, value_type, encoded_value),
                 query_type="vector",
             )
 
@@ -299,24 +299,24 @@ def _write_vector_rows(
     rows: Sequence[tuple[int, Sequence[float]]],
     *,
     target: str,
-    scope: str,
+    namespace: str,
     conflict_mode: Literal["insert", "upsert"],
 ) -> None:
-    """Write one batch of target-scoped vector rows into SQLite."""
+    """Write one batch of target/namespace vector rows into SQLite."""
 
     encoded_rows = []
     for target_id, vector in rows:
         blob = encode_vector_blob(vector)
-        encoded_rows.append((target, scope, int(target_id), len(vector), blob))
+        encoded_rows.append((target, namespace, int(target_id), len(vector), blob))
 
     statement = (
         "INSERT INTO vector_entries "
-        "(target, scope, target_id, dimensions, embedding) "
+        "(target, namespace, target_id, dimensions, embedding) "
         "VALUES (?, ?, ?, ?, ?)"
     )
     if conflict_mode == "upsert":
         statement += (
-            " ON CONFLICT(target, scope, target_id) DO UPDATE SET "
+            " ON CONFLICT(target, namespace, target_id) DO UPDATE SET "
             "dimensions = excluded.dimensions, "
             "embedding = excluded.embedding"
         )
@@ -332,7 +332,7 @@ def _load_vector_id(
     sqlite: SQLiteEngine,
     *,
     target: str,
-    scope: str,
+    namespace: str,
     target_id: int,
 ) -> int:
     """Resolve one logical target key to its internal vector row id."""
@@ -340,15 +340,15 @@ def _load_vector_id(
     result = sqlite.execute(
         (
             "SELECT vector_id FROM vector_entries "
-            "WHERE target = ? AND scope = ? AND target_id = ?"
+            "WHERE target = ? AND namespace = ? AND target_id = ?"
         ),
-        params=(target, scope, int(target_id)),
+        params=(target, namespace, int(target_id)),
         query_type="vector",
     )
     if not result.rows:
         raise ValueError(
-            "HumemVector v0 metadata writes require an existing target/scoped "
-            f"vector row; got {target!r}, {scope!r}, {target_id!r}."
+            "HumemVector v0 metadata writes require an existing target/namespace "
+            f"vector row; got {target!r}, {namespace!r}, {target_id!r}."
         )
     return int(result.rows[0][0])
 
@@ -605,7 +605,7 @@ def _build_matches(
     return tuple(
         VectorSearchMatch(
             target=match_id[0],
-            scope=match_id[1],
+            namespace=match_id[1],
             target_id=match_id[2],
             score=float(scores[index]),
         )
@@ -614,8 +614,8 @@ def _build_matches(
     )
 
 
-def _coerce_match_id(identifier: Any) -> VectorTargetKey:
-    """Normalize one stored identifier into the public target/scope/id shape."""
+def _coerce_match_id(identifier: Any) -> VectorNamespaceKey:
+    """Normalize one stored identifier into the public target/namespace/id shape."""
 
     if isinstance(identifier, tuple) and len(identifier) == 3:
         return (str(identifier[0]), str(identifier[1]), int(identifier[2]))

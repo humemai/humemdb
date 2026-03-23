@@ -73,8 +73,6 @@ class HumemDBTest(unittest.TestCase):
             with HumemDB(str(sqlite_path)) as db:
                 created = db.query(
                     "CREATE (u:User {name: 'Alice', age: 30})",
-                    route="sqlite",
-                    query_type="cypher",
                 )
 
                 self.assertEqual(created.columns, ("node_id",))
@@ -82,8 +80,6 @@ class HumemDBTest(unittest.TestCase):
 
                 result = db.query(
                     "MATCH (u:User {name: 'Alice'}) RETURN u.name, u.age",
-                    route="sqlite",
-                    query_type="cypher",
                 )
 
                 self.assertEqual(result.columns, ("u.name", "u.age"))
@@ -98,8 +94,6 @@ class HumemDBTest(unittest.TestCase):
             with HumemDB(str(sqlite_path)) as db:
                 db.query(
                     "CREATE (u:User {name: $name, active: $active, note: $note})",
-                    route="sqlite",
-                    query_type="cypher",
                     params={"name": "Alice", "active": True, "note": None},
                 )
 
@@ -109,8 +103,6 @@ class HumemDBTest(unittest.TestCase):
                         "WHERE u.name = $name AND u.active = $active "
                         "RETURN u.name, u.active, u.note"
                     ),
-                    route="sqlite",
-                    query_type="cypher",
                     params={"name": "Alice", "active": True},
                 )
 
@@ -132,14 +124,10 @@ class HumemDBTest(unittest.TestCase):
                         "-[:KNOWS {since: 2020}]->"
                         "(b:User {name: 'Bob'})"
                     ),
-                    route="sqlite",
-                    query_type="cypher",
                 )
 
                 result = db.query(
                     "MATCH (a:User)-[:KNOWS]->(b:User) RETURN a.name, b.name",
-                    route="sqlite",
-                    query_type="cypher",
                 )
 
                 self.assertEqual(result.rows, (("Alice", "Bob"),))
@@ -157,8 +145,6 @@ class HumemDBTest(unittest.TestCase):
                         "-[r:KNOWS {since: 2020}]->"
                         "(b:User {name: 'Bob'})"
                     ),
-                    route="sqlite",
-                    query_type="cypher",
                 )
 
                 result = db.query(
@@ -167,8 +153,6 @@ class HumemDBTest(unittest.TestCase):
                         "WHERE r.since = 2020 AND r.type = 'KNOWS' "
                         "RETURN a.name, r.type, r.since, b.name"
                     ),
-                    route="sqlite",
-                    query_type="cypher",
                 )
 
                 self.assertEqual(
@@ -191,19 +175,14 @@ class HumemDBTest(unittest.TestCase):
                         "-[:KNOWS]->"
                         "(b:User {name: 'Bob'})"
                     ),
-                    route="sqlite",
-                    query_type="cypher",
                 )
 
                 sqlite_result = db.query(
                     "MATCH (b:User)<-[:KNOWS]-(a:User) RETURN a.name, b.name",
-                    route="sqlite",
-                    query_type="cypher",
                 )
                 duckdb_result = db.query(
                     "MATCH (b:User)<-[:KNOWS]-(a:User) RETURN a.name, b.name",
                     route="duckdb",
-                    query_type="cypher",
                 )
 
                 self.assertEqual(sqlite_result.rows, (("Alice", "Bob"),))
@@ -218,19 +197,13 @@ class HumemDBTest(unittest.TestCase):
             with HumemDB(str(sqlite_path)) as db:
                 db.query(
                     "CREATE (u:User {name: 'Alice', age: 30})",
-                    route="sqlite",
-                    query_type="cypher",
                 )
                 db.query(
                     "CREATE (u:User {name: 'Bob', age: 40})",
-                    route="sqlite",
-                    query_type="cypher",
                 )
 
                 result = db.query(
                     "MATCH (u:User) WHERE u.age = 40 RETURN u.name, u.age",
-                    route="sqlite",
-                    query_type="cypher",
                 )
 
                 self.assertEqual(result.rows, (("Bob", 40),))
@@ -246,19 +219,15 @@ class HumemDBTest(unittest.TestCase):
                 for name, age in (("Alice", 30), ("Bob", 40), ("Carol", 20)):
                     db.query(
                         f"CREATE (u:User {{name: '{name}', age: {age}}})",
-                        route="sqlite",
-                        query_type="cypher",
                     )
 
                 sqlite_result = db.query(
                     "MATCH (u:User) RETURN u.name ORDER BY u.age DESC LIMIT 2",
                     route="sqlite",
-                    query_type="cypher",
                 )
                 duckdb_result = db.query(
                     "MATCH (u:User) RETURN u.name ORDER BY u.age DESC LIMIT 2",
                     route="duckdb",
-                    query_type="cypher",
                 )
 
                 self.assertEqual(sqlite_result.rows, (("Bob",), ("Alice",)))
@@ -289,7 +258,7 @@ class HumemDBTest(unittest.TestCase):
                         "(b:User {name: 'Dave'})"
                     ),
                 ):
-                    db.query(query, route="sqlite", query_type="cypher")
+                    db.query(query)
 
                 cypher = (
                     "MATCH (a:User)-[r:KNOWS]->(b:User) "
@@ -298,12 +267,10 @@ class HumemDBTest(unittest.TestCase):
                 sqlite_result = db.query(
                     cypher,
                     route="sqlite",
-                    query_type="cypher",
                 )
                 duckdb_result = db.query(
                     cypher,
                     route="duckdb",
-                    query_type="cypher",
                 )
 
                 expected = (("Dave", 2022), ("Bob", 2020))
@@ -324,14 +291,11 @@ class HumemDBTest(unittest.TestCase):
                         "-[:KNOWS]->"
                         "(b:User {name: 'Bob'})"
                     ),
-                    route="sqlite",
-                    query_type="cypher",
                 )
 
                 result = db.query(
                     "MATCH (a:User)-[:KNOWS]->(b:User) RETURN a.name, b.name",
                     route="duckdb",
-                    query_type="cypher",
                 )
 
                 self.assertEqual(result.rows, (("Alice", "Bob"),))
@@ -348,7 +312,6 @@ class HumemDBTest(unittest.TestCase):
                     db.query(
                         "CREATE (u:User {name: 'Alice'})",
                         route="duckdb",
-                        query_type="cypher",
                     )
 
     def test_cypher_persists_graph_data_across_reopen(self) -> None:
@@ -360,15 +323,11 @@ class HumemDBTest(unittest.TestCase):
             with HumemDB(str(sqlite_path)) as db:
                 db.query(
                     "CREATE (u:User {name: 'Alice', active: true})",
-                    route="sqlite",
-                    query_type="cypher",
                 )
 
             with HumemDB(str(sqlite_path)) as db:
                 result = db.query(
                     "MATCH (u:User) WHERE u.active = true RETURN u.name, u.active",
-                    route="sqlite",
-                    query_type="cypher",
                 )
 
                 self.assertEqual(result.rows, (("Alice", True),))
@@ -383,8 +342,6 @@ class HumemDBTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "WHERE items"):
                     db.query(
                         "MATCH (u:User) WHERE u.age > 30 RETURN u.name",
-                        route="sqlite",
-                        query_type="cypher",
                     )
 
     def test_cypher_rejects_positional_params(self) -> None:
@@ -397,8 +354,6 @@ class HumemDBTest(unittest.TestCase):
                 with self.assertRaisesRegex(NotImplementedError, "named parameter"):
                     db.query(
                         "CREATE (u:User {name: $name})",
-                        route="sqlite",
-                        query_type="cypher",
                         params=("Alice",),
                     )
 
@@ -420,9 +375,9 @@ class HumemDBTest(unittest.TestCase):
                 )
                 # This write also goes to SQLite.
                 db.query(
-                    "INSERT INTO users (name) VALUES (?)",
+                    "INSERT INTO users (name) VALUES ($name)",
                     route="sqlite",
-                    params=("Alice",),
+                    params={"name": "Alice"},
                 )
 
                 # Read the row back from SQLite and assert the normalized result shape.
@@ -457,8 +412,8 @@ class HumemDBTest(unittest.TestCase):
                     route="sqlite",
                 )
                 db.executemany(
-                    "INSERT INTO users (name) VALUES (?)",
-                    [("Alice",), ("Bob",)],
+                    "INSERT INTO users (name) VALUES ($name)",
+                    [{"name": "Alice"}, {"name": "Bob"}],
                     route="sqlite",
                 )
 
@@ -598,6 +553,25 @@ class HumemDBTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     db.query("SELECT 1", route="postgres")
 
+    def test_query_defaults_to_sqlite_route(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+
+            with HumemDB(str(sqlite_path)) as db:
+                db.query(
+                    "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
+                )
+                db.executemany(
+                    "INSERT INTO users (id, name) VALUES ($id, $name)",
+                    [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}],
+                )
+
+                result = db.query("SELECT id, name FROM users ORDER BY id")
+
+                self.assertEqual(result.rows, ((1, "Alice"), (2, "Bob")))
+
     def test_sqlite_transaction_context_commits_on_success(self) -> None:
         HumemDB = _humemdb_class()
 
@@ -607,25 +581,118 @@ class HumemDBTest(unittest.TestCase):
             with HumemDB(str(sqlite_path)) as db:
                 db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
-                    route="sqlite",
                 )
 
                 # A successful transaction block commits when the block exits.
-                with db.transaction(route="sqlite"):
+                with db.transaction():
                     db.query(
-                        "INSERT INTO users (name) VALUES (?)",
-                        route="sqlite",
-                        params=("Alice",),
+                        "INSERT INTO users (name) VALUES ($name)",
+                        params={"name": "Alice"},
                     )
 
             # Re-open SQLite to prove the committed row was persisted to disk.
             with HumemDB(str(sqlite_path)) as db:
-                result = db.query(
-                    "SELECT name FROM users",
-                    route="sqlite",
-                )
+                result = db.query("SELECT name FROM users")
 
                 self.assertEqual(result.rows, (("Alice",),))
+
+    def test_query_infers_cypher_create_and_match_on_sqlite(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+
+            with HumemDB(str(sqlite_path)) as db:
+                created = db.query("CREATE (u:User {name: 'Alice', age: 30})")
+
+                self.assertEqual(created.query_type, "cypher")
+                self.assertEqual(created.rows[0][0], 1)
+
+                result = db.query(
+                    "MATCH (u:User {name: 'Alice'}) RETURN u.name, u.age"
+                )
+
+                self.assertEqual(result.query_type, "cypher")
+                self.assertEqual(result.rows, (("Alice", 30),))
+
+    def test_query_infers_cypher_for_uppercase_multiline_starters(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+
+            with HumemDB(str(sqlite_path)) as db:
+                created = db.query(
+                    "  CREATE\n(u:User {name: 'Alice', age: 30})"
+                )
+
+                self.assertEqual(created.query_type, "cypher")
+                self.assertEqual(created.rows[0][0], 1)
+
+                updated = db.query(
+                    "\tMATCH\n(u:User {name: 'Alice'}) SET u.age = 31"
+                )
+
+                self.assertEqual(updated.query_type, "cypher")
+
+                result = db.query(
+                    "\nMATCH\t(u:User {name: 'Alice'}) RETURN u.age"
+                )
+
+                self.assertEqual(result.query_type, "cypher")
+                self.assertEqual(result.rows, ((31,),))
+
+    def test_query_does_not_infer_mixed_case_cypher(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+
+            with HumemDB(str(sqlite_path)) as db:
+                with self.assertRaises(ValueError):
+                    db.query("cReAtE (u:User {name: 'Alice'})")
+
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "could not parse the SQL as PostgreSQL-like HumemSQL",
+                ):
+                    db.query("mAtCh (u:User {name: 'Alice'}) RETURN u.name")
+
+    def test_query_infers_sql_by_default_for_create_table(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+
+            with HumemDB(str(sqlite_path)) as db:
+                created = db.query(
+                    "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
+                )
+
+                self.assertEqual(created.query_type, "sql")
+
+                inserted = db.query(
+                    "INSERT INTO users (name) VALUES ($name)",
+                    params={"name": "Alice"},
+                )
+                self.assertEqual(inserted.query_type, "sql")
+
+                result = db.query("SELECT name FROM users")
+                self.assertEqual(result.query_type, "sql")
+                self.assertEqual(result.rows, (("Alice",),))
+
+    def test_query_keeps_multiline_sql_create_table_on_sql_path(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+
+            with HumemDB(str(sqlite_path)) as db:
+                created = db.query(
+                    "create\n table users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
+                )
+
+                self.assertEqual(created.query_type, "sql")
 
     def test_sqlite_transaction_context_rolls_back_on_error(self) -> None:
         HumemDB = _humemdb_class()
@@ -636,23 +703,18 @@ class HumemDBTest(unittest.TestCase):
             with HumemDB(str(sqlite_path)) as db:
                 db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
-                    route="sqlite",
                 )
 
                 with self.assertRaises(RuntimeError):
                     # Any exception inside the block causes a rollback.
-                    with db.transaction(route="sqlite"):
+                    with db.transaction():
                         db.query(
-                            "INSERT INTO users (name) VALUES (?)",
-                            route="sqlite",
-                            params=("Alice",),
+                            "INSERT INTO users (name) VALUES ($name)",
+                            params={"name": "Alice"},
                         )
                         raise RuntimeError("force rollback")
 
-                result = db.query(
-                    "SELECT COUNT(*) FROM users",
-                    route="sqlite",
-                )
+                result = db.query("SELECT COUNT(*) FROM users")
 
                 self.assertEqual(result.rows, ((0,),))
 
@@ -665,19 +727,14 @@ class HumemDBTest(unittest.TestCase):
             with HumemDB(str(sqlite_path)) as db:
                 db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
-                    route="sqlite",
                 )
                 db.executemany(
-                    "INSERT INTO users (name) VALUES (?)",
-                    [("Alice",), ("Bob",)],
-                    route="sqlite",
+                    "INSERT INTO users (name) VALUES ($name)",
+                    [{"name": "Alice"}, {"name": "Bob"}],
                 )
 
             with HumemDB(str(sqlite_path)) as db:
-                result = db.query(
-                    "SELECT name FROM users ORDER BY id",
-                    route="sqlite",
-                )
+                result = db.query("SELECT name FROM users ORDER BY id")
 
                 self.assertEqual(result.rows, (("Alice",), ("Bob",)))
 
@@ -688,10 +745,7 @@ class HumemDBTest(unittest.TestCase):
             sqlite_path = Path(tmpdir) / "humem.sqlite3"
 
             with HumemDB(str(sqlite_path)) as db:
-                result = db.query(
-                    "SELECT 1::INTEGER AS value",
-                    route="sqlite",
-                )
+                result = db.query("SELECT 1::INTEGER AS value")
 
                 self.assertEqual(result.columns, ("value",))
                 self.assertEqual(result.rows, ((1,),))
@@ -719,13 +773,35 @@ class HumemDBTest(unittest.TestCase):
             sqlite_path = Path(tmpdir) / "humem.sqlite3"
 
             with HumemDB(str(sqlite_path)) as db:
-                result = db.query(
-                    "SELECT 'Alice' ILIKE 'aLiCe' AS matched",
-                    route="sqlite",
-                )
+                result = db.query("SELECT 'Alice' ILIKE 'aLiCe' AS matched")
 
                 self.assertEqual(result.columns, ("matched",))
                 self.assertTrue(bool(result.rows[0][0]))
+
+    def test_sql_query_supports_named_params_with_dollar_placeholders(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+
+            with HumemDB(str(sqlite_path)) as db:
+                db.query(
+                    "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
+                )
+                db.executemany(
+                    "INSERT INTO users (id, name) VALUES ($id, $name)",
+                    [
+                        {"id": 1, "name": "Alice"},
+                        {"id": 2, "name": "Bob"},
+                    ],
+                )
+
+                result = db.query(
+                    "SELECT id, name FROM users WHERE name = $name",
+                    params={"name": "Alice"},
+                )
+
+                self.assertEqual(result.rows, ((1, "Alice"),))
 
     def test_sqlite_query_rejects_unsupported_humemsql_statement(self) -> None:
         HumemDB = _humemdb_class()
@@ -735,7 +811,7 @@ class HumemDBTest(unittest.TestCase):
 
             with HumemDB(str(sqlite_path)) as db:
                 with self.assertRaisesRegex(ValueError, "HumemSQL v0 only supports"):
-                    db.query("DROP TABLE users", route="sqlite")
+                    db.query("DROP TABLE users")
 
     def test_sqlite_executemany_rolls_back_inside_transaction(self) -> None:
         HumemDB = _humemdb_class()
@@ -746,22 +822,17 @@ class HumemDBTest(unittest.TestCase):
             with HumemDB(str(sqlite_path)) as db:
                 db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
-                    route="sqlite",
                 )
 
                 with self.assertRaises(RuntimeError):
-                    with db.transaction(route="sqlite"):
+                    with db.transaction():
                         db.executemany(
-                            "INSERT INTO users (name) VALUES (?)",
-                            [("Alice",), ("Bob",)],
-                            route="sqlite",
+                            "INSERT INTO users (name) VALUES ($name)",
+                            [{"name": "Alice"}, {"name": "Bob"}],
                         )
                         raise RuntimeError("force rollback")
 
-                result = db.query(
-                    "SELECT COUNT(*) FROM users",
-                    route="sqlite",
-                )
+                result = db.query("SELECT COUNT(*) FROM users")
 
                 self.assertEqual(result.rows, ((0,),))
 
@@ -775,8 +846,8 @@ class HumemDBTest(unittest.TestCase):
             with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
                 with self.assertRaises(ValueError):
                     db.executemany(
-                        "INSERT INTO metrics VALUES (?, ?)",
-                        [("queries", 1)],
+                        "INSERT INTO metrics VALUES ($name, $value)",
+                        [{"name": "queries", "value": 1}],
                         route="duckdb",
                     )
 
@@ -794,40 +865,6 @@ class HumemDBTest(unittest.TestCase):
                             "CREATE TABLE metrics (name VARCHAR, value INTEGER)",
                             route="duckdb",
                         )
-
-    def test_vector_query_type_searches_sqlite_vector_set(self) -> None:
-        HumemDB = _humemdb_class()
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-
-            with HumemDB(str(sqlite_path)) as db:
-                inserted_ids = db.insert_vectors(
-                    [
-                        [1.0, 0.0],
-                        [0.8, 0.2],
-                        [0.0, 1.0],
-                    ]
-                )
-                self.assertEqual(inserted_ids, (1, 2, 3))
-
-                result = db.query(
-                    "",
-                    route="sqlite",
-                    query_type="vector",
-                    params={"query": [1.0, 0.0], "top_k": 2},
-                )
-
-                self.assertEqual(
-                    result.columns,
-                    ("target", "scope", "target_id", "score"),
-                )
-                self.assertEqual(result.route, "sqlite")
-                self.assertEqual(result.query_type, "vector")
-                self.assertEqual(
-                    tuple(row[:3] for row in result.rows),
-                    (("direct", "", 1), ("direct", "", 2)),
-                )
 
     def test_search_vectors_returns_expected_matches(self) -> None:
         HumemDB = _humemdb_class()
@@ -974,13 +1011,14 @@ class HumemDBTest(unittest.TestCase):
                     (
                         "CREATE TABLE docs ("
                         "id INTEGER PRIMARY KEY, topic TEXT NOT NULL, embedding BLOB)"
-                    ),
-                    route="sqlite",
+                    )
                 )
                 db.query(
-                    "INSERT INTO docs (id, topic, embedding) VALUES (?, ?, ?)",
-                    route="sqlite",
-                    params=(1, "alpha", [0.0, 1.0]),
+                    (
+                        "INSERT INTO docs (id, topic, embedding) "
+                        "VALUES ($id, $topic, $embedding)"
+                    ),
+                    params={"id": 1, "topic": "alpha", "embedding": [0.0, 1.0]},
                 )
 
                 created = db.query(
@@ -988,8 +1026,6 @@ class HumemDBTest(unittest.TestCase):
                         "CREATE (u:User {"
                         "name: 'Alice', cohort: 'alpha', embedding: $embedding})"
                     ),
-                    route="sqlite",
-                    query_type="cypher",
                     params={"embedding": [0.8, 0.2]},
                 )
                 node_id = created.rows[0][0]
@@ -998,30 +1034,35 @@ class HumemDBTest(unittest.TestCase):
                 direct = db.search_vectors([1.0, 0.0], top_k=1)
                 self.assertEqual(direct.rows[0][:3], ("direct", "", 1))
 
-                sql_scoped = db.query(
-                    "SELECT id FROM docs WHERE topic = ? ORDER BY id",
-                    route="sqlite",
-                    query_type="vector",
+                sql_candidate_filtered = db.query(
+                    (
+                        "SELECT id FROM docs WHERE topic = $topic "
+                        "ORDER BY embedding <=> $query LIMIT 1"
+                    ),
                     params={
                         "query": [0.0, 1.0],
-                        "top_k": 1,
-                        "scope_query_type": "sql",
-                        "scope_params": ("alpha",),
+                        "topic": "alpha",
                     },
                 )
-                self.assertEqual(sql_scoped.rows[0][:3], ("sql_row", "docs", 1))
+                self.assertEqual(
+                    sql_candidate_filtered.rows[0][:3],
+                    ("sql_row", "docs", 1),
+                )
 
-                cypher_scoped = db.query(
-                    "MATCH (u:User {cohort: 'alpha'}) RETURN u.id ORDER BY u.id",
-                    route="sqlite",
-                    query_type="vector",
+                cypher_candidate_filtered = db.query(
+                    (
+                        "MATCH (u:User {cohort: 'alpha'}) "
+                        "SEARCH u IN (VECTOR INDEX embedding FOR $query LIMIT 1) "
+                        "RETURN u.id ORDER BY u.id"
+                    ),
                     params={
                         "query": [0.8, 0.2],
-                        "top_k": 1,
-                        "scope_query_type": "cypher",
                     },
                 )
-                self.assertEqual(cypher_scoped.rows[0][:3], ("graph_node", "", 1))
+                self.assertEqual(
+                    cypher_candidate_filtered.rows[0][:3],
+                    ("graph_node", "", 1),
+                )
 
     def test_sql_insert_with_embedding_updates_row_and_vector_store(self) -> None:
         HumemDB = _humemdb_class()
@@ -1035,28 +1076,40 @@ class HumemDBTest(unittest.TestCase):
                         "CREATE TABLE docs ("
                         "id INTEGER PRIMARY KEY, "
                         "title TEXT NOT NULL, topic TEXT NOT NULL, embedding BLOB)"
-                    ),
-                    route="sqlite",
+                    )
                 )
 
                 inserted = db.executemany(
                     (
                         "INSERT INTO docs (id, title, topic, embedding) "
-                        "VALUES (?, ?, ?, ?)"
+                        "VALUES ($id, $title, $topic, $embedding)"
                     ),
                     [
-                        (1, "Alpha one", "alpha", [1.0, 0.0]),
-                        (2, "Alpha two", "alpha", [0.8, 0.2]),
-                        (3, "Beta one", "beta", [0.0, 1.0]),
+                        {
+                            "id": 1,
+                            "title": "Alpha one",
+                            "topic": "alpha",
+                            "embedding": [1.0, 0.0],
+                        },
+                        {
+                            "id": 2,
+                            "title": "Alpha two",
+                            "topic": "alpha",
+                            "embedding": [0.8, 0.2],
+                        },
+                        {
+                            "id": 3,
+                            "title": "Beta one",
+                            "topic": "beta",
+                            "embedding": [0.0, 1.0],
+                        },
                     ],
-                    route="sqlite",
                 )
 
                 self.assertEqual(inserted.rowcount, 3)
 
                 relational = db.query(
-                    "SELECT id, title, topic FROM docs ORDER BY id",
-                    route="sqlite",
+                    "SELECT id, title, topic FROM docs ORDER BY id"
                 )
                 self.assertEqual(
                     relational.rows,
@@ -1068,14 +1121,13 @@ class HumemDBTest(unittest.TestCase):
                 )
 
                 vector_result = db.query(
-                    "SELECT id FROM docs WHERE topic = ? ORDER BY id",
-                    route="sqlite",
-                    query_type="vector",
+                    (
+                        "SELECT id FROM docs WHERE topic = $topic "
+                        "ORDER BY embedding <=> $query LIMIT 3"
+                    ),
                     params={
                         "query": [1.0, 0.0],
-                        "top_k": 3,
-                        "scope_query_type": "sql",
-                        "scope_params": ("alpha",),
+                        "topic": "alpha",
                     },
                 )
                 self.assertEqual(
@@ -1095,28 +1147,37 @@ class HumemDBTest(unittest.TestCase):
                         "CREATE TABLE docs ("
                         "id INTEGER PRIMARY KEY, "
                         "title TEXT NOT NULL, topic TEXT NOT NULL, embedding BLOB)"
-                    ),
-                    route="sqlite",
+                    )
                 )
 
                 inserted = db.executemany(
                     (
                         "INSERT INTO docs (title, topic, embedding) "
-                        "VALUES (?, ?, ?)"
+                        "VALUES ($title, $topic, $embedding)"
                     ),
                     [
-                        ("Alpha one", "alpha", [1.0, 0.0]),
-                        ("Alpha two", "alpha", [0.8, 0.2]),
-                        ("Beta one", "beta", [0.0, 1.0]),
+                        {
+                            "title": "Alpha one",
+                            "topic": "alpha",
+                            "embedding": [1.0, 0.0],
+                        },
+                        {
+                            "title": "Alpha two",
+                            "topic": "alpha",
+                            "embedding": [0.8, 0.2],
+                        },
+                        {
+                            "title": "Beta one",
+                            "topic": "beta",
+                            "embedding": [0.0, 1.0],
+                        },
                     ],
-                    route="sqlite",
                 )
 
                 self.assertEqual(inserted.rowcount, 3)
 
                 relational = db.query(
-                    "SELECT id, title, topic FROM docs ORDER BY id",
-                    route="sqlite",
+                    "SELECT id, title, topic FROM docs ORDER BY id"
                 )
                 self.assertEqual(
                     relational.rows,
@@ -1128,14 +1189,13 @@ class HumemDBTest(unittest.TestCase):
                 )
 
                 vector_result = db.query(
-                    "SELECT id FROM docs WHERE topic = ? ORDER BY id",
-                    route="sqlite",
-                    query_type="vector",
+                    (
+                        "SELECT id FROM docs WHERE topic = $topic "
+                        "ORDER BY embedding <=> $query LIMIT 3"
+                    ),
                     params={
                         "query": [1.0, 0.0],
-                        "top_k": 3,
-                        "scope_query_type": "sql",
-                        "scope_params": ("alpha",),
+                        "topic": "alpha",
                     },
                 )
                 self.assertEqual(
@@ -1154,30 +1214,21 @@ class HumemDBTest(unittest.TestCase):
                     (
                         "CREATE TABLE docs ("
                         "id INTEGER PRIMARY KEY, title TEXT NOT NULL, embedding BLOB)"
-                    ),
-                    route="sqlite",
+                    )
                 )
 
                 db.query(
-                    "INSERT INTO docs (title, embedding) VALUES (?, ?)",
-                    route="sqlite",
-                    params=("Alpha", [1.0, 0.0]),
+                    "INSERT INTO docs (title, embedding) VALUES ($title, $embedding)",
+                    params={"title": "Alpha", "embedding": [1.0, 0.0]},
                 )
 
-                relational = db.query(
-                    "SELECT id, title FROM docs ORDER BY id",
-                    route="sqlite",
-                )
+                relational = db.query("SELECT id, title FROM docs ORDER BY id")
                 self.assertEqual(relational.rows, ((1, "Alpha"),))
 
                 vector_result = db.query(
-                    "SELECT id FROM docs ORDER BY id",
-                    route="sqlite",
-                    query_type="vector",
+                    "SELECT id FROM docs ORDER BY embedding <=> $query LIMIT 1",
                     params={
                         "query": [1.0, 0.0],
-                        "top_k": 1,
-                        "scope_query_type": "sql",
                     },
                 )
                 self.assertEqual(vector_result.rows[0][:3], ("sql_row", "docs", 1))
@@ -1193,41 +1244,33 @@ class HumemDBTest(unittest.TestCase):
                     (
                         "CREATE TABLE docs ("
                         "id INTEGER PRIMARY KEY, title TEXT NOT NULL, embedding BLOB)"
-                    ),
-                    route="sqlite",
+                    )
                 )
                 db.query(
-                    "INSERT INTO docs (id, title, embedding) VALUES (?, ?, ?)",
-                    route="sqlite",
-                    params=(1, "Alpha", [0.0, 1.0]),
+                    (
+                        "INSERT INTO docs (id, title, embedding) "
+                        "VALUES ($id, $title, $embedding)"
+                    ),
+                    params={"id": 1, "title": "Alpha", "embedding": [0.0, 1.0]},
                 )
 
                 first = db.query(
-                    "SELECT id FROM docs ORDER BY id",
-                    route="sqlite",
-                    query_type="vector",
+                    "SELECT id FROM docs ORDER BY embedding <=> $query LIMIT 1",
                     params={
                         "query": [1.0, 0.0],
-                        "top_k": 1,
-                        "scope_query_type": "sql",
                     },
                 )
                 self.assertEqual(first.rows[0][:3], ("sql_row", "docs", 1))
 
                 db.query(
-                    "UPDATE docs SET embedding = ? WHERE id = ?",
-                    route="sqlite",
-                    params=([1.0, 0.0], 1),
+                    "UPDATE docs SET embedding = $embedding WHERE id = $id",
+                    params={"embedding": [1.0, 0.0], "id": 1},
                 )
 
                 second = db.query(
-                    "SELECT id FROM docs ORDER BY id",
-                    route="sqlite",
-                    query_type="vector",
+                    "SELECT id FROM docs ORDER BY embedding <=> $query LIMIT 1",
                     params={
                         "query": [1.0, 0.0],
-                        "top_k": 1,
-                        "scope_query_type": "sql",
                     },
                 )
                 self.assertEqual(second.rows[0][:3], ("sql_row", "docs", 1))
@@ -1253,8 +1296,6 @@ class HumemDBTest(unittest.TestCase):
                             "CREATE (u:User {"
                             "name: $name, cohort: $cohort, embedding: $embedding})"
                         ),
-                        route="sqlite",
-                        query_type="cypher",
                         params={
                             "name": name,
                             "cohort": cohort,
@@ -1268,8 +1309,6 @@ class HumemDBTest(unittest.TestCase):
 
                 graph_result = db.query(
                     "MATCH (u:User) RETURN u.id, u.name ORDER BY u.id",
-                    route="sqlite",
-                    query_type="cypher",
                 )
                 self.assertEqual(
                     graph_result.rows,
@@ -1281,13 +1320,13 @@ class HumemDBTest(unittest.TestCase):
                 )
 
                 vector_result = db.query(
-                    "MATCH (u:User {cohort: 'alpha'}) RETURN u.id ORDER BY u.id",
-                    route="sqlite",
-                    query_type="vector",
+                    (
+                        "MATCH (u:User {cohort: 'alpha'}) "
+                        "SEARCH u IN (VECTOR INDEX embedding FOR $query LIMIT 3) "
+                        "RETURN u.id ORDER BY u.id"
+                    ),
                     params={
                         "query": [1.0, 0.0],
-                        "top_k": 3,
-                        "scope_query_type": "cypher",
                     },
                 )
                 self.assertEqual(
@@ -1310,8 +1349,6 @@ class HumemDBTest(unittest.TestCase):
                         "CREATE (u:User {"
                         "name: $name, cohort: $cohort, embedding: $embedding})"
                     ),
-                    route="sqlite",
-                    query_type="cypher",
                     params={
                         "name": "Alice",
                         "cohort": "alpha",
@@ -1322,25 +1359,23 @@ class HumemDBTest(unittest.TestCase):
 
                 db.query(
                     "MATCH (u:User {name: 'Alice'}) SET u.embedding = $embedding",
-                    route="sqlite",
-                    query_type="cypher",
                     params={"embedding": [1.0, 0.0]},
                 )
 
                 result = db.query(
-                    "MATCH (u:User {cohort: 'alpha'}) RETURN u.id ORDER BY u.id",
-                    route="sqlite",
-                    query_type="vector",
+                    (
+                        "MATCH (u:User {cohort: 'alpha'}) "
+                        "SEARCH u IN (VECTOR INDEX embedding FOR $query LIMIT 1) "
+                        "RETURN u.id ORDER BY u.id"
+                    ),
                     params={
                         "query": [1.0, 0.0],
-                        "top_k": 1,
-                        "scope_query_type": "cypher",
                     },
                 )
                 self.assertEqual(result.rows[0][2], node_id)
                 self.assertAlmostEqual(result.rows[0][3], 1.0, places=6)
 
-    def test_vector_query_type_supports_sql_candidate_scope(self) -> None:
+    def test_sql_vector_syntax_supports_candidate_scope(self) -> None:
         HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1351,28 +1386,28 @@ class HumemDBTest(unittest.TestCase):
                     (
                         "CREATE TABLE docs ("
                         "id INTEGER PRIMARY KEY, topic TEXT NOT NULL, embedding BLOB)"
-                    ),
-                    route="sqlite",
+                    )
                 )
                 db.executemany(
-                    "INSERT INTO docs (id, topic, embedding) VALUES (?, ?, ?)",
+                    (
+                        "INSERT INTO docs (id, topic, embedding) "
+                        "VALUES ($id, $topic, $embedding)"
+                    ),
                     [
-                        (1, "alpha", [1.0, 0.0]),
-                        (2, "alpha", [0.8, 0.2]),
-                        (3, "beta", [1.0, 0.0]),
+                        {"id": 1, "topic": "alpha", "embedding": [1.0, 0.0]},
+                        {"id": 2, "topic": "alpha", "embedding": [0.8, 0.2]},
+                        {"id": 3, "topic": "beta", "embedding": [1.0, 0.0]},
                     ],
-                    route="sqlite",
                 )
 
                 result = db.query(
-                    "SELECT id FROM docs WHERE topic = ? ORDER BY id",
-                    route="sqlite",
-                    query_type="vector",
+                    (
+                        "SELECT id FROM docs WHERE topic = $topic "
+                        "ORDER BY embedding <=> $query LIMIT 3"
+                    ),
                     params={
                         "query": [1.0, 0.0],
-                        "top_k": 3,
-                        "scope_query_type": "sql",
-                        "scope_params": ("alpha",),
+                        "topic": "alpha",
                     },
                 )
 
@@ -1381,7 +1416,55 @@ class HumemDBTest(unittest.TestCase):
                     (("sql_row", "docs", 1), ("sql_row", "docs", 2)),
                 )
 
-    def test_vector_query_type_supports_cypher_candidate_scope(self) -> None:
+    def test_sql_vector_syntax_keeps_large_fraction_scope_exact(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+
+            with HumemDB(str(sqlite_path)) as db:
+                db.query(
+                    (
+                        "CREATE TABLE docs ("
+                        "id INTEGER PRIMARY KEY, topic TEXT NOT NULL, embedding BLOB)"
+                    )
+                )
+                db.executemany(
+                    (
+                        "INSERT INTO docs (id, topic, embedding) "
+                        "VALUES ($id, $topic, $embedding)"
+                    ),
+                    [
+                        {"id": 1, "topic": "alpha", "embedding": [0.8, 0.2]},
+                        {"id": 2, "topic": "alpha", "embedding": [0.75, 0.25]},
+                        {"id": 3, "topic": "alpha", "embedding": [0.7, 0.3]},
+                        {"id": 4, "topic": "alpha", "embedding": [0.65, 0.35]},
+                        {"id": 5, "topic": "beta", "embedding": [1.0, 0.0]},
+                    ],
+                )
+
+                result = db.query(
+                    (
+                        "SELECT id FROM docs WHERE topic = $topic "
+                        "ORDER BY embedding <=> $query LIMIT 5"
+                    ),
+                    params={
+                        "query": [1.0, 0.0],
+                        "topic": "alpha",
+                    },
+                )
+
+                self.assertEqual(
+                    tuple(row[:3] for row in result.rows),
+                    (
+                        ("sql_row", "docs", 1),
+                        ("sql_row", "docs", 2),
+                        ("sql_row", "docs", 3),
+                        ("sql_row", "docs", 4),
+                    ),
+                )
+
+    def test_cypher_vector_syntax_supports_candidate_scope(self) -> None:
         HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1393,8 +1476,6 @@ class HumemDBTest(unittest.TestCase):
                         "CREATE (u:User {"
                         "name: 'Alice', cohort: 'alpha', embedding: $embedding})"
                     ),
-                    route="sqlite",
-                    query_type="cypher",
                     params={"embedding": [1.0, 0.0]},
                 )
                 bob = db.query(
@@ -1402,8 +1483,6 @@ class HumemDBTest(unittest.TestCase):
                         "CREATE (u:User {"
                         "name: 'Bob', cohort: 'alpha', embedding: $embedding})"
                     ),
-                    route="sqlite",
-                    query_type="cypher",
                     params={"embedding": [0.85, 0.15]},
                 )
                 db.query(
@@ -1411,19 +1490,17 @@ class HumemDBTest(unittest.TestCase):
                         "CREATE (u:User {"
                         "name: 'Carol', cohort: 'beta', embedding: $embedding})"
                     ),
-                    route="sqlite",
-                    query_type="cypher",
                     params={"embedding": [1.0, 0.0]},
                 )
 
                 result = db.query(
-                    "MATCH (u:User {cohort: 'alpha'}) RETURN u.id ORDER BY u.id",
-                    route="sqlite",
-                    query_type="vector",
+                    (
+                        "MATCH (u:User {cohort: 'alpha'}) "
+                        "SEARCH u IN (VECTOR INDEX embedding FOR $query LIMIT 3) "
+                        "RETURN u.id ORDER BY u.id"
+                    ),
                     params={
                         "query": [1.0, 0.0],
-                        "top_k": 3,
-                        "scope_query_type": "cypher",
                     },
                 )
 
@@ -1457,17 +1534,18 @@ class HumemDBTest(unittest.TestCase):
                 db.query(
                     (
                         "INSERT INTO vector_entries "
-                        "(target, scope, target_id, dimensions, embedding) "
-                        "VALUES (?, ?, ?, ?, ?)"
+                        "(target, namespace, target_id, dimensions, embedding) "
+                        "VALUES ("
+                        "$target, $namespace, $target_id, $dimensions, $embedding"
+                        ")"
                     ),
-                    route="sqlite",
-                    params=(
-                        "direct",
-                        "",
-                        3,
-                        2,
-                        vector.encode_vector_blob([1.0, 0.0]),
-                    ),
+                    params={
+                        "target": "direct",
+                        "namespace": "",
+                        "target_id": 3,
+                        "dimensions": 2,
+                        "embedding": vector.encode_vector_blob([1.0, 0.0]),
+                    },
                 )
 
                 second_result = db.search_vectors([1.0, 0.0], top_k=1)
@@ -1503,7 +1581,7 @@ class HumemDBTest(unittest.TestCase):
             with HumemDB(str(sqlite_path), preload_vectors=True) as db:
                 self.assertFalse(db.vectors_cached())
 
-    def test_vector_query_type_rejects_duckdb_route(self) -> None:
+    def test_vector_queries_reject_duckdb_route(self) -> None:
         HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1513,9 +1591,8 @@ class HumemDBTest(unittest.TestCase):
             with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
                 with self.assertRaisesRegex(ValueError, "route='sqlite'"):
                     db.query(
-                        "",
+                        "SELECT id FROM docs ORDER BY embedding <=> $query LIMIT 1",
                         route="duckdb",
-                        query_type="vector",
                         params={"query": [1.0, 0.0]},
                     )
 
@@ -1542,6 +1619,40 @@ class HumemDBTest(unittest.TestCase):
                 )
 
                 self.assertEqual(result.rows, (("queries", 1),))
+
+    def test_sql_rejects_positional_params(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+
+            with HumemDB(str(sqlite_path)) as db:
+                db.query(
+                    "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
+                )
+
+                with self.assertRaisesRegex(ValueError, "named mapping params"):
+                    db.query(
+                        "INSERT INTO users (name) VALUES ($name)",
+                        params=("Alice",),
+                    )
+
+    def test_sql_batch_rejects_positional_params(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+
+            with HumemDB(str(sqlite_path)) as db:
+                db.query(
+                    "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
+                )
+
+                with self.assertRaisesRegex(ValueError, "mapping params"):
+                    db.executemany(
+                        "INSERT INTO users (name) VALUES ($name)",
+                        [("Alice",), ("Bob",)],
+                    )
 
 
 if __name__ == "__main__":

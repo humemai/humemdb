@@ -7,7 +7,7 @@ The current API surface is deliberately conservative:
 
 - routes are explicit and limited to SQLite or DuckDB
 - query types are explicit; `sql`, `cypher`, and exact `vector` search are implemented
-- parameters follow Python DB-API conventions, with mapping-style params used for the
+- public query params use mapping-style named bindings across SQL, Cypher, and the
     vector frontend
 
 As HumemDB grows, this module is the natural place for additional request, result, and

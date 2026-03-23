@@ -31,8 +31,6 @@ db.query(
         "-[r:KNOWS {since: $since_one, strength: $strength_one}]->"
         "(b:User {name: $b_name, age: $b_age, active: $b_active, cohort: $cohort, city: $city})"
     ),
-    route="sqlite",
-    query_type="cypher",
     params={...},
 )
 ```

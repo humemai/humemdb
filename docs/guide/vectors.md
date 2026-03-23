@@ -6,7 +6,7 @@ The current vector surface is deliberately conservative.
 
 - vectors are stored in SQLite as float32 blobs
 - the current direct vector path loads one exact in-memory matrix from SQLite
-- one canonical vector table can also be scoped by SQL rows or Cypher nodes through
+- one canonical vector table can also be filtered by SQL rows or Cypher nodes through
   id-based candidate queries
 - vector-only categorization stays narrow: equality-style metadata filters over the
   canonical vector table
@@ -21,9 +21,9 @@ The current vector surface is deliberately conservative.
 - exact search only on the public path
 - the direct vector path can search the full stored vector set or a metadata-filtered
   subset
-- SQL-scoped vector search means SQL defines the candidate row ids, then the exact
+- SQL candidate-filtered vector search means SQL defines the candidate row ids, then the exact
   vector path ranks those ids
-- Cypher-scoped vector search means Cypher defines the candidate node ids, then the
+- Cypher candidate-filtered vector search means Cypher defines the candidate node ids, then the
   exact vector path ranks those ids
 - metrics: `cosine`, `dot`, `l2`
 

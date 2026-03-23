@@ -11,11 +11,12 @@ already good at.
 
 The current public surfaces are intentionally explicit:
 
-- `query_type="sql"` means `HumemSQL v0`.
-- `query_type="cypher"` means `HumemCypher v0`.
-- `query_type="vector"` means `HumemVector v0`, with vector rows identified by
-  `target`, `scope`, and `target_id`.
-- `route="sqlite"` or `route="duckdb"` selects the execution backend.
+- `db.query(...)` is the main public surface for explicit SQL and Cypher text.
+- direct vector search lives on explicit vector methods such as `search_vectors(...)`.
+- candidate-filtered vector search still exists when SQL or Cypher text defines the candidate set,
+  but that is a narrower advanced path rather than the main public entry point.
+- `route` and `query_type` remain part of the current implementation, but they are not
+  the intended long-term center of the public API.
 
 ## Why HumemDB exists
 

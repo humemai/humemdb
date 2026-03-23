@@ -67,7 +67,7 @@ The single-run, sweep, and LanceDB-tuning vector pages are split out because the
 different questions:
 
 - [`vector_search.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/vector_search.py) measures one concrete scenario in depth.
-- [`vector_query_steps.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/vector_query_steps.py) breaks one exact-vector flow into ingest, frontend, scope-query, candidate-mapping, and search stages.
+- [`vector_query_steps.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/vector_query_steps.py) breaks one exact-vector flow into ingest, frontend, candidate-query, candidate-mapping, and search stages.
 - [`vector_search_sweep.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/vector_search_sweep.py) finds crossover regions across row-count and dimension grids.
 - [`vector_search_tune_lancedb.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/vector_search_tune_lancedb.py) searches candidate indexed profiles that can still hit
     a recall target.

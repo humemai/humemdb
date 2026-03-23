@@ -17,8 +17,8 @@ transactions, environment-driven runtime settings, and vector search integration
 - transaction commit and rollback behavior
 - Cypher `CREATE`, `MATCH`, relationship traversal, filtering, ordering, and limits
 - direct-vector convenience calls through the public API
-- SQL-owned vector writes and scoped vector search
-- Cypher-owned vector writes and scoped vector search
+- SQL-owned vector writes and candidate-filtered vector search
+- Cypher-owned vector writes and candidate-filtered vector search
 - cache invalidation and preload behavior for vector search
 
 ## Why this test file exists
@@ -31,18 +31,14 @@ regression from the user-facing API boundary.
 
 ```python
 with HumemDB("app.sqlite3", "analytics.duckdb") as db:
-    db.query("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)", route="sqlite")
-    db.query("CREATE (u:User {name: 'Alice'})", route="sqlite", query_type="cypher")
+    db.query("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+    db.query("CREATE (u:User {name: 'Alice'})")
 
     result = db.query(
-        "SELECT id FROM docs WHERE topic = ? ORDER BY id",
-        route="sqlite",
-        query_type="vector",
+        "SELECT id FROM docs WHERE topic = $topic ORDER BY embedding <=> $query LIMIT 3",
         params={
             "query": [1.0, 0.0],
-            "top_k": 3,
-            "scope_query_type": "sql",
-            "scope_params": ("alpha",),
+            "topic": "alpha",
         },
     )
 ```

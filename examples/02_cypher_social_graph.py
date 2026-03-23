@@ -35,8 +35,6 @@ def populate_graph(db: HumemDB) -> None:
                 "}"
                 ")"
             ),
-            route="sqlite",
-            query_type="cypher",
             params={
                 "a_name": f"Analyst {index:04d}",
                 "a_age": 26 + (index % 9),
@@ -59,7 +57,7 @@ def main() -> None:
         duckdb_path = root / "graph.duckdb"
 
         with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
-            with db.transaction(route="sqlite"):
+            with db.transaction():
                 populate_graph(db)
 
             sqlite_result = db.query(
@@ -69,9 +67,7 @@ def main() -> None:
                     "AND a.cohort = 'batch-0' "
                     "RETURN a.name, r.since, r.strength, b.name "
                     "ORDER BY r.since DESC, a.name LIMIT 5"
-                ),
-                route="sqlite",
-                query_type="cypher",
+                )
             )
             duckdb_result = db.query(
                 (
@@ -82,16 +78,13 @@ def main() -> None:
                     "ORDER BY r.since DESC, a.name LIMIT 5"
                 ),
                 route="duckdb",
-                query_type="cypher",
             )
             reverse_result = db.query(
                 (
                     "MATCH (b:User)<-[r:KNOWS]-(a:User) "
                     "WHERE b.name = 'Lead 0000' AND r.since = 2019 "
                     "RETURN a.name, b.name, r.since"
-                ),
-                route="sqlite",
-                query_type="cypher",
+                )
             )
 
         expected_rows = (

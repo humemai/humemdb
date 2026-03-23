@@ -200,16 +200,19 @@ def _seed_users(db: HumemDB, users: int) -> None:
         route="sqlite",
     )
     batch = [
-        (
-            index,
-            f"region_{index % 20}",
-            ("free", "pro", "enterprise")[index % 3],
-            1 if index % 5 != 0 else 0,
-        )
+        {
+            "id": index,
+            "region": f"region_{index % 20}",
+            "tier": ("free", "pro", "enterprise")[index % 3],
+            "is_active": 1 if index % 5 != 0 else 0,
+        }
         for index in range(1, users + 1)
     ]
     db.executemany(
-        "INSERT INTO users (id, region, tier, is_active) VALUES (?, ?, ?, ?)",
+        (
+            "INSERT INTO users (id, region, tier, is_active) "
+            "VALUES ($id, $region, $tier, $is_active)"
+        ),
         batch,
         route="sqlite",
     )
@@ -231,18 +234,18 @@ def _seed_events(db: HumemDB, *, rows: int, batch_size: int, users: int) -> None
     for start in range(0, rows, batch_size):
         stop = min(start + batch_size, rows)
         batch = [
-            (
-                (index % users) + 1,
-                index % 100,
-                ("view", "click", "purchase", "share")[index % 4],
-                index % 365,
-            )
+            {
+                "user_id": (index % users) + 1,
+                "amount": index % 100,
+                "event_type": ("view", "click", "purchase", "share")[index % 4],
+                "created_day": index % 365,
+            }
             for index in range(start, stop)
         ]
         db.executemany(
             (
                 "INSERT INTO events (user_id, amount, event_type, created_day) "
-                "VALUES (?, ?, ?, ?)"
+                "VALUES ($user_id, $amount, $event_type, $created_day)"
             ),
             batch,
             route="sqlite",
@@ -271,19 +274,19 @@ def _seed_documents(
     for start in range(1, documents + 1, batch_size):
         stop = min(start + batch_size - 1, documents)
         batch = [
-            (
-                document_id,
-                ((document_id * 7) % users) + 1,
-                f"category_{document_id % 24}",
-                ("draft", "review", "published")[document_id % 3],
-                document_id % 1000,
-            )
+            {
+                "id": document_id,
+                "owner_user_id": ((document_id * 7) % users) + 1,
+                "category": f"category_{document_id % 24}",
+                "status": ("draft", "review", "published")[document_id % 3],
+                "score": document_id % 1000,
+            }
             for document_id in range(start, stop + 1)
         ]
         db.executemany(
             (
                 "INSERT INTO documents (id, owner_user_id, category, status, score) "
-                "VALUES (?, ?, ?, ?, ?)"
+                "VALUES ($id, $owner_user_id, $category, $status, $score)"
             ),
             batch,
             route="sqlite",
@@ -295,9 +298,9 @@ def _seed_tags(db: HumemDB, *, tags: int) -> None:
         "CREATE TABLE tags (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
         route="sqlite",
     )
-    batch = [(tag_id, f"tag_{tag_id}") for tag_id in range(1, tags + 1)]
+    batch = [{"id": tag_id, "name": f"tag_{tag_id}"} for tag_id in range(1, tags + 1)]
     db.executemany(
-        "INSERT INTO tags (id, name) VALUES (?, ?)",
+        "INSERT INTO tags (id, name) VALUES ($id, $name)",
         batch,
         route="sqlite",
     )
@@ -319,18 +322,21 @@ def _seed_document_tags(
         route="sqlite",
     )
 
-    batch: list[tuple[int, int]] = []
+    batch: list[dict[str, int]] = []
     for document_id in range(1, documents + 1):
         batch.extend(
             [
-                (document_id, ((document_id) % tags) + 1),
-                (document_id, ((document_id * 3) % tags) + 1),
-                (document_id, ((document_id * 7) % tags) + 1),
+                {"document_id": document_id, "tag_id": ((document_id) % tags) + 1},
+                {"document_id": document_id, "tag_id": ((document_id * 3) % tags) + 1},
+                {"document_id": document_id, "tag_id": ((document_id * 7) % tags) + 1},
             ]
         )
         if len(batch) >= batch_size:
             db.executemany(
-                "INSERT INTO document_tags (document_id, tag_id) VALUES (?, ?)",
+                (
+                    "INSERT INTO document_tags (document_id, tag_id) "
+                    "VALUES ($document_id, $tag_id)"
+                ),
                 batch,
                 route="sqlite",
             )
@@ -338,7 +344,10 @@ def _seed_document_tags(
 
     if batch:
         db.executemany(
-            "INSERT INTO document_tags (document_id, tag_id) VALUES (?, ?)",
+            (
+                "INSERT INTO document_tags (document_id, tag_id) "
+                "VALUES ($document_id, $tag_id)"
+            ),
             batch,
             route="sqlite",
         )
@@ -369,22 +378,25 @@ def _seed_memory_chunks(
     for start in range(1, chunks + 1, batch_size):
         stop = min(start + batch_size - 1, chunks)
         batch = [
-            (
-                chunk_id,
-                ((chunk_id * 5) % documents) + 1,
-                ((chunk_id * 3) % users) + 1,
-                f"topic_{chunk_id % 128}",
-                chunk_id % 100,
-                128 + (chunk_id % 2048),
-                1 if chunk_id % 5 == 0 else 0,
-            )
+            {
+                "id": chunk_id,
+                "document_id": ((chunk_id * 5) % documents) + 1,
+                "owner_user_id": ((chunk_id * 3) % users) + 1,
+                "topic": f"topic_{chunk_id % 128}",
+                "importance": chunk_id % 100,
+                "token_count": 128 + (chunk_id % 2048),
+                "is_hot": 1 if chunk_id % 5 == 0 else 0,
+            }
             for chunk_id in range(start, stop + 1)
         ]
         db.executemany(
             (
                 "INSERT INTO memory_chunks ("
                 "id, document_id, owner_user_id, topic, importance, token_count, is_hot"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?)"
+                ") VALUES ("
+                "$id, $document_id, $owner_user_id, $topic, "
+                "$importance, $token_count, $is_hot"
+                ")"
             ),
             batch,
             route="sqlite",

@@ -11,9 +11,8 @@ vectors.
 - 16 dimensions per vector
 - exact search through `search_vectors(...)`
 - direct metadata-filtered vector search
-- exact search through raw `query_type="vector"`
-- SQL-scoped vector search over candidate row ids
-- Cypher-scoped vector search over candidate node ids
+- SQL candidate-filtered vector search over candidate row ids
+- Cypher candidate-filtered vector search over candidate node ids
 - row-owned and node-owned vector writes through the SQL and Cypher frontends
 - cache invalidation after inserting additional vectors
 
@@ -44,10 +43,12 @@ with HumemDB("vectors.sqlite3") as db:
 ## What this means in practice
 
 - SQLite is the canonical vector store.
-- The canonical vector identity is `target`, `scope`, and `target_id`.
+- The canonical vector identity is `target`, `namespace`, and `target_id`.
 - The public path is exact, not ANN.
 - The current direct vector path auto-assigns direct ids starting at `1`, accepts
   insert-time metadata records, and searches one vector-only set loaded from SQLite.
+- Direct vectors are intentionally searched through `search_vectors(...)`, while
+  SQL-row and Cypher-node vector search is expressed inside `db.query(...)` text.
 - Narrow vector-only categorization comes from metadata equality filters.
 - SQL rows and Cypher nodes can keep their ids system-assigned, then resolve candidate ids and reuse the same exact
   ranking path.

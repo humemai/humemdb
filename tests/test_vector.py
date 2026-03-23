@@ -161,26 +161,41 @@ class HumemVectorTest(unittest.TestCase):
                 db.executemany(
                     (
                         "INSERT INTO docs (id, title, topic, embedding) "
-                        "VALUES (?, ?, ?, ?)"
+                        "VALUES ($id, $title, $topic, $embedding)"
                     ),
                     [
-                        (1, "Alpha one", "alpha", [0.0, 1.0]),
-                        (2, "Alpha two", "alpha", [0.8, 0.2]),
-                        (3, "Beta one", "beta", [0.0, 1.0]),
+                        {
+                            "id": 1,
+                            "title": "Alpha one",
+                            "topic": "alpha",
+                            "embedding": [0.0, 1.0],
+                        },
+                        {
+                            "id": 2,
+                            "title": "Alpha two",
+                            "topic": "alpha",
+                            "embedding": [0.8, 0.2],
+                        },
+                        {
+                            "id": 3,
+                            "title": "Beta one",
+                            "topic": "beta",
+                            "embedding": [0.0, 1.0],
+                        },
                     ],
                     route="sqlite",
                 )
 
                 db.query(
-                    "UPDATE docs SET embedding = ? WHERE id = ?",
+                    "UPDATE docs SET embedding = $embedding WHERE id = $id",
                     route="sqlite",
-                    params=([1.0, 0.0], 1),
+                    params={"embedding": [1.0, 0.0], "id": 1},
                 )
 
                 relational = db.query(
-                    "SELECT id, title FROM docs WHERE topic = ? ORDER BY id",
+                    "SELECT id, title FROM docs WHERE topic = $topic ORDER BY id",
                     route="sqlite",
-                    params=("alpha",),
+                    params={"topic": "alpha"},
                 )
                 self.assertEqual(
                     relational.rows,
@@ -188,14 +203,14 @@ class HumemVectorTest(unittest.TestCase):
                 )
 
                 vector_result = db.query(
-                    "SELECT id FROM docs WHERE topic = ? ORDER BY id",
+                    (
+                        "SELECT id FROM docs WHERE topic = $topic "
+                        "ORDER BY embedding <=> $query LIMIT 3"
+                    ),
                     route="sqlite",
-                    query_type="vector",
                     params={
                         "query": [1.0, 0.0],
-                        "top_k": 3,
-                        "scope_query_type": "sql",
-                        "scope_params": ("alpha",),
+                        "topic": "alpha",
                     },
                 )
 
@@ -224,7 +239,6 @@ class HumemVectorTest(unittest.TestCase):
                             "name: $name, cohort: $cohort, embedding: $embedding})"
                         ),
                         route="sqlite",
-                        query_type="cypher",
                         params={
                             "name": name,
                             "cohort": cohort,
@@ -236,7 +250,6 @@ class HumemVectorTest(unittest.TestCase):
                 db.query(
                     "MATCH (u:User {name: 'Alice'}) SET u.embedding = $embedding",
                     route="sqlite",
-                    query_type="cypher",
                     params={"embedding": [1.0, 0.0]},
                 )
 
@@ -246,7 +259,6 @@ class HumemVectorTest(unittest.TestCase):
                         "RETURN u.id, u.name ORDER BY u.id"
                     ),
                     route="sqlite",
-                    query_type="cypher",
                 )
                 self.assertEqual(
                     graph_result.rows,
@@ -254,13 +266,14 @@ class HumemVectorTest(unittest.TestCase):
                 )
 
                 vector_result = db.query(
-                    "MATCH (u:User {cohort: 'alpha'}) RETURN u.id ORDER BY u.id",
+                    (
+                        "MATCH (u:User {cohort: 'alpha'}) "
+                        "SEARCH u IN (VECTOR INDEX embedding FOR $query LIMIT 3) "
+                        "RETURN u.id ORDER BY u.id"
+                    ),
                     route="sqlite",
-                    query_type="vector",
                     params={
                         "query": [1.0, 0.0],
-                        "top_k": 3,
-                        "scope_query_type": "cypher",
                     },
                 )
 

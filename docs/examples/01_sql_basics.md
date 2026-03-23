@@ -33,20 +33,14 @@ public Python API.
 
 ```python
 with HumemDB("app.sqlite3", "analytics.duckdb") as db:
-    db.query(
-        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, segment TEXT NOT NULL, city TEXT NOT NULL)",
-        route="sqlite",
-    )
-    db.query(
-        "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, status TEXT NOT NULL, total_cents INTEGER NOT NULL)",
-        route="sqlite",
-    )
+    db.query("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, segment TEXT NOT NULL, city TEXT NOT NULL)")
+    db.query("CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, status TEXT NOT NULL, total_cents INTEGER NOT NULL)")
 
-    with db.transaction(route="sqlite"):
-        db.executemany(..., users, route="sqlite")
-        db.executemany(..., orders, route="sqlite")
+    with db.transaction():
+        db.executemany(..., users)
+        db.executemany(..., orders)
 
-    sqlite_rows = db.query(..., route="sqlite")
+    sqlite_rows = db.query(...)
     duckdb_rollup = db.query(..., route="duckdb")
 ```
 

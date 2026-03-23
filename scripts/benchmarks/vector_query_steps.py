@@ -87,8 +87,8 @@ class BenchmarkReport:
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Benchmark step timings for vector ingest plus direct, SQL-scoped, and "
-            "Cypher-scoped vector queries."
+            "Benchmark step timings for vector ingest plus direct, SQL-filtered, and "
+            "Cypher-filtered vector queries."
         )
     )
     parser.add_argument("--rows", type=int, default=1_000)
@@ -213,9 +213,9 @@ def _candidate_target_keys_from_result(
     rows: tuple[tuple[Any, ...], ...],
     *,
     target: str,
-    scope: str,
+    namespace: str,
 ) -> set[tuple[str, str, int]]:
-    return {(target, scope, int(row[0])) for row in rows}
+    return {(target, namespace, int(row[0])) for row in rows}
 
 
 def _candidate_indexes_for_target_keys(
@@ -239,7 +239,6 @@ def _seed_cypher_vectors(db: Any, item_ids: np.ndarray, matrix: np.ndarray) -> N
                     "id: $id, name: $name, cohort: $cohort, embedding: $embedding})"
                 ),
                 route="sqlite",
-                query_type="cypher",
                 params={
                     "id": int(item_id),
                     "name": f"user_{int(item_id):05d}",
@@ -275,10 +274,21 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
     alpha_count = config.rows // 2
     batches = _chunked_rows(item_ids, matrix, batch_size=config.batch_size)
 
-    sql_scope_text = "SELECT id FROM docs WHERE topic = ? ORDER BY id"
-    sql_scope_params = ("alpha",)
-    cypher_scope_text = "MATCH (u:User {cohort: $cohort}) RETURN u.id ORDER BY u.id"
-    cypher_scope_params = {"cohort": "alpha"}
+    sql_candidate_query_text = "SELECT id FROM docs WHERE topic = $topic ORDER BY id"
+    sql_candidate_params = {"topic": "alpha"}
+    sql_vector_query_text = (
+        "SELECT id FROM docs WHERE topic = $topic "
+        "ORDER BY embedding <=> $query LIMIT $top_k"
+    )
+    cypher_candidate_query_text = (
+        "MATCH (u:User {cohort: $cohort}) RETURN u.id ORDER BY u.id"
+    )
+    cypher_candidate_params = {"cohort": "alpha"}
+    cypher_vector_query_text = (
+        "MATCH (u:User {cohort: $cohort}) "
+        "SEARCH u IN (VECTOR INDEX embedding FOR $query LIMIT $top_k) "
+        "RETURN u.id ORDER BY u.id"
+    )
 
     stage_timings_ms: dict[str, float] = {}
     latency_summaries_ms: dict[str, TimingSummary] = {}
@@ -335,11 +345,18 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
                     sql_rows = []
                     for item_id, vector in batch:
                         topic = "alpha" if item_id <= alpha_count else "beta"
-                        sql_rows.append((item_id, f"doc_{item_id}", topic, vector))
+                        sql_rows.append(
+                            {
+                                "id": item_id,
+                                "title": f"doc_{item_id}",
+                                "topic": topic,
+                                "embedding": vector,
+                            }
+                        )
                     sql_db.executemany(
                         (
                             "INSERT INTO docs (id, title, topic, embedding) "
-                            "VALUES (?, ?, ?, ?)"
+                            "VALUES ($id, $title, $topic, $embedding)"
                         ),
                         sql_rows,
                         route="sqlite",
@@ -360,15 +377,15 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
                 matrix=sql_matrix,
                 metric="cosine",
             )
-            sql_scope_result = sql_db.query(
-                sql_scope_text,
+            sql_candidate_result = sql_db.query(
+                sql_candidate_query_text,
                 route="sqlite",
-                params=sql_scope_params,
+                params=sql_candidate_params,
             )
             sql_candidate_item_ids = _candidate_target_keys_from_result(
-                sql_scope_result.rows,
+                sql_candidate_result.rows,
                 target="sql_row",
-                scope="docs",
+                namespace="docs",
             )
             sql_candidate_indexes = _candidate_indexes_for_target_keys(
                 sql_item_ids,
@@ -376,20 +393,20 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
             )
 
             latency_summaries_ms["sql_translate_cached"] = _time_operation(
-                lambda: translate_sql(sql_scope_text, target="sqlite"),
+                lambda: translate_sql(sql_candidate_query_text, target="sqlite"),
                 warmup=config.warmup,
                 repetitions=config.repetitions,
             )
             latency_summaries_ms["sql_translate_uncached"] = _time_operation(
-                lambda: _uncached_translate_sql(sql_scope_text),
+                lambda: _uncached_translate_sql(sql_candidate_query_text),
                 warmup=config.warmup,
                 repetitions=config.repetitions,
             )
-            latency_summaries_ms["sql_scope_query_only"] = _time_operation(
+            latency_summaries_ms["sql_candidate_query_only"] = _time_operation(
                 lambda: sql_db.query(
-                    sql_scope_text,
+                    sql_candidate_query_text,
                     route="sqlite",
-                    params=sql_scope_params,
+                    params=sql_candidate_params,
                 ),
                 warmup=config.warmup,
                 repetitions=config.repetitions,
@@ -414,14 +431,12 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
             )
             latency_summaries_ms["sql_vector_query_end_to_end"] = _time_query_batch(
                 lambda query: sql_db.query(
-                    sql_scope_text,
+                    sql_vector_query_text,
                     route="sqlite",
-                    query_type="vector",
                     params={
                         "query": query,
                         "top_k": config.top_k,
-                        "scope_query_type": "sql",
-                        "scope_params": sql_scope_params,
+                        **sql_candidate_params,
                     },
                 ),
                 queries,
@@ -448,17 +463,16 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
                 matrix=cypher_matrix,
                 metric="cosine",
             )
-            cypher_plan = parse_cypher(cypher_scope_text)
-            cypher_scope_result = cypher_db.query(
-                cypher_scope_text,
+            cypher_plan = parse_cypher(cypher_candidate_query_text)
+            cypher_candidate_result = cypher_db.query(
+                cypher_candidate_query_text,
                 route="sqlite",
-                query_type="cypher",
-                params=cypher_scope_params,
+                params=cypher_candidate_params,
             )
             cypher_candidate_item_ids = _candidate_target_keys_from_result(
-                cypher_scope_result.rows,
+                cypher_candidate_result.rows,
                 target="graph_node",
-                scope="",
+                namespace="",
             )
             cypher_candidate_indexes = _candidate_indexes_for_target_keys(
                 cypher_item_ids,
@@ -466,21 +480,20 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
             )
 
             latency_summaries_ms["cypher_parse_only"] = _time_operation(
-                lambda: parse_cypher(cypher_scope_text),
+                lambda: parse_cypher(cypher_candidate_query_text),
                 warmup=config.warmup,
                 repetitions=config.repetitions,
             )
             latency_summaries_ms["cypher_bind_compile"] = _time_operation(
-                lambda: _compile_cypher_bound(cypher_plan, cypher_scope_params),
+                lambda: _compile_cypher_bound(cypher_plan, cypher_candidate_params),
                 warmup=config.warmup,
                 repetitions=config.repetitions,
             )
-            latency_summaries_ms["cypher_scope_query_only"] = _time_operation(
+            latency_summaries_ms["cypher_candidate_query_only"] = _time_operation(
                 lambda: cypher_db.query(
-                    cypher_scope_text,
+                    cypher_candidate_query_text,
                     route="sqlite",
-                    query_type="cypher",
-                    params=cypher_scope_params,
+                    params=cypher_candidate_params,
                 ),
                 warmup=config.warmup,
                 repetitions=config.repetitions,
@@ -505,14 +518,12 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
             )
             latency_summaries_ms["cypher_vector_query_end_to_end"] = _time_query_batch(
                 lambda query: cypher_db.query(
-                    cypher_scope_text,
+                    cypher_vector_query_text,
                     route="sqlite",
-                    query_type="vector",
                     params={
                         "query": query,
                         "top_k": config.top_k,
-                        "scope_query_type": "cypher",
-                        "scope_params": cypher_scope_params,
+                        **cypher_candidate_params,
                     },
                 ),
                 queries,

@@ -18,7 +18,7 @@ stays coherent when vectors are owned by standalone records, SQL rows, or Cypher
 - loading SQLite-backed vector matrices into NumPy
 - SQL-owned vector writes through `INSERT` and `UPDATE`
 - Cypher-owned vector writes through `CREATE` and `MATCH ... SET`
-- vector queries scoped by SQL and Cypher surfaces
+- vector queries filtered by SQL and Cypher surfaces
 
 ## Why this test file exists
 
@@ -33,15 +33,13 @@ It is the place to add tests when the vector contract changes.
 with HumemDB("humem.sqlite3") as db:
     db.query(
         "CREATE TABLE docs (id INTEGER PRIMARY KEY, title TEXT NOT NULL, topic TEXT NOT NULL, embedding BLOB)",
-        route="sqlite",
     )
     db.executemany(
-        "INSERT INTO docs (id, title, topic, embedding) VALUES (?, ?, ?, ?)",
+        "INSERT INTO docs (id, title, topic, embedding) VALUES ($id, $title, $topic, $embedding)",
         [
-            (1, "Alpha one", "alpha", [1.0, 0.0]),
-            (2, "Alpha two", "alpha", [0.8, 0.2]),
+            {"id": 1, "title": "Alpha one", "topic": "alpha", "embedding": [1.0, 0.0]},
+            {"id": 2, "title": "Alpha two", "topic": "alpha", "embedding": [0.8, 0.2]},
         ],
-        route="sqlite",
     )
 ```
 

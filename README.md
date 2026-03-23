@@ -32,16 +32,22 @@ clear routing and defensible tradeoffs.
 
 ## ✅ Current status
 
-HumemDB already ships a real `v0` surface for three query modes:
+HumemDB already ships a real `v0` surface built around explicit SQL/Cypher text-query
+frontends plus a separate direct-vector API:
 
 - `HumemSQL v0`
 - `HumemCypher v0`
-- `HumemVector v0`
+- direct vector methods for vector-only workflows
 
 Current behavior is intentionally explicit:
 
-- Route: `sqlite` or `duckdb`
-- Query type: `sql`, `cypher`, or `vector`
+- `db.query(...)` is the text-query surface for SQL, Cypher, and language-level vector
+  search
+- direct vector search lives on methods such as `search_vectors(...)`
+- candidate-filtered vector search is expressed in SQL/Cypher syntax when SQL rows or graph nodes
+  define the candidate set first
+- `route` is still explicit, but `query_type` is no longer part of the public
+  `db.query(...)` surface
 - Writes go to SQLite
 - DuckDB is the analytical read path
 - Vector search starts from the exact baseline path today
@@ -107,6 +113,7 @@ them behind a fake "single engine" narrative.
 - PostgreSQL-like portable subset translated with `sqlglot`
 - callers write `HumemSQL v0` regardless of route; `route="sqlite"` and `route="duckdb"`
     choose the backend engine, not a backend-specific SQL dialect
+- public SQL params use named `$name` placeholders with mapping-style params
 - backend-specific SQLite or DuckDB SQL is not part of the supported public contract
 - statement coverage: `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `CREATE`
 - recursive CTEs intentionally unsupported in `v0`
@@ -122,16 +129,21 @@ them behind a fake "single engine" narrative.
 ### Vector
 
 - SQLite-backed vector storage
-- canonical vector identity uses `target`, `scope`, and `target_id`
+- canonical vector identity uses `target`, `namespace`, and `target_id`
 - exact NumPy baseline path
-- row-scoped vector search through SQL candidate queries
-- node-scoped vector search through Cypher candidate queries
-- thin direct object API for vector-only use, with narrow metadata equality filters
+- row-filtered vector search through SQL candidate queries
+- node-filtered vector search through Cypher candidate queries
+- direct vector methods for vector-only use, with narrow metadata equality filters
 - SQL INSERTs and Cypher CREATEs can carry vector values into the canonical store
 - benchmark path toward indexed ANN where justified
 
 Direct vector search returns explicit provenance columns so mixed direct, SQL-owned,
 and graph-owned vectors can coexist safely in one SQLite database.
+
+Direct vector search is intentionally separate from `db.query(...)`. Use
+`search_vectors(...)` for the direct path, and use `db.query(..., query_type="vector")`
+only when SQL or Cypher text defines the candidate set. That path exists, but
+it is not meant to be the main public starting point for HumemDB.
 
 ## ⚡ Quick example
 
@@ -139,22 +151,15 @@ and graph-owned vectors can coexist safely in one SQLite database.
 from humemdb import HumemDB
 
 with HumemDB("app.sqlite3", "analytics.duckdb") as db:
-    db.query(
-        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
-        route="sqlite",
-    )
+    db.query("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
 
-    with db.transaction(route="sqlite"):
+    with db.transaction():
         db.query(
-            "INSERT INTO users (name) VALUES (?)",
-            route="sqlite",
-            params=("Alice",),
+            "INSERT INTO users (name) VALUES ($name)",
+            params={"name": "Alice"},
         )
 
-    result = db.query(
-        "SELECT id, name FROM users",
-        route="sqlite",
-    )
+    result = db.query("SELECT id, name FROM users")
 
     print(result.rows)
 ```

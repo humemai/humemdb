@@ -23,7 +23,7 @@ from dataclasses import dataclass
 import logging
 import re
 from typing import Mapping, Sequence
-from typing import Literal
+from typing import Literal, TypeGuard, cast
 
 import numpy as np
 
@@ -36,6 +36,9 @@ from .vector import (
 )
 
 logger = logging.getLogger(__name__)
+
+_CYPHER_CREATE_PREFIX = re.compile(r"^CREATE\b")
+_CYPHER_MATCH_PREFIX = re.compile(r"^MATCH\b")
 
 ScalarPropertyValue = str | int | float | bool | None
 VectorPropertyValue = tuple[float, ...]
@@ -55,6 +58,17 @@ class ParameterRef:
 
 CypherValue = PropertyValue | ParameterRef
 PropertyItems = tuple[tuple[str, CypherValue], ...]
+ScalarQueryParam = str | int | float | bool | None
+
+
+@dataclass(frozen=True, slots=True)
+class _EncodedNodePropertyWrite:
+    """Encoded graph node property write plus optional vector payload."""
+
+    key: str
+    encoded_value: object
+    value_type: str
+    vector_value: VectorPropertyValue | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -288,7 +302,7 @@ class _CompiledMatchQuery:
     """
 
     sql: str
-    params: tuple[str | int | float | None, ...]
+    params: tuple[object, ...]
     returns: tuple[_CompiledReturnItem, ...]
 
 
@@ -450,13 +464,15 @@ def parse_cypher(text: str) -> GraphPlan:
                 f"clauses; found unsupported keyword {keyword!r}."
             )
 
-    if lowered_statement.startswith("create "):
-        plan = _parse_create(statement[7:].strip())
+    create_match = _CYPHER_CREATE_PREFIX.match(statement)
+    if create_match is not None:
+        plan = _parse_create(statement[create_match.end():].strip())
         logger.debug("Parsed Cypher statement kind=%s", type(plan).__name__)
         return plan
 
-    if lowered_statement.startswith("match "):
-        plan = _parse_match(statement[6:].strip())
+    match_match = _CYPHER_MATCH_PREFIX.match(statement)
+    if match_match is not None:
+        plan = _parse_match(statement[match_match.end():].strip())
         logger.debug("Parsed Cypher statement kind=%s", type(plan).__name__)
         return plan
 
@@ -628,8 +644,9 @@ def _execute_set_node_plan(
     matched = sqlite.execute(compiled.sql, compiled.params, query_type="cypher")
     node_ids = tuple(int(row[0]) for row in matched.rows)
 
+    assignment_value = _require_property_value(assignment.value)
     for node_id in node_ids:
-        _upsert_node_property(sqlite, node_id, assignment.field, assignment.value)
+        _upsert_node_property(sqlite, node_id, assignment.field, assignment_value)
 
     return QueryResult(
         rows=(),
@@ -665,10 +682,10 @@ def _compile_match_node_plan(plan: MatchNodePlan) -> _CompiledMatchQuery:
     order_joins: list[str] = []
     where_parts: list[str] = []
     order_parts: list[str] = []
-    from_params: list[str | int | float | None] = []
-    join_params: list[str | int | float | None] = []
-    order_params: list[str | int | float | None] = []
-    where_params: list[str | int | float | None] = []
+    from_params: list[object] = []
+    join_params: list[object] = []
+    order_params: list[object] = []
+    where_params: list[object] = []
     returns: list[_CompiledReturnItem] = []
 
     property_constraints = _node_property_constraints(plan.node, plan.predicates)
@@ -749,10 +766,10 @@ def _compile_match_relationship_plan(
     order_joins: list[str] = []
     where_parts: list[str] = [f"{edge_alias}.type = ?"]
     order_parts: list[str] = []
-    from_params: list[str | int | float | None] = []
-    join_params: list[str | int | float | None] = []
-    order_params: list[str | int | float | None] = []
-    where_params: list[str | int | float | None] = [plan.relationship.type_name]
+    from_params: list[object] = []
+    join_params: list[object] = []
+    order_params: list[object] = []
+    where_params: list[object] = [plan.relationship.type_name]
     returns: list[_CompiledReturnItem] = []
 
     left_constraints = _node_property_constraints(plan.left, plan.predicates)
@@ -935,7 +952,7 @@ def _compile_match_relationship_plan(
 def _compile_property_constraints(
     alias: str,
     constraints: list[PropertyConstraint],
-    params: list[str | int | float | None],
+    params: list[object],
     *,
     node_table: str = "graph_node_properties",
     id_column: str = "node_id",
@@ -973,7 +990,7 @@ def _compile_property_constraints(
 def _compile_node_from_clause(
     alias: str,
     anchor_constraint: PropertyConstraint | None,
-    params: list[str | int | float | None],
+    params: list[object],
 ) -> str:
     """Build the FROM clause for a node match, optionally anchored by one property.
 
@@ -1018,11 +1035,17 @@ def _node_property_constraints(
         if predicate.alias != node.alias or predicate.field in {"id", "label"}:
             continue
         constraints.append(
-            PropertyConstraint(predicate.alias, predicate.field, predicate.value)
+            PropertyConstraint(
+                predicate.alias,
+                predicate.field,
+                _require_property_value(predicate.value),
+            )
         )
 
     for key, value in node.properties:
-        constraints.append(PropertyConstraint(node.alias, key, value))
+        constraints.append(
+            PropertyConstraint(node.alias, key, _require_property_value(value))
+        )
 
     return constraints
 
@@ -1034,7 +1057,11 @@ def _relationship_property_constraints(
     """Collect one relationship pattern's property-equality constraints."""
 
     constraints = [
-        PropertyConstraint(relationship.alias or "edge_rel", key, value)
+        PropertyConstraint(
+            relationship.alias or "edge_rel",
+            key,
+            _require_property_value(value),
+        )
         for key, value in relationship.properties
     ]
 
@@ -1045,7 +1072,11 @@ def _relationship_property_constraints(
         if predicate.alias != relationship.alias or predicate.field in {"id", "type"}:
             continue
         constraints.append(
-            PropertyConstraint(relationship.alias, predicate.field, predicate.value)
+            PropertyConstraint(
+                relationship.alias,
+                predicate.field,
+                _require_property_value(predicate.value),
+            )
         )
 
     return constraints
@@ -1128,7 +1159,7 @@ def _compile_return_items(
     alias_kinds: dict[str, Literal["node", "relationship"]],
     returns_to_compile: tuple[ReturnItem, ...],
     joins: list[str],
-    params: list[str | int | float | None],
+    params: list[object],
     select_parts: list[str],
     returns: list[_CompiledReturnItem],
 ) -> None:
@@ -1183,7 +1214,7 @@ def _compile_predicates(
     alias_kinds: dict[str, Literal["node", "relationship"]],
     predicates: tuple[Predicate, ...],
     where_parts: list[str],
-    where_params: list[str | int | float | None],
+    where_params: list[object],
 ) -> None:
     """Compile supported WHERE predicates into SQL fragments and params."""
 
@@ -1195,19 +1226,20 @@ def _compile_predicates(
 
         table_alias = alias_map[predicate.alias]
         alias_kind = alias_kinds[predicate.alias]
+        predicate_value = _require_scalar_query_param(predicate.value)
         if predicate.field == "id":
             where_parts.append(f"{table_alias}.id = ?")
-            where_params.append(predicate.value)
+            where_params.append(predicate_value)
             continue
 
         if alias_kind == "node" and predicate.field == "label":
             where_parts.append(f"{table_alias}.label = ?")
-            where_params.append(predicate.value)
+            where_params.append(predicate_value)
             continue
 
         if alias_kind == "relationship" and predicate.field == "type":
             where_parts.append(f"{table_alias}.type = ?")
-            where_params.append(predicate.value)
+            where_params.append(predicate_value)
             continue
 
 
@@ -1217,7 +1249,7 @@ def _compile_order_items(
     alias_kinds: dict[str, Literal["node", "relationship"]],
     order_to_compile: tuple[OrderItem, ...],
     joins: list[str],
-    params: list[str | int | float | None],
+    params: list[object],
     order_parts: list[str],
 ) -> None:
     """Compile ORDER BY items into SQL expressions and any needed property joins.
@@ -1340,31 +1372,21 @@ def _insert_node(sqlite: SQLiteEngine, node: NodePattern) -> int:
         (node.label,),
         query_type="cypher",
     )
-    node_id = sqlite.execute(
+    node_id_row = sqlite.execute(
         "SELECT last_insert_rowid() AS node_id",
         query_type="cypher",
-    ).first()[0]
+    ).first()
+    if node_id_row is None:
+        raise ValueError("HumemCypher v0 could not resolve the created node id.")
+    node_id = node_id_row[0]
 
-    vector_rows: list[tuple[int, Sequence[float]]] = []
-    for key, value in node.properties:
-        encoded_value, value_type = _encode_property_value(value)
-        sqlite.execute(
-            "INSERT INTO graph_node_properties (node_id, key, value, value_type) "
-            "VALUES (?, ?, ?, ?)",
-            (node_id, key, encoded_value, value_type),
-            query_type="cypher",
-        )
-        if value_type == "vector":
-            vector_rows.append((int(node_id), value))
-
-    if len(vector_rows) > 1:
-        raise ValueError(
-            "HumemCypher v0 currently supports at most one vector-valued property "
-            "per created node."
-        )
-    if vector_rows:
-        ensure_vector_schema(sqlite)
-        insert_vector_rows(sqlite, vector_rows, target="graph_node", scope="")
+    property_writes = _plan_node_property_writes(node.properties)
+    _persist_node_property_writes(
+        sqlite,
+        int(node_id),
+        property_writes,
+        mode="insert",
+    )
 
     return int(node_id)
 
@@ -1382,13 +1404,18 @@ def _insert_edge(
         (relationship.type_name, left_id, right_id),
         query_type="cypher",
     )
-    edge_id = sqlite.execute(
+    edge_id_row = sqlite.execute(
         "SELECT last_insert_rowid() AS edge_id",
         query_type="cypher",
-    ).first()[0]
+    ).first()
+    if edge_id_row is None:
+        raise ValueError("HumemCypher v0 could not resolve the created edge id.")
+    edge_id = edge_id_row[0]
 
     for key, value in relationship.properties:
-        encoded_value, value_type = _encode_property_value(value)
+        encoded_value, value_type = _encode_property_value(
+            _require_property_value(value)
+        )
         sqlite.execute(
             "INSERT INTO graph_edge_properties (edge_id, key, value, value_type) "
             "VALUES (?, ?, ?, ?)",
@@ -1407,23 +1434,109 @@ def _upsert_node_property(
 ) -> None:
     """Insert or replace one graph node property and sync vector storage if needed."""
 
-    encoded_value, value_type = _encode_property_value(value)
-    sqlite.execute(
-        "INSERT INTO graph_node_properties (node_id, key, value, value_type) "
-        "VALUES (?, ?, ?, ?) "
-        "ON CONFLICT(node_id, key) DO UPDATE SET "
-        "value = excluded.value, value_type = excluded.value_type",
-        (node_id, key, encoded_value, value_type),
-        query_type="cypher",
+    property_writes = _plan_node_property_writes(((key, value),))
+    _persist_node_property_writes(
+        sqlite,
+        node_id,
+        property_writes,
+        mode="upsert",
     )
-    if value_type == "vector":
-        ensure_vector_schema(sqlite)
-        upsert_vectors(
-            sqlite,
-            [(int(node_id), value)],
-            target="graph_node",
-            scope="",
+
+
+def _plan_node_property_writes(
+    properties: PropertyItems | tuple[tuple[str, PropertyValue], ...],
+) -> tuple[_EncodedNodePropertyWrite, ...]:
+    """Encode one node-property batch into explicit property write objects."""
+
+    writes: list[_EncodedNodePropertyWrite] = []
+    for key, value in properties:
+        property_value = cast(PropertyValue, value)
+        encoded_value, value_type = _encode_property_value(property_value)
+        writes.append(
+            _EncodedNodePropertyWrite(
+                key=key,
+                encoded_value=encoded_value,
+                value_type=value_type,
+                vector_value=(
+                    cast(VectorPropertyValue, property_value)
+                    if value_type == "vector"
+                    else None
+                ),
+            )
         )
+
+    return tuple(writes)
+
+
+def _persist_node_property_writes(
+    sqlite: SQLiteEngine,
+    node_id: int,
+    property_writes: tuple[_EncodedNodePropertyWrite, ...],
+    *,
+    mode: Literal["insert", "upsert"],
+) -> None:
+    """Persist encoded node-property writes and sync graph-node vectors."""
+
+    vector_rows: list[tuple[int, Sequence[float]]] = []
+    for property_write in property_writes:
+        if mode == "insert":
+            sqlite.execute(
+                "INSERT INTO graph_node_properties (node_id, key, value, value_type) "
+                "VALUES (?, ?, ?, ?)",
+                (
+                    node_id,
+                    property_write.key,
+                    property_write.encoded_value,
+                    property_write.value_type,
+                ),
+                query_type="cypher",
+            )
+        else:
+            sqlite.execute(
+                "INSERT INTO graph_node_properties (node_id, key, value, value_type) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(node_id, key) DO UPDATE SET "
+                "value = excluded.value, value_type = excluded.value_type",
+                (
+                    node_id,
+                    property_write.key,
+                    property_write.encoded_value,
+                    property_write.value_type,
+                ),
+                query_type="cypher",
+            )
+
+        if property_write.vector_value is not None:
+            vector_rows.append((int(node_id), property_write.vector_value))
+
+    if len(vector_rows) > 1:
+        raise ValueError(
+            "HumemCypher v0 currently supports at most one vector-valued property "
+            "per created node."
+        )
+    if vector_rows:
+        _sync_graph_node_vectors(sqlite, vector_rows, mode=mode)
+
+
+def _sync_graph_node_vectors(
+    sqlite: SQLiteEngine,
+    vector_rows: Sequence[tuple[int, Sequence[float]]],
+    *,
+    mode: Literal["insert", "upsert"],
+) -> None:
+    """Persist graph-node vectors for encoded Cypher node-property writes."""
+
+    ensure_vector_schema(sqlite)
+    if mode == "insert":
+        insert_vector_rows(sqlite, vector_rows, target="graph_node", namespace="")
+        return
+
+    upsert_vectors(
+        sqlite,
+        vector_rows,
+        target="graph_node",
+        namespace="",
+    )
 
 
 def _parse_node_pattern(text: str, *, require_label: bool = False) -> NodePattern:
@@ -1492,11 +1605,12 @@ def _parse_order_items(text: str) -> tuple[OrderItem, ...]:
         item_text = raw_item.strip()
         parts = item_text.rsplit(None, 1)
         direction = "asc"
+        direction: Literal["asc", "desc"] = "asc"
         target = item_text
 
         if len(parts) == 2 and parts[1].lower() in {"asc", "desc"}:
             target = parts[0]
-            direction = parts[1].lower()
+            direction = cast(Literal["asc", "desc"], parts[1].lower())
 
         match = _RETURN_ITEM_RE.fullmatch(target.strip())
         if match is None:
@@ -1530,6 +1644,7 @@ def _split_return_clause(
         return text.strip(), (), None
 
     if order_by_match is None:
+        assert limit_match is not None
         returns_text = text[:limit_match.start()].strip()
         limit = _parse_limit_clause(text[limit_match.end():].strip())
         return returns_text, (), limit
@@ -1623,7 +1738,7 @@ def _parse_properties(text: str | None) -> PropertyItems:
     if text is None or not text.strip():
         return ()
 
-    properties: list[tuple[str, PropertyValue]] = []
+    properties: list[tuple[str, CypherValue]] = []
     for item in _split_comma_separated(text):
         key_text, value_text = _split_outside_string(item, ":")
         key = key_text.strip()
@@ -1669,7 +1784,7 @@ def _parse_literal(text: str) -> CypherValue:
     )
 
 
-def _encode_property_value(value: PropertyValue) -> tuple[str | None, str]:
+def _encode_property_value(value: PropertyValue) -> tuple[object, str]:
     """Encode one graph property into the typed SQLite storage representation."""
 
     if value is None:
@@ -1723,7 +1838,7 @@ def _normalize_params(
         return {}
 
     if isinstance(params, Mapping):
-        return params
+        return cast(Mapping[str, PropertyValue], params)
 
     raise NotImplementedError(
         "HumemCypher v0 only supports named parameter mappings."
@@ -1871,7 +1986,26 @@ def _resolve_cypher_value(
     )
 
 
-def _is_vector_param_value(value: object) -> bool:
+def _require_property_value(value: CypherValue) -> PropertyValue:
+    """Return one already-bound Cypher value as a concrete property value."""
+
+    if isinstance(value, ParameterRef):
+        raise ValueError("HumemCypher v0 encountered an unbound parameter value.")
+    return value
+
+
+def _require_scalar_query_param(value: CypherValue) -> ScalarQueryParam:
+    """Return one already-bound Cypher value that is valid as a scalar SQL param."""
+
+    resolved = _require_property_value(value)
+    if isinstance(resolved, tuple):
+        raise ValueError(
+            "HumemCypher v0 does not allow vector values in scalar predicates."
+        )
+    return resolved
+
+
+def _is_vector_param_value(value: object) -> TypeGuard[Sequence[int | float]]:
     """Return whether one parameter value should be treated as a vector sequence."""
 
     if isinstance(value, (str, bytes, bytearray, memoryview)):

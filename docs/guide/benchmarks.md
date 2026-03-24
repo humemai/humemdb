@@ -58,6 +58,30 @@ Current takeaway:
 - The SQL benchmark also now covers wider table schemas plus windowed, `EXISTS`, and
   `DISTINCT` query shapes, and can emit JSON summaries with `--output-json`.
 
+Current SQL crossover summary from the full routing sweep:
+
+| Workload | Shape | First DuckDB win | Takeaway |
+| --- | --- | ---: | --- |
+| `event_point_lookup` | `point_lookup` | none | Indexed point reads stay on SQLite across the current sweep. |
+| `event_filtered_range` | `filtered_range` | none | Selective filtered reads still stay on SQLite. |
+| `event_aggregate_topk` | `scan_group_limit` | `10k` | Broad grouped scan work crosses to DuckDB immediately. |
+| `event_region_join` | `join_group_order` | `10k` | Low-selectivity join-group work also crosses early. |
+| `event_active_user_join_lookup` | `selective_join_lookup` | none | A selective join lookup remains SQLite territory. |
+| `event_active_user_rollup` | `filtered_join_group` | `10k` | Grouped join rollups cross early even when filtered. |
+| `event_cte_daily_rollup` | `cte_group_order` | `10k` | CTE-backed broad aggregation is an early DuckDB win. |
+| `event_window_rank` | `window_partition_order` | `10k` | Windowed ranking also crosses early in the current dataset family. |
+| `document_owner_region_rollup` | `broad_multi_join_group` | `100k` | Broader document-owner aggregation crosses later, around the mid-scale tier. |
+| `document_distinct_owner_regions` | `distinct_join_projection` | `1M` | `DISTINCT` join projection does not flip until the larger scales. |
+| `memory_hot_rollup` | `filtered_group_limit` | `1M` | Memory rollups sit in the crossover region and only move at larger scales. |
+
+Routing takeaway from the current SQL sweep:
+
+- broad grouped, windowed, or CTE-backed SQL reads have enough evidence for
+  conservative DuckDB admission
+- selective point reads and selective join lookups should still stay on SQLite
+- join presence alone is not enough; selectivity and breadth still matter more than
+  surface syntax
+
 ### Graph benchmark
 
 ```bash
@@ -77,6 +101,28 @@ Current takeaway:
   routing work can reason about anchored lookup versus broader traversal families.
 - The Cypher benchmark also now includes `Team` nodes plus `MEMBER_OF` edges and can
   emit JSON summaries with `--output-json`.
+
+Current Cypher crossover summary from the full routing sweep:
+
+| Workload | Shape | First DuckDB win | Takeaway |
+| --- | --- | ---: | --- |
+| `user_lookup` | `anchored_node_lookup` | none | Anchored node lookups remain firmly SQLite-favored. |
+| `document_lookup` | `anchored_node_lookup` | none | Anchored document lookup stays on SQLite. |
+| `topic_lookup` | `anchored_node_lookup` | none | Anchored topic lookup stays on SQLite. |
+| `team_lookup` | `anchored_node_lookup` | none | The added `Team` node family also stays on SQLite. |
+| `social_expand` | `broad_relationship_expand` | `1M` | Broad `KNOWS` traversal is the first current graph workload to cross to DuckDB. |
+| `social_expand_ordered` | `ordered_relationship_expand` | none | Ordering plus `LIMIT` still does not make this traversal a DuckDB win. |
+| `social_reverse_since_anchor` | `relationship_property_anchor` | none | Reverse-edge traversal with property anchoring stays SQLite-favored. |
+| `author_expand` | `selective_relationship_expand` | none | Selective authored traversal stays on SQLite. |
+| `tagged_topic_fanout` | `topic_fanout_expand` | none | Topic-side fanout still does not justify DuckDB. |
+| `team_membership_expand` | `membership_expand` | none | The new `MEMBER_OF` traversal family stays on SQLite. |
+
+Routing takeaway from the current Cypher sweep:
+
+- current graph evidence is still too narrow for broad automatic DuckDB routing
+- SQLite should remain the default recommendation for omitted-route Cypher reads
+- only one current broad-fanout family crosses, and only at `1M`, so graph routing
+  should stay more conservative than SQL routing
 
 ### Routing sweep helpers
 

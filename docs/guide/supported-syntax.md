@@ -14,7 +14,7 @@ Current SQL direction:
 
 - PostgreSQL-like source syntax
 - translated through `sqlglot`
-- executed on SQLite or DuckDB depending on the selected route
+- executed on SQLite or DuckDB depending on the explicit or inferred route
 - backend-specific SQL is not part of the public contract
 
 Current statement subset:
@@ -64,6 +64,8 @@ Current Cypher direction:
 - Neo4j-like graph query syntax
 - handwritten narrow parser and relational lowering over SQLite-backed graph tables
 - explicit subset rather than broad Cypher compatibility
+- omitted `route` currently keeps Cypher on SQLite by default, even though explicit
+  `route="duckdb"` still exists for narrow graph-read use
 
 Current statement subset:
 

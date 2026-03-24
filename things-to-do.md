@@ -355,7 +355,7 @@ Status: in progress.
 
 Add automatic routing and deeper query/workload classification.
 
-Status: planned.
+Status: in progress.
 
 - [x] Keep `route` out of the main public mental model as `db.query(...)` becomes the
   main explicit surface.
@@ -364,17 +364,17 @@ Status: planned.
 - [x] Treat query-type inference as a convenience feature, not as part of the core
   vector model.
 - [ ] Keep `route` internal even after automatic routing is added.
-- [ ] Build on the current text-surface inference and parser/planner work instead of
+- [x] Build on the current text-surface inference and parser/planner work instead of
   reintroducing public query-type controls.
-- [ ] Validate the supported portable SQL and Cypher subsets before routing a query.
+- [x] Validate the supported portable SQL and Cypher subsets before routing a query.
 - [ ] Keep internal direct vector-object calls explicit instead of trying to infer
   vector intent from arbitrary free-form text.
-- [ ] Classify queries safely at first: read versus write, then simple OLTP-style
+- [x] Classify queries safely at first: read versus write, then simple OLTP-style
   versus OLAP-style read shapes.
-- [ ] Keep the first automatic-routing implementation in Python and make its behavior
+- [x] Keep the first automatic-routing implementation in Python and make its behavior
   explainable in tests and logs.
-- [ ] Route writes, point reads, and explicit transactional work to SQLite.
-- [ ] Route broader scans, aggregates, and analytical reads to DuckDB.
+- [x] Route writes, point reads, and explicit transactional work to SQLite.
+- [x] Route broader scans, aggregates, and analytical reads to DuckDB.
 - [x] Keep SQL OLAP-to-DuckDB recommendation conservative until the benchmark suite
   produces calibrated admission thresholds; do not treat every join or aggregate as
   enough evidence on its own.
@@ -391,7 +391,7 @@ Status: planned.
   terminal output.
 - [x] Add a routing sweep helper plus a threshold-report helper so SQL and Cypher
   crossover summaries can be reproduced from code rather than ad hoc shell history.
-- [ ] Record the current graph-routing boundary explicitly in code and docs: present
+- [x] Record the current graph-routing boundary explicitly in code and docs: present
   Cypher evidence is still not broad enough to harden automatic DuckDB routing beyond
   a narrow broad-fanout case, so graph reads should remain SQLite-preferred until the
   benchmark matrix gets stronger.

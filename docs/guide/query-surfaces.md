@@ -11,8 +11,9 @@ For the exact supported PostgreSQL-like SQL and Neo4j-like Cypher subset, see
 - PostgreSQL-like source syntax.
 - Translated with `sqlglot` into backend SQL.
 - `db.query(...)` is the public entry point for explicit SQL text.
-- Users write `HumemSQL v0` regardless of route; `route` selects the execution backend,
-  not a backend-specific SQL dialect.
+- Users write `HumemSQL v0` regardless of route; omitted `route` lets HumemDB choose a
+  conservative execution backend, while explicit `route` overrides that choice and
+  still does not expose a backend-specific SQL dialect.
 - Backend-specific SQLite or DuckDB SQL is not part of the supported public SQL
   contract.
 - Public writes go to SQLite.
@@ -23,7 +24,8 @@ For the exact supported PostgreSQL-like SQL and Neo4j-like Cypher subset, see
 - Separate frontend, not a SQL dialect.
 - `db.query(...)` is the public entry point for explicit Cypher text.
 - Graph data is stored in SQL tables.
-- Cypher reads can run on SQLite or DuckDB.
+- Omitted `route` currently keeps Cypher reads on SQLite by default.
+- Explicit `route="duckdb"` still exists for controlled graph-read use.
 - Cypher writes still go to SQLite.
 
 ## `HumemVector v0`
@@ -44,9 +46,12 @@ For the exact supported PostgreSQL-like SQL and Neo4j-like Cypher subset, see
 
 ## Implementation notes
 
-- `route` remains explicit.
+- `route` is now optional on `db.query(...)`.
 - `db.query(...)` now infers SQL, the current narrow Cypher subset, and the current
   language-level vector forms directly from the query text.
+- When `route` is omitted, HumemDB uses the current conservative workload classifier:
+  broad analytical SQL may route to DuckDB, while writes, ambiguous SQL, and current
+  Cypher reads stay on SQLite.
 - Internally the vector path still lowers to a candidate query plus exact vector
   ranking, but that split is no longer part of the public query API.
 

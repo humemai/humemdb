@@ -1,7 +1,7 @@
 """High-level embedded database interface for HumemDB.
 
 The `HumemDB` class is the public entry point for the current runtime. It owns the
-SQLite and DuckDB engine wrappers, exposes an explicit routing API, and defines the
+SQLite and DuckDB engine wrappers, exposes a conservative routing API, and defines the
 current lifecycle semantics for queries and transactions.
 
 The current public surface is intentionally conservative:
@@ -11,6 +11,8 @@ The current public surface is intentionally conservative:
     vector ordering or Neo4j-like Cypher `SEARCH ... VECTOR INDEX ...` text
 - SQLite is the canonical public write target, including vectors
 - DuckDB is read-only through the public API
+- omitted-route SQL can auto-route conservatively, while explicit routes still
+    override that recommendation
 - PostgreSQL-like SQL is translated into backend SQL before execution
 - transaction control is explicit and route-bound
 
@@ -129,6 +131,7 @@ class _QueryExecutionPlan:
     sql_plan: _SQLTranslationPlan | None = None
     cypher_plan: _GraphPlan | None = None
     cypher_shape: _CypherPlanShape | None = None
+    vector_plan: _CandidateVectorQueryPlan | None = None
     sql_is_read_only: bool | None = None
 
 
@@ -244,15 +247,16 @@ class HumemDB:
         self,
         text: str,
         *,
-        route: Route = "sqlite",
+        route: Route | None = None,
         params: QueryParameters = None,
     ) -> QueryResult:
-        """Execute a query against the explicitly selected engine.
+        """Execute a query against an explicit or inferred engine route.
 
         Args:
             text: Query text to execute.
-            route: Engine route. Defaults to `sqlite`. Use `duckdb` explicitly for
-                analytical reads.
+            route: Optional engine route. When omitted, HumemDB uses the current
+                internal workload classifier to choose a conservative route. Use
+                `sqlite` or `duckdb` explicitly to override that recommendation.
             params: Optional named parameters. Public SQL, Cypher, and language-level
                 vector queries use mapping-style params such as
                 `{ "name": "Alice" }`.
@@ -443,7 +447,11 @@ class HumemDB:
                 "SQLite is the canonical vector store and exact NumPy search path."
             )
 
-        vector_plan = _plan_candidate_vector_query(plan.text, plan.params)
+        vector_plan = plan.vector_plan
+        if vector_plan is None:
+            raise ValueError(
+                "HumemDB internal vector plans require a precomputed vector plan."
+            )
         resolved_candidates = self._resolve_candidate_vector_query(
             vector_plan,
         )
@@ -780,8 +788,8 @@ class HumemDB:
         )
         return candidate_vector_result_from_query_result(
             candidate_result,
-            candidate_query_text=candidate_query.text,
-            candidate_query_type=candidate_query.query_type,
+            target=candidate_query.target,
+            namespace=candidate_query.namespace,
         )
 
     def _resolve_direct_vector_search(
@@ -1131,7 +1139,7 @@ def _infer_query_type(text: str) -> QueryType:
 def _plan_query(
     text: str,
     *,
-    route: Route,
+    route: Route | None,
     query_type: QueryType | None = None,
     params: QueryParameters,
 ) -> _QueryExecutionPlan:
@@ -1139,15 +1147,19 @@ def _plan_query(
 
     resolved_query_type = query_type or _infer_query_type(text)
     _validate_public_query_params(resolved_query_type, params)
+    _validate_query_route(route)
     translated_text = None
     sql_plan = None
     cypher_plan = None
     cypher_shape = None
+    vector_plan = None
     sql_is_read_only = None
-    if resolved_query_type == "sql" and route in {"sqlite", "duckdb"}:
-        sql_plan = translate_sql_plan(text, target=route)
-        translated_text = sql_plan.translated_text
+    planning_route: Route = route or "sqlite"
+    if resolved_query_type == "sql":
+        sql_plan = translate_sql_plan(text, target=planning_route)
         sql_is_read_only = sql_plan.is_read_only
+    elif resolved_query_type == "vector":
+        vector_plan = _plan_candidate_vector_query(text, params)
     elif resolved_query_type == "cypher":
         cypher_plan = parse_cypher(text)
         cypher_shape = analyze_cypher_plan(cypher_plan)
@@ -1156,10 +1168,15 @@ def _plan_query(
         sql_plan=sql_plan,
         cypher_shape=cypher_shape,
     )
+    resolved_route = route or workload.preferred_route
+    if resolved_query_type == "sql":
+        sql_plan = translate_sql_plan(text, target=resolved_route)
+        translated_text = sql_plan.translated_text
+        sql_is_read_only = sql_plan.is_read_only
 
     return _QueryExecutionPlan(
         text=text,
-        route=route,
+        route=resolved_route,
         query_type=resolved_query_type,
         params=params,
         workload=workload,
@@ -1167,6 +1184,7 @@ def _plan_query(
         sql_plan=sql_plan,
         cypher_plan=cypher_plan,
         cypher_shape=cypher_shape,
+        vector_plan=vector_plan,
         sql_is_read_only=sql_is_read_only,
     )
 
@@ -1254,6 +1272,15 @@ def _classify_workload(
         preferred_route="sqlite",
         reason="Simple read-only SQL stays classified as transactional.",
     )
+
+
+def _validate_query_route(route: Route | None) -> None:
+    """Reject unsupported explicit query routes before planning continues."""
+
+    if route is None:
+        return
+    if route not in {"sqlite", "duckdb"}:
+        raise ValueError(f"Unsupported route: {route!r}")
 
 
 def _matches_sql_olap_thresholds(

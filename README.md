@@ -46,10 +46,12 @@ Current behavior is intentionally explicit:
 - direct vector search lives on methods such as `search_vectors(...)`
 - candidate-filtered vector search is expressed in SQL/Cypher syntax when SQL rows or graph nodes
   define the candidate set first
-- `route` is still explicit, but `query_type` is no longer part of the public
-  `db.query(...)` surface
+- `db.query(...)` can infer a conservative execution route when `route` is omitted,
+  while explicit `route="sqlite"` or `route="duckdb"` still overrides that choice
+- `query_type` is no longer part of the public `db.query(...)` surface
 - Writes go to SQLite
-- DuckDB is the analytical read path
+- broad analytical SQL can route to DuckDB; ambiguous SQL and current Cypher reads stay
+  on SQLite by default
 - Vector search starts from the exact baseline path today
 
 ## 🔗 Documentation
@@ -111,8 +113,9 @@ them behind a fake "single engine" narrative.
 ### SQL
 
 - PostgreSQL-like portable subset translated with `sqlglot`
-- callers write `HumemSQL v0` regardless of route; `route="sqlite"` and `route="duckdb"`
-    choose the backend engine, not a backend-specific SQL dialect
+- callers write `HumemSQL v0` regardless of route; omitted `route` lets HumemDB pick a
+  conservative backend, while `route="sqlite"` and `route="duckdb"` still explicitly
+  choose the engine and not a backend-specific SQL dialect
 - public SQL params use named `$name` placeholders with mapping-style params
 - backend-specific SQLite or DuckDB SQL is not part of the supported public contract
 - statement coverage: `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `CREATE`
@@ -125,6 +128,8 @@ them behind a fake "single engine" narrative.
 - relationship aliases and reverse-edge matches
 - simple `WHERE ... AND ...` equality filtering
 - `ORDER BY` and `LIMIT`
+- omitted `route` currently keeps Cypher on SQLite by default; explicit `route="duckdb"`
+  still exists for controlled graph-read experiments
 
 ### Vector
 
@@ -141,9 +146,10 @@ Direct vector search returns explicit provenance columns so mixed direct, SQL-ow
 and graph-owned vectors can coexist safely in one SQLite database.
 
 Direct vector search is intentionally separate from `db.query(...)`. Use
-`search_vectors(...)` for the direct path, and use `db.query(..., query_type="vector")`
-only when SQL or Cypher text defines the candidate set. That path exists, but
-it is not meant to be the main public starting point for HumemDB.
+`search_vectors(...)` for the direct path, and use SQL or Cypher text through
+`db.query(...)` when those language surfaces define the candidate set first.
+That path exists, but it is not meant to be the main public starting point for
+HumemDB.
 
 ## ⚡ Quick example
 

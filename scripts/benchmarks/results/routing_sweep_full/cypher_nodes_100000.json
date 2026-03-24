@@ -1,0 +1,657 @@
+{
+  "batch_size": 5000,
+  "benchmark": "cypher_graph_path",
+  "dataset": {
+    "authored_edges": 30000,
+    "documents": 30000,
+    "knows_edges": 180000,
+    "member_of_edges": 45000,
+    "seed_seconds": 3.2127925236709416,
+    "tagged_edges": 60000,
+    "teams": 8333,
+    "topics": 16667,
+    "total_nodes": 100000,
+    "total_storage_rows": 1105000,
+    "users": 45000
+  },
+  "fanout": 4,
+  "repetitions": 2,
+  "tag_fanout": 2,
+  "thread_limit": "8",
+  "warmup": 1,
+  "workloads": {
+    "author_expand": {
+      "cypher_compile": {
+        "max_ms": 0.04536006599664688,
+        "mean_ms": 0.0434450339525938,
+        "min_ms": 0.041530001908540726,
+        "stdev_ms": 0.0019150320440530777
+      },
+      "cypher_parse": {
+        "max_ms": 0.030020251870155334,
+        "mean_ms": 0.027640024200081825,
+        "min_ms": 0.025259796530008316,
+        "stdev_ms": 0.002380227670073509
+      },
+      "duckdb_cypher": {
+        "max_ms": 193.49515112116933,
+        "mean_ms": 182.82291339710355,
+        "min_ms": 172.15067567303777,
+        "stdev_ms": 10.67223772406578
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 179.29005436599255,
+        "mean_ms": 176.47692072205245,
+        "min_ms": 173.66378707811236,
+        "stdev_ms": 2.813133643940091
+      },
+      "family": "edge",
+      "params": {
+        "published": true,
+        "region": "region_7"
+      },
+      "query": "MATCH (u:User)-[:AUTHORED]->(d:Document) WHERE u.region = $region AND d.published = $published RETURN u.name, d.title",
+      "selectivity": "medium",
+      "shape": "selective_relationship_expand",
+      "sqlite_cypher": {
+        "max_ms": 46.56878486275673,
+        "mean_ms": 44.651657808572054,
+        "min_ms": 42.73453075438738,
+        "stdev_ms": 1.9171270541846752
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 47.87003714591265,
+        "mean_ms": 46.623430447652936,
+        "min_ms": 45.376823749393225,
+        "stdev_ms": 1.2466066982597113
+      }
+    },
+    "author_expand_ordered": {
+      "cypher_compile": {
+        "max_ms": 0.04784995689988136,
+        "mean_ms": 0.044064829126000404,
+        "min_ms": 0.040279701352119446,
+        "stdev_ms": 0.0037851277738809586
+      },
+      "cypher_parse": {
+        "max_ms": 0.03282027319073677,
+        "mean_ms": 0.029345275834202766,
+        "min_ms": 0.025870278477668762,
+        "stdev_ms": 0.003474997356534004
+      },
+      "duckdb_cypher": {
+        "max_ms": 203.0013119801879,
+        "mean_ms": 202.76726689189672,
+        "min_ms": 202.53322180360556,
+        "stdev_ms": 0.2340450882911682
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 202.99799228087068,
+        "mean_ms": 198.5906371846795,
+        "min_ms": 194.18328208848834,
+        "stdev_ms": 4.407355096191168
+      },
+      "family": "edge",
+      "params": {
+        "published": true
+      },
+      "query": "MATCH (u:User)-[:AUTHORED]->(d:Document) WHERE d.published = $published RETURN u.name, d.title, d.score ORDER BY d.score DESC LIMIT 100",
+      "selectivity": "medium",
+      "shape": "ordered_relationship_expand",
+      "sqlite_cypher": {
+        "max_ms": 75.44553000479937,
+        "mean_ms": 75.22012013942003,
+        "min_ms": 74.9947102740407,
+        "stdev_ms": 0.2254098653793335
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 69.33790165930986,
+        "mean_ms": 69.15306230075657,
+        "min_ms": 68.96822294220328,
+        "stdev_ms": 0.18483935855329037
+      }
+    },
+    "document_lookup": {
+      "cypher_compile": {
+        "max_ms": 0.034499913454055786,
+        "mean_ms": 0.03208988346159458,
+        "min_ms": 0.029679853469133377,
+        "stdev_ms": 0.0024100299924612045
+      },
+      "cypher_parse": {
+        "max_ms": 0.023900065571069717,
+        "mean_ms": 0.02140505239367485,
+        "min_ms": 0.018910039216279984,
+        "stdev_ms": 0.002495013177394867
+      },
+      "duckdb_cypher": {
+        "max_ms": 157.6084983535111,
+        "mean_ms": 154.9717802554369,
+        "min_ms": 152.3350621573627,
+        "stdev_ms": 2.6367180980741978
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 152.19600219279528,
+        "mean_ms": 151.7448362428695,
+        "min_ms": 151.29367029294372,
+        "stdev_ms": 0.4511659499257803
+      },
+      "family": "node",
+      "params": {
+        "title": "document_15000"
+      },
+      "query": "MATCH (d:Document) WHERE d.title = $title RETURN d.title, d.category, d.published, d.score",
+      "selectivity": "high",
+      "shape": "anchored_node_lookup",
+      "sqlite_cypher": {
+        "max_ms": 0.07640011608600616,
+        "mean_ms": 0.07031508721411228,
+        "min_ms": 0.0642300583422184,
+        "stdev_ms": 0.006085028871893883
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 0.02624979242682457,
+        "mean_ms": 0.021349871531128883,
+        "min_ms": 0.016449950635433197,
+        "stdev_ms": 0.004899920895695686
+      }
+    },
+    "social_expand": {
+      "cypher_compile": {
+        "max_ms": 0.05145976319909096,
+        "mean_ms": 0.04812539555132389,
+        "min_ms": 0.044791027903556824,
+        "stdev_ms": 0.003334367647767067
+      },
+      "cypher_parse": {
+        "max_ms": 0.03563007339835167,
+        "mean_ms": 0.03147497773170471,
+        "min_ms": 0.027319882065057755,
+        "stdev_ms": 0.004155095666646957
+      },
+      "duckdb_cypher": {
+        "max_ms": 183.27205907553434,
+        "mean_ms": 181.7621618974954,
+        "min_ms": 180.25226471945643,
+        "stdev_ms": 1.5098971780389547
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 187.55954410880804,
+        "mean_ms": 185.6996815185994,
+        "min_ms": 183.83981892839074,
+        "stdev_ms": 1.8598625902086496
+      },
+      "family": "edge",
+      "params": {
+        "active": true,
+        "region": "region_11"
+      },
+      "query": "MATCH (a:User)-[:KNOWS]->(b:User) WHERE a.region = $region AND b.active = $active RETURN a.name, b.name",
+      "selectivity": "low",
+      "shape": "broad_relationship_expand",
+      "sqlite_cypher": {
+        "max_ms": 143.50493205711246,
+        "mean_ms": 142.68761547282338,
+        "min_ms": 141.8702988885343,
+        "stdev_ms": 0.8173165842890739
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 145.11046325787902,
+        "mean_ms": 144.84430314041674,
+        "min_ms": 144.57814302295446,
+        "stdev_ms": 0.2661601174622774
+      }
+    },
+    "social_expand_ordered": {
+      "cypher_compile": {
+        "max_ms": 0.04501035436987877,
+        "mean_ms": 0.041800085455179214,
+        "min_ms": 0.03858981654047966,
+        "stdev_ms": 0.0032102689146995544
+      },
+      "cypher_parse": {
+        "max_ms": 0.03564031794667244,
+        "mean_ms": 0.03132503479719162,
+        "min_ms": 0.0270097516477108,
+        "stdev_ms": 0.00431528314948082
+      },
+      "duckdb_cypher": {
+        "max_ms": 203.9429428987205,
+        "mean_ms": 202.83075189217925,
+        "min_ms": 201.718560885638,
+        "stdev_ms": 1.1121910065412521
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 191.73805881291628,
+        "mean_ms": 189.43135091103613,
+        "min_ms": 187.124643009156,
+        "stdev_ms": 2.306707901880145
+      },
+      "family": "edge",
+      "params": {
+        "region": "region_11"
+      },
+      "query": "MATCH (a:User)-[:KNOWS]->(b:User) WHERE a.region = $region RETURN a.name, b.name, b.reputation ORDER BY b.reputation DESC LIMIT 500",
+      "selectivity": "low",
+      "shape": "ordered_relationship_expand",
+      "sqlite_cypher": {
+        "max_ms": 28.29237375408411,
+        "mean_ms": 28.20289321243763,
+        "min_ms": 28.11341267079115,
+        "stdev_ms": 0.08948054164648056
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 28.457044158130884,
+        "mean_ms": 28.396639274433255,
+        "min_ms": 28.336234390735626,
+        "stdev_ms": 0.060404883697628975
+      }
+    },
+    "social_expand_unfiltered": {
+      "cypher_compile": {
+        "max_ms": 0.026790425181388855,
+        "mean_ms": 0.02479017712175846,
+        "min_ms": 0.022789929062128067,
+        "stdev_ms": 0.002000248059630394
+      },
+      "cypher_parse": {
+        "max_ms": 0.01859990879893303,
+        "mean_ms": 0.016354955732822418,
+        "min_ms": 0.014110002666711807,
+        "stdev_ms": 0.002244953066110611
+      },
+      "duckdb_cypher": {
+        "max_ms": 110.89774314314127,
+        "mean_ms": 109.52372616156936,
+        "min_ms": 108.14970917999744,
+        "stdev_ms": 1.3740169815719128
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 113.52922488003969,
+        "mean_ms": 112.70769452676177,
+        "min_ms": 111.88616417348385,
+        "stdev_ms": 0.8215303532779217
+      },
+      "family": "edge",
+      "params": {},
+      "query": "MATCH (a:User)-[:KNOWS]->(b:User) RETURN a.name, b.name LIMIT 5000",
+      "selectivity": "very_low",
+      "shape": "full_relationship_expand",
+      "sqlite_cypher": {
+        "max_ms": 14.009406324476004,
+        "mean_ms": 13.98565643467009,
+        "min_ms": 13.961906544864178,
+        "stdev_ms": 0.02374988980591297
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 12.786625418812037,
+        "mean_ms": 12.738965218886733,
+        "min_ms": 12.69130501896143,
+        "stdev_ms": 0.04766019992530346
+      }
+    },
+    "social_reverse_since_anchor": {
+      "cypher_compile": {
+        "max_ms": 0.04361104220151901,
+        "mean_ms": 0.04066550172865391,
+        "min_ms": 0.0377199612557888,
+        "stdev_ms": 0.0029455404728651047
+      },
+      "cypher_parse": {
+        "max_ms": 0.03275042399764061,
+        "mean_ms": 0.029155053198337555,
+        "min_ms": 0.0255596823990345,
+        "stdev_ms": 0.003595370799303055
+      },
+      "duckdb_cypher": {
+        "max_ms": 198.15362710505724,
+        "mean_ms": 197.93990650214255,
+        "min_ms": 197.72618589922786,
+        "stdev_ms": 0.21372060291469097
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 184.3598810955882,
+        "mean_ms": 182.58753302507102,
+        "min_ms": 180.81518495455384,
+        "stdev_ms": 1.7723480705171824
+      },
+      "family": "edge",
+      "params": {
+        "active": true,
+        "since": 2021
+      },
+      "query": "MATCH (b:User)<-[r:KNOWS]-(a:User) WHERE r.since = $since AND b.active = $active RETURN a.name, b.name",
+      "selectivity": "medium",
+      "shape": "relationship_property_anchor",
+      "sqlite_cypher": {
+        "max_ms": 116.38967879116535,
+        "mean_ms": 116.00456852465868,
+        "min_ms": 115.61945825815201,
+        "stdev_ms": 0.3851102665066719
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 111.27150291576982,
+        "mean_ms": 109.7663959953934,
+        "min_ms": 108.26128907501698,
+        "stdev_ms": 1.50510692037642
+      }
+    },
+    "tagged_expand": {
+      "cypher_compile": {
+        "max_ms": 0.06050989031791687,
+        "mean_ms": 0.0555447768419981,
+        "min_ms": 0.05057966336607933,
+        "stdev_ms": 0.00496511347591877
+      },
+      "cypher_parse": {
+        "max_ms": 0.0464501790702343,
+        "mean_ms": 0.044365180656313896,
+        "min_ms": 0.042280182242393494,
+        "stdev_ms": 0.0020849984139204025
+      },
+      "duckdb_cypher": {
+        "max_ms": 157.567017711699,
+        "mean_ms": 157.12535241618752,
+        "min_ms": 156.68368712067604,
+        "stdev_ms": 0.44166529551148415
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 176.7938109114766,
+        "mean_ms": 176.1109901126474,
+        "min_ms": 175.42816931381822,
+        "stdev_ms": 0.6828207988291979
+      },
+      "family": "edge",
+      "params": {
+        "category": "category_5",
+        "domain": "domain_3"
+      },
+      "query": "MATCH (d:Document)-[:TAGGED]->(t:Topic) WHERE d.category = $category AND t.domain = $domain RETURN d.title, t.slug",
+      "selectivity": "high",
+      "shape": "selective_relationship_expand",
+      "sqlite_cypher": {
+        "max_ms": 8.963160682469606,
+        "mean_ms": 8.777465438470244,
+        "min_ms": 8.591770194470882,
+        "stdev_ms": 0.185695243999362
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 8.717160671949387,
+        "mean_ms": 8.692900417372584,
+        "min_ms": 8.668640162795782,
+        "stdev_ms": 0.024260254576802254
+      }
+    },
+    "tagged_topic_fanout": {
+      "cypher_compile": {
+        "max_ms": 0.03514019772410393,
+        "mean_ms": 0.03274506889283657,
+        "min_ms": 0.030349940061569214,
+        "stdev_ms": 0.002395128831267357
+      },
+      "cypher_parse": {
+        "max_ms": 0.023789703845977783,
+        "mean_ms": 0.02132495865225792,
+        "min_ms": 0.018860213458538055,
+        "stdev_ms": 0.002464745193719864
+      },
+      "duckdb_cypher": {
+        "max_ms": 134.83064016327262,
+        "mean_ms": 132.98672856763005,
+        "min_ms": 131.1428169719875,
+        "stdev_ms": 1.8439115956425667
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 140.8331780694425,
+        "mean_ms": 138.04505462758243,
+        "min_ms": 135.25693118572235,
+        "stdev_ms": 2.7881234418600798
+      },
+      "family": "edge",
+      "params": {
+        "domain": "domain_3"
+      },
+      "query": "MATCH (d:Document)-[:TAGGED]->(t:Topic) WHERE t.domain = $domain RETURN d.title, t.slug",
+      "selectivity": "low",
+      "shape": "topic_fanout_expand",
+      "sqlite_cypher": {
+        "max_ms": 19.325043074786663,
+        "mean_ms": 18.741342471912503,
+        "min_ms": 18.157641869038343,
+        "stdev_ms": 0.5837006028741598
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 17.941522412002087,
+        "mean_ms": 17.62773678638041,
+        "min_ms": 17.313951160758734,
+        "stdev_ms": 0.31378562562167645
+      }
+    },
+    "team_lookup": {
+      "cypher_compile": {
+        "max_ms": 0.029750168323516846,
+        "mean_ms": 0.027785077691078186,
+        "min_ms": 0.025819987058639526,
+        "stdev_ms": 0.0019650906324386597
+      },
+      "cypher_parse": {
+        "max_ms": 0.021270010620355606,
+        "mean_ms": 0.019039958715438843,
+        "min_ms": 0.01680990681052208,
+        "stdev_ms": 0.0022300519049167633
+      },
+      "duckdb_cypher": {
+        "max_ms": 124.37439896166325,
+        "mean_ms": 124.26748359575868,
+        "min_ms": 124.1605682298541,
+        "stdev_ms": 0.10691536590456963
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 128.49068315699697,
+        "mean_ms": 127.82123754732311,
+        "min_ms": 127.15179193764925,
+        "stdev_ms": 0.6694456096738577
+      },
+      "family": "node",
+      "params": {
+        "slug": "team_4166"
+      },
+      "query": "MATCH (g:Team) WHERE g.slug = $slug RETURN g.slug, g.region, g.size_band",
+      "selectivity": "high",
+      "shape": "anchored_node_lookup",
+      "sqlite_cypher": {
+        "max_ms": 0.08838018402457237,
+        "mean_ms": 0.07464014925062656,
+        "min_ms": 0.060900114476680756,
+        "stdev_ms": 0.013740034773945808
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 0.01983996480703354,
+        "mean_ms": 0.019330065697431564,
+        "min_ms": 0.01882016658782959,
+        "stdev_ms": 0.0005098991096019745
+      }
+    },
+    "team_membership_expand": {
+      "cypher_compile": {
+        "max_ms": 0.04519987851381302,
+        "mean_ms": 0.04218495450913906,
+        "min_ms": 0.0391700305044651,
+        "stdev_ms": 0.003014924004673958
+      },
+      "cypher_parse": {
+        "max_ms": 0.02902001142501831,
+        "mean_ms": 0.026484951376914978,
+        "min_ms": 0.023949891328811646,
+        "stdev_ms": 0.0025350600481033325
+      },
+      "duckdb_cypher": {
+        "max_ms": 166.64970899000764,
+        "mean_ms": 161.94078838452697,
+        "min_ms": 157.2318677790463,
+        "stdev_ms": 4.708920605480671
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 166.06705775484443,
+        "mean_ms": 165.25363200344145,
+        "min_ms": 164.44020625203848,
+        "stdev_ms": 0.8134257514029741
+      },
+      "family": "edge",
+      "params": {
+        "active": true,
+        "region": "region_5"
+      },
+      "query": "MATCH (u:User)-[:MEMBER_OF]->(g:Team) WHERE g.region = $region AND u.active = $active RETURN u.name, g.slug",
+      "selectivity": "medium",
+      "shape": "membership_expand",
+      "sqlite_cypher": {
+        "max_ms": 11.025902815163136,
+        "mean_ms": 10.941453045234084,
+        "min_ms": 10.857003275305033,
+        "stdev_ms": 0.0844497699290514
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 10.81619318574667,
+        "mean_ms": 10.749832494184375,
+        "min_ms": 10.68347180262208,
+        "stdev_ms": 0.06636069156229496
+      }
+    },
+    "team_membership_ordered": {
+      "cypher_compile": {
+        "max_ms": 0.052220188081264496,
+        "mean_ms": 0.04697497934103012,
+        "min_ms": 0.041729770600795746,
+        "stdev_ms": 0.005245208740234375
+      },
+      "cypher_parse": {
+        "max_ms": 0.03395974636077881,
+        "mean_ms": 0.031079864129424095,
+        "min_ms": 0.02819998189806938,
+        "stdev_ms": 0.0028798822313547134
+      },
+      "duckdb_cypher": {
+        "max_ms": 204.62886430323124,
+        "mean_ms": 195.89430862106383,
+        "min_ms": 187.15975293889642,
+        "stdev_ms": 8.73455568216741
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 187.67539411783218,
+        "mean_ms": 185.1399859879166,
+        "min_ms": 182.604577858001,
+        "stdev_ms": 2.535408129915595
+      },
+      "family": "edge",
+      "params": {
+        "size_band": "band_3"
+      },
+      "query": "MATCH (u:User)-[:MEMBER_OF]->(g:Team) WHERE g.size_band = $size_band RETURN u.name, g.slug, u.reputation ORDER BY u.reputation DESC LIMIT 250",
+      "selectivity": "medium",
+      "shape": "ordered_membership_expand",
+      "sqlite_cypher": {
+        "max_ms": 20.351333543658257,
+        "mean_ms": 20.299328723922372,
+        "min_ms": 20.247323904186487,
+        "stdev_ms": 0.052004819735884666
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 20.12648433446884,
+        "mean_ms": 19.993693567812443,
+        "min_ms": 19.860902801156044,
+        "stdev_ms": 0.13279076665639877
+      }
+    },
+    "topic_lookup": {
+      "cypher_compile": {
+        "max_ms": 0.029150396585464478,
+        "mean_ms": 0.026860274374485016,
+        "min_ms": 0.024570152163505554,
+        "stdev_ms": 0.0022901222109794617
+      },
+      "cypher_parse": {
+        "max_ms": 0.02114987000823021,
+        "mean_ms": 0.018934952095150948,
+        "min_ms": 0.016720034182071686,
+        "stdev_ms": 0.0022149179130792618
+      },
+      "duckdb_cypher": {
+        "max_ms": 147.74614665657282,
+        "mean_ms": 140.68609289824963,
+        "min_ms": 133.62603913992643,
+        "stdev_ms": 7.060053758323193
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 125.52883988246322,
+        "mean_ms": 124.98366390354931,
+        "min_ms": 124.43848792463541,
+        "stdev_ms": 0.5451759789139032
+      },
+      "family": "node",
+      "params": {
+        "slug": "topic_8333"
+      },
+      "query": "MATCH (t:Topic) WHERE t.slug = $slug RETURN t.slug, t.domain, t.trending",
+      "selectivity": "high",
+      "shape": "anchored_node_lookup",
+      "sqlite_cypher": {
+        "max_ms": 0.06854115054011345,
+        "mean_ms": 0.06299559026956558,
+        "min_ms": 0.057450029999017715,
+        "stdev_ms": 0.005545560270547867
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 0.03628013655543327,
+        "mean_ms": 0.025785062462091446,
+        "min_ms": 0.015289988368749619,
+        "stdev_ms": 0.010495074093341827
+      }
+    },
+    "user_lookup": {
+      "cypher_compile": {
+        "max_ms": 0.04545971751213074,
+        "mean_ms": 0.039289938285946846,
+        "min_ms": 0.033120159059762955,
+        "stdev_ms": 0.006169779226183891
+      },
+      "cypher_parse": {
+        "max_ms": 0.028369948267936707,
+        "mean_ms": 0.024585053324699402,
+        "min_ms": 0.020800158381462097,
+        "stdev_ms": 0.0037848949432373047
+      },
+      "duckdb_cypher": {
+        "max_ms": 155.29934503138065,
+        "mean_ms": 155.2261053584516,
+        "min_ms": 155.15286568552256,
+        "stdev_ms": 0.07323967292904854
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 156.95340698584914,
+        "mean_ms": 156.45091142505407,
+        "min_ms": 155.948415864259,
+        "stdev_ms": 0.5024955607950687
+      },
+      "family": "node",
+      "params": {
+        "name": "user_22500"
+      },
+      "query": "MATCH (u:User) WHERE u.name = $name RETURN u.name, u.region, u.active, u.reputation",
+      "selectivity": "high",
+      "shape": "anchored_node_lookup",
+      "sqlite_cypher": {
+        "max_ms": 0.08834991604089737,
+        "mean_ms": 0.07596495561301708,
+        "min_ms": 0.0635799951851368,
+        "stdev_ms": 0.012384960427880287
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 0.020219944417476654,
+        "mean_ms": 0.017979880794882774,
+        "min_ms": 0.015739817172288895,
+        "stdev_ms": 0.0022400636225938797
+      }
+    }
+  }
+}

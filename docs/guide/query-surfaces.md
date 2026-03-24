@@ -3,6 +3,9 @@
 HumemDB currently centers `db.query(...)` on explicit SQL or Cypher text and keeps the
 direct vector path separate.
 
+For the exact supported PostgreSQL-like SQL and Neo4j-like Cypher subset, see
+[Supported Syntax](supported-syntax.md).
+
 ## `HumemSQL v0`
 
 - PostgreSQL-like source syntax.

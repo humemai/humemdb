@@ -93,6 +93,7 @@ nav:
       - test_db.py: tests/test_db.md
       - test_vector.py: tests/test_vector.md
   - Guide:
+      - Supported Syntax: guide/supported-syntax.md
       - Query Surfaces: guide/query-surfaces.md
       - Routing: guide/routing.md
       - Transactions: guide/transactions.md

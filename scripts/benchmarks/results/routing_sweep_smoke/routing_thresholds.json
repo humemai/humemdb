@@ -1,0 +1,458 @@
+{
+  "cypher": [
+    {
+      "family": "edge",
+      "first_duckdb_scale": null,
+      "selectivity": "medium",
+      "shape": "selective_relationship_expand",
+      "winners": [
+        {
+          "duckdb_mean_ms": 17.314510885626078,
+          "scale": 5000,
+          "sqlite_mean_ms": 1.9877320155501366,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "author_expand"
+    },
+    {
+      "family": "edge",
+      "first_duckdb_scale": null,
+      "selectivity": "medium",
+      "shape": "ordered_relationship_expand",
+      "winners": [
+        {
+          "duckdb_mean_ms": 20.346203818917274,
+          "scale": 5000,
+          "sqlite_mean_ms": 4.369774833321571,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "author_expand_ordered"
+    },
+    {
+      "family": "node",
+      "first_duckdb_scale": null,
+      "selectivity": "high",
+      "shape": "anchored_node_lookup",
+      "winners": [
+        {
+          "duckdb_mean_ms": 16.416229773312807,
+          "scale": 5000,
+          "sqlite_mean_ms": 0.20906981080770493,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "document_lookup"
+    },
+    {
+      "family": "edge",
+      "first_duckdb_scale": null,
+      "selectivity": "low",
+      "shape": "broad_relationship_expand",
+      "winners": [
+        {
+          "duckdb_mean_ms": 19.350852817296982,
+          "scale": 5000,
+          "sqlite_mean_ms": 6.3896081410348415,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "social_expand"
+    },
+    {
+      "family": "edge",
+      "first_duckdb_scale": null,
+      "selectivity": "low",
+      "shape": "ordered_relationship_expand",
+      "winners": [
+        {
+          "duckdb_mean_ms": 22.202886175364256,
+          "scale": 5000,
+          "sqlite_mean_ms": 2.3053730838000774,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "social_expand_ordered"
+    },
+    {
+      "family": "edge",
+      "first_duckdb_scale": null,
+      "selectivity": "very_low",
+      "shape": "full_relationship_expand",
+      "winners": [
+        {
+          "duckdb_mean_ms": 17.350380774587393,
+          "scale": 5000,
+          "sqlite_mean_ms": 12.277133762836456,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "social_expand_unfiltered"
+    },
+    {
+      "family": "edge",
+      "first_duckdb_scale": null,
+      "selectivity": "medium",
+      "shape": "relationship_property_anchor",
+      "winners": [
+        {
+          "duckdb_mean_ms": 18.69898196309805,
+          "scale": 5000,
+          "sqlite_mean_ms": 5.001775920391083,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "social_reverse_since_anchor"
+    },
+    {
+      "family": "edge",
+      "first_duckdb_scale": null,
+      "selectivity": "high",
+      "shape": "selective_relationship_expand",
+      "winners": [
+        {
+          "duckdb_mean_ms": 16.268400009721518,
+          "scale": 5000,
+          "sqlite_mean_ms": 0.6235097534954548,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "tagged_expand"
+    },
+    {
+      "family": "edge",
+      "first_duckdb_scale": null,
+      "selectivity": "low",
+      "shape": "topic_fanout_expand",
+      "winners": [
+        {
+          "duckdb_mean_ms": 14.968467876315117,
+          "scale": 5000,
+          "sqlite_mean_ms": 1.0647806338965893,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "tagged_topic_fanout"
+    },
+    {
+      "family": "node",
+      "first_duckdb_scale": null,
+      "selectivity": "high",
+      "shape": "anchored_node_lookup",
+      "winners": [
+        {
+          "duckdb_mean_ms": 14.038696885108948,
+          "scale": 5000,
+          "sqlite_mean_ms": 0.20786002278327942,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "team_lookup"
+    },
+    {
+      "family": "edge",
+      "first_duckdb_scale": null,
+      "selectivity": "medium",
+      "shape": "membership_expand",
+      "winners": [
+        {
+          "duckdb_mean_ms": 18.298631068319082,
+          "scale": 5000,
+          "sqlite_mean_ms": 0.7100212387740612,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "team_membership_expand"
+    },
+    {
+      "family": "edge",
+      "first_duckdb_scale": null,
+      "selectivity": "medium",
+      "shape": "ordered_membership_expand",
+      "winners": [
+        {
+          "duckdb_mean_ms": 19.92343319579959,
+          "scale": 5000,
+          "sqlite_mean_ms": 1.8787020817399025,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "team_membership_ordered"
+    },
+    {
+      "family": "node",
+      "first_duckdb_scale": null,
+      "selectivity": "high",
+      "shape": "anchored_node_lookup",
+      "winners": [
+        {
+          "duckdb_mean_ms": 14.980317559093237,
+          "scale": 5000,
+          "sqlite_mean_ms": 0.2038399688899517,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "topic_lookup"
+    },
+    {
+      "family": "node",
+      "first_duckdb_scale": null,
+      "selectivity": "high",
+      "shape": "anchored_node_lookup",
+      "winners": [
+        {
+          "duckdb_mean_ms": 15.699768904596567,
+          "scale": 5000,
+          "sqlite_mean_ms": 0.414079986512661,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "user_lookup"
+    }
+  ],
+  "source": "scripts/benchmarks/results/routing_sweep_smoke/routing_sweep_summary.json",
+  "sql": [
+    {
+      "family": "document",
+      "first_duckdb_scale": null,
+      "selectivity": "medium",
+      "shape": "distinct_join_projection",
+      "winners": [
+        {
+          "duckdb_mean_ms": 2.247842028737068,
+          "scale": 10000,
+          "sqlite_mean_ms": 0.8250796236097813,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "document_distinct_owner_regions"
+    },
+    {
+      "family": "document",
+      "first_duckdb_scale": null,
+      "selectivity": "medium",
+      "shape": "broad_multi_join_group",
+      "winners": [
+        {
+          "duckdb_mean_ms": 2.8716837987303734,
+          "scale": 10000,
+          "sqlite_mean_ms": 1.8975823186337948,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "document_owner_region_rollup"
+    },
+    {
+      "family": "document",
+      "first_duckdb_scale": null,
+      "selectivity": "high",
+      "shape": "selective_multi_join_group",
+      "winners": [
+        {
+          "duckdb_mean_ms": 15.08829789236188,
+          "scale": 10000,
+          "sqlite_mean_ms": 0.864681787788868,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "document_tag_rollup"
+    },
+    {
+      "family": "oltp_join",
+      "first_duckdb_scale": null,
+      "selectivity": "high",
+      "shape": "selective_join_lookup",
+      "winners": [
+        {
+          "duckdb_mean_ms": 3.2241339795291424,
+          "scale": 10000,
+          "sqlite_mean_ms": 0.5793208256363869,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "event_active_user_join_lookup"
+    },
+    {
+      "family": "analytics",
+      "first_duckdb_scale": 10000,
+      "selectivity": "medium",
+      "shape": "filtered_join_group",
+      "winners": [
+        {
+          "duckdb_mean_ms": 4.412345122545958,
+          "scale": 10000,
+          "sqlite_mean_ms": 5.279276054352522,
+          "winner": "duckdb"
+        }
+      ],
+      "workload": "event_active_user_rollup"
+    },
+    {
+      "family": "analytics",
+      "first_duckdb_scale": null,
+      "selectivity": "low",
+      "shape": "scan_group_limit",
+      "winners": [
+        {
+          "duckdb_mean_ms": 4.3183849193155766,
+          "scale": 10000,
+          "sqlite_mean_ms": 3.996094688773155,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "event_aggregate_topk"
+    },
+    {
+      "family": "analytics",
+      "first_duckdb_scale": 10000,
+      "selectivity": "low",
+      "shape": "cte_group_order",
+      "winners": [
+        {
+          "duckdb_mean_ms": 5.458316300064325,
+          "scale": 10000,
+          "sqlite_mean_ms": 10.105903260409832,
+          "winner": "duckdb"
+        }
+      ],
+      "workload": "event_cte_daily_rollup"
+    },
+    {
+      "family": "mixed",
+      "first_duckdb_scale": null,
+      "selectivity": "medium",
+      "shape": "exists_filter",
+      "winners": [
+        {
+          "duckdb_mean_ms": 4.206035286188126,
+          "scale": 10000,
+          "sqlite_mean_ms": 3.736554179340601,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "event_exists_region_filter"
+    },
+    {
+      "family": "oltp",
+      "first_duckdb_scale": null,
+      "selectivity": "medium",
+      "shape": "filtered_range",
+      "winners": [
+        {
+          "duckdb_mean_ms": 2.1376116201281548,
+          "scale": 10000,
+          "sqlite_mean_ms": 0.629199668765068,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "event_filtered_range"
+    },
+    {
+      "family": "oltp",
+      "first_duckdb_scale": null,
+      "selectivity": "high",
+      "shape": "point_lookup",
+      "winners": [
+        {
+          "duckdb_mean_ms": 7.887339685112238,
+          "scale": 10000,
+          "sqlite_mean_ms": 0.4844008944928646,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "event_point_lookup"
+    },
+    {
+      "family": "analytics",
+      "first_duckdb_scale": 10000,
+      "selectivity": "low",
+      "shape": "join_group_order",
+      "winners": [
+        {
+          "duckdb_mean_ms": 3.888735082000494,
+          "scale": 10000,
+          "sqlite_mean_ms": 4.575734958052635,
+          "winner": "duckdb"
+        }
+      ],
+      "workload": "event_region_join"
+    },
+    {
+      "family": "oltp",
+      "first_duckdb_scale": null,
+      "selectivity": "high",
+      "shape": "filtered_ordered_limit",
+      "winners": [
+        {
+          "duckdb_mean_ms": 3.266714047640562,
+          "scale": 10000,
+          "sqlite_mean_ms": 0.4645511507987976,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "event_type_hot_window"
+    },
+    {
+      "family": "analytics",
+      "first_duckdb_scale": 10000,
+      "selectivity": "medium",
+      "shape": "window_partition_order",
+      "winners": [
+        {
+          "duckdb_mean_ms": 5.105616059154272,
+          "scale": 10000,
+          "sqlite_mean_ms": 15.394099056720734,
+          "winner": "duckdb"
+        }
+      ],
+      "workload": "event_window_rank"
+    },
+    {
+      "family": "memory",
+      "first_duckdb_scale": null,
+      "selectivity": "medium",
+      "shape": "filtered_group_limit",
+      "winners": [
+        {
+          "duckdb_mean_ms": 2.0608329214155674,
+          "scale": 10000,
+          "sqlite_mean_ms": 0.6987708620727062,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "memory_hot_rollup"
+    },
+    {
+      "family": "memory",
+      "first_duckdb_scale": null,
+      "selectivity": "medium",
+      "shape": "exists_projection",
+      "winners": [
+        {
+          "duckdb_mean_ms": 2.7222130447626114,
+          "scale": 10000,
+          "sqlite_mean_ms": 1.2925206683576107,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "memory_owner_exists_projection"
+    },
+    {
+      "family": "memory",
+      "first_duckdb_scale": null,
+      "selectivity": "high",
+      "shape": "selective_join_lookup",
+      "winners": [
+        {
+          "duckdb_mean_ms": 2.2114617750048637,
+          "scale": 10000,
+          "sqlite_mean_ms": 0.8967011235654354,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "memory_owner_join_lookup"
+    }
+  ],
+  "thread_limit": "default"
+}

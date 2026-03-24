@@ -7,6 +7,13 @@ The relational benchmark exercises `HumemSQL v0` query shapes. The graph benchma
 exercises `HumemCypher v0` query shapes. The vector benchmark exercises the current
 `HumemVector v0` execution candidates.
 
+Routing automation utilities:
+
+- [`routing_sweep.py`](./routing_sweep.py) runs the SQL and Cypher routing benchmarks
+  across scale ladders and writes merged JSON summaries.
+- [`routing_threshold_report.py`](./routing_threshold_report.py) reads one merged sweep
+  summary and prints a crossover report showing where DuckDB first wins, if it does.
+
 ## [`translation_overhead.py`](./translation_overhead.py)
 
 Purpose:
@@ -89,6 +96,26 @@ Purpose:
   source of truth.
 - Cover OLTP-style event reads, analytical aggregates, document-tag joins, and
   memory-style rollups.
+- Label each SQL workload by structural shape and selectivity so later routing
+  thresholds can be benchmark-calibrated against parsed planner metadata instead of
+  query names alone.
+
+Current workload groups now include:
+
+- point lookup, filtered range, and ordered top-k OLTP reads
+- selective joins that should not be misclassified as OLAP
+- broader join-and-group workloads
+- CTE-backed analytical rollups
+- windowed, `EXISTS`, and `DISTINCT` SQL shapes
+- document and memory workloads with both selective and broad join shapes
+- wider table schemas so query-shape tests are not all running on minimal column sets
+
+Machine-readable output:
+
+- pass `--output-json path/to/results.json` to persist one run as structured JSON for
+  later threshold extraction and scale summaries
+- use [`routing_sweep.py`](./routing_sweep.py) to automate multi-scale SQL and Cypher
+  runs into one merged summary file
 
 Thread-control example:
 
@@ -100,45 +127,54 @@ Large-run command used:
 
 ```bash
 HUMEMDB_THREADS=8 python scripts/benchmarks/duckdb_direct_read.py \
-  --rows 10000000 \
-  --repetitions 5 \
+  --rows 1000000 \
+  --repetitions 3 \
   --warmup 1 \
-  --batch-size 50000 \
-  --users 200000 \
-  --tags 2048
+  --batch-size 20000 \
+  --users 50000 \
+  --tags 1024
 ```
 
 Dataset:
 
-- 200,000 users
-- 10,000,000 event rows
-- 500,000 documents
-- 2,048 tags
-- 1,500,000 document-tag rows
-- 1,000,000 memory chunks
-- 1 warmup iteration and 5 timed repetitions per query shape
-- Initial load time: 22266.28 ms
+- 50,000 users
+- 1,000,000 event rows
+- 50,000 documents
+- 1,024 tags
+- 150,000 document-tag rows
+- 100,000 memory chunks
+- 1 warmup iteration and 3 timed repetitions per query shape
+- Initial load time: 3168.79 ms
 
 Observed means:
 
-| Query shape            | SQLite mean | DuckDB mean | Takeaway                                                                            |
-| ---------------------- | ----------: | ----------: | ----------------------------------------------------------------------------------- |
-| `event_point_lookup`   |     0.01 ms |   973.49 ms | SQLite is vastly better for indexed point reads against the canonical store.        |
-| `event_filtered_range` |     8.37 ms |   439.16 ms | SQLite stays much better for selective OLTP-style filters.                          |
-| `event_aggregate_topk` |  4646.88 ms |   523.44 ms | DuckDB is about 8.9x faster on broad scan-and-group workloads.                      |
-| `event_region_join`    |  4668.97 ms |   528.00 ms | DuckDB is about 8.8x faster on analytical join aggregation.                         |
-| `document_tag_rollup`  |     1.29 ms |   107.13 ms | A selective indexed document join still strongly favors SQLite.                     |
-| `memory_hot_rollup`    |   311.48 ms |    60.78 ms | DuckDB is about 5.1x faster on broader grouped rollups over the memory-style table. |
+| Query shape | SQLite mean | DuckDB mean | Takeaway |
+| --- | ---: | ---: | --- |
+| `event_point_lookup` | 0.02 ms | 108.32 ms | SQLite remains overwhelmingly better for indexed point reads. |
+| `event_filtered_range` | 4.83 ms | 46.49 ms | SQLite still clearly wins on selective filtered reads. |
+| `event_type_hot_window` | 113.46 ms | 55.70 ms | A filtered ordered top-k over a large event table now favors DuckDB by about `2.0x`. |
+| `event_aggregate_topk` | 462.20 ms | 64.18 ms | DuckDB is about `7.2x` faster on broad scan-and-group aggregation. |
+| `event_region_join` | 412.46 ms | 63.01 ms | DuckDB is about `6.5x` faster on low-selectivity join aggregation. |
+| `event_active_user_join_lookup` | 5.08 ms | 62.54 ms | A selective join lookup is still firmly SQLite territory. |
+| `event_active_user_rollup` | 707.02 ms | 66.20 ms | DuckDB is about `10.7x` faster once the join expands into a grouped rollup. |
+| `event_cte_daily_rollup` | 2315.87 ms | 70.31 ms | A CTE-backed daily rollup is the strongest DuckDB win in this run, at about `32.9x`. |
+| `document_tag_rollup` | 0.14 ms | 26.83 ms | A highly selective multi-join document read still strongly favors SQLite. |
+| `document_owner_region_rollup` | 40.03 ms | 18.60 ms | A broader document-owner aggregation now favors DuckDB by about `2.2x`. |
+| `memory_hot_rollup` | 22.15 ms | 18.08 ms | The filtered memory rollup now tilts modestly toward DuckDB at this scale. |
+| `memory_owner_join_lookup` | 39.63 ms | 27.38 ms | Even a join lookup can flip once the result path is broad enough and the dataset is large enough. |
 
 SQL findings:
 
 - SQLite remains the clear default for point lookups, selective filters, and selective
-  indexed joins, even when the overall dataset is large.
-- DuckDB wins once the workload becomes genuinely analytical: broad scans, grouping, and
-  large aggregation over many rows.
-- The richer SQL suite makes an important point that the older benchmark could not: not
-  every join is analytical. Join shape and selectivity matter more than the mere
-  presence of joins.
+  indexed joins, even at one million event rows.
+- DuckDB now wins a broader set of SQL reads than before, including filtered ordered
+  top-k on the event table, broad join-and-group workloads, CTE-backed rollups, and a
+  broader document-owner aggregation.
+- The new run still reinforces the core routing lesson: join presence alone is not
+  enough. Selectivity, grouping breadth, and how much of the table has to be touched
+  matter more than surface syntax.
+- Some mixed workloads now sit near the crossover region instead of being clear wins for
+  one engine, which is exactly why benchmark-calibrated thresholds are needed.
 
 ## [`cypher_graph_path.py`](./cypher_graph_path.py)
 
@@ -149,6 +185,115 @@ Purpose:
 - Cover multiple node labels and edge types instead of a single graph shape.
 - Recheck graph-path behavior after changes to graph indexes or Cypher SQL
   compilation, since those dominate performance more than Cypher parsing itself.
+- Label each Cypher workload by structural shape and selectivity so graph routing can
+  later distinguish anchored lookup, selective traversal, and broad fanout more
+  defensibly.
+
+Current workload groups now include:
+
+- anchored node lookups
+- selective and reverse relationship-property anchored traversals
+- broader social fanout traversals
+- ordered limited traversals
+- topic-side fanout reads that are broader than the earlier selective TAGGED case
+- additional `Team` nodes and `MEMBER_OF` edges so graph routing is not benchmarked on
+  only one node/edge vocabulary
+
+Machine-readable output:
+
+- pass `--output-json path/to/results.json` to persist one run as structured JSON for
+  later graph-routing analysis and scale summaries
+- use [`routing_sweep.py`](./routing_sweep.py) to automate multi-scale SQL and Cypher
+  runs into one merged summary file
+
+## [`routing_sweep.py`](./routing_sweep.py)
+
+Purpose:
+
+- run scale ladders for the SQL and Cypher routing benchmarks
+- persist per-scale JSON outputs plus one merged summary document
+- keep scale-sweep workflow reproducible instead of ad hoc terminal history
+
+Example command:
+
+```bash
+HUMEMDB_THREADS=8 python scripts/benchmarks/routing_sweep.py \
+  --benchmark all \
+  --sql-scales 10000,100000,1000000 \
+  --cypher-scales 100000,1000000 \
+  --warmup 1 \
+  --repetitions 3
+```
+
+Default output directory:
+
+- `scripts/benchmarks/results/routing_sweep/`
+
+Main outputs:
+
+- `sql_summary.json`
+- `cypher_summary.json`
+- `routing_sweep_summary.json`
+
+## [`routing_threshold_report.py`](./routing_threshold_report.py)
+
+Purpose:
+
+- summarize the merged routing sweep JSON into a workload-by-workload crossover report
+- show the first scale where DuckDB wins for each SQL or Cypher workload, if any
+
+Example command:
+
+```bash
+python scripts/benchmarks/routing_threshold_report.py \
+  --input scripts/benchmarks/results/routing_sweep/routing_sweep_summary.json \
+  --output-json scripts/benchmarks/results/routing_sweep/routing_thresholds.json
+```
+
+Current full-sweep inputs:
+
+- SQL scales: `10k`, `100k`, `1M`, `10M` event rows
+- Cypher scales: `100k`, `1M` total nodes
+
+Current SQL crossover summary:
+
+| Workload | Family | Shape | First DuckDB win | Takeaway |
+| --- | --- | --- | ---: | --- |
+| `event_point_lookup` | `oltp` | `point_lookup` | none | Indexed point reads stay on SQLite across the current sweep. |
+| `event_filtered_range` | `oltp` | `filtered_range` | none | Selective filtered reads still stay on SQLite. |
+| `event_type_hot_window` | `oltp` | `filtered_ordered_limit` | none | The current top-k event filter is still not a stable DuckDB crossover in the sweep. |
+| `event_aggregate_topk` | `analytics` | `scan_group_limit` | `10k` | Broad grouped scan work crosses to DuckDB immediately. |
+| `event_region_join` | `analytics` | `join_group_order` | `10k` | Low-selectivity join-group work also crosses early. |
+| `event_active_user_join_lookup` | `oltp_join` | `selective_join_lookup` | none | A selective join lookup remains SQLite territory. |
+| `event_active_user_rollup` | `analytics` | `filtered_join_group` | `10k` | Grouped join rollups cross early even when filtered. |
+| `event_cte_daily_rollup` | `analytics` | `cte_group_order` | `10k` | CTE-backed broad aggregation is an early DuckDB win. |
+| `event_window_rank` | `analytics` | `window_partition_order` | `10k` | Windowed ranking also crosses early in the current dataset family. |
+| `event_exists_region_filter` | `mixed` | `exists_filter` | `10k` | Even correlated `EXISTS` can flip once the work is broad enough. |
+| `document_tag_rollup` | `document` | `selective_multi_join_group` | none | A highly selective document-tag join still strongly favors SQLite. |
+| `document_owner_region_rollup` | `document` | `broad_multi_join_group` | `100k` | Broader document-owner aggregation crosses later, around the mid-scale tier. |
+| `document_distinct_owner_regions` | `document` | `distinct_join_projection` | `1M` | `DISTINCT` join projection does not flip until the larger scales. |
+| `memory_hot_rollup` | `memory` | `filtered_group_limit` | `1M` | Memory rollups sit in the crossover region and only move at larger scales. |
+| `memory_owner_exists_projection` | `memory` | `exists_projection` | `1M` | `EXISTS` over the memory table also crosses later. |
+| `memory_owner_join_lookup` | `memory` | `selective_join_lookup` | `1M` | Even lookup-like memory joins can flip, but only much later than event OLTP joins. |
+
+Current Cypher crossover summary:
+
+| Workload | Family | Shape | First DuckDB win | Takeaway |
+| --- | --- | --- | ---: | --- |
+| `user_lookup` | `node` | `anchored_node_lookup` | none | Anchored node lookups remain firmly SQLite-favored. |
+| `document_lookup` | `node` | `anchored_node_lookup` | none | Anchored document lookup stays on SQLite. |
+| `topic_lookup` | `node` | `anchored_node_lookup` | none | Anchored topic lookup stays on SQLite. |
+| `team_lookup` | `node` | `anchored_node_lookup` | none | The added `Team` node family also stays on SQLite. |
+| `social_expand` | `edge` | `broad_relationship_expand` | `1M` | Broad `KNOWS` traversal is the first current graph workload to cross to DuckDB. |
+| `social_expand_ordered` | `edge` | `ordered_relationship_expand` | none | Ordering plus `LIMIT` still does not make this traversal a DuckDB win. |
+| `social_expand_unfiltered` | `edge` | `full_relationship_expand` | none | Full fanout with a `LIMIT` still stays on SQLite in the current sweep. |
+| `social_reverse_since_anchor` | `edge` | `relationship_property_anchor` | none | Reverse-edge traversal with property anchoring stays SQLite-favored in the current sweep. |
+| `author_expand` | `edge` | `selective_relationship_expand` | none | Selective authored traversal stays on SQLite. |
+| `author_expand_ordered` | `edge` | `ordered_relationship_expand` | none | Ordered authored traversal still stays on SQLite. |
+| `tagged_expand` | `edge` | `selective_relationship_expand` | none | Selective tagged traversal stays on SQLite. |
+| `tagged_topic_fanout` | `edge` | `topic_fanout_expand` | none | Topic-side fanout still does not justify DuckDB. |
+| `team_membership_expand` | `edge` | `membership_expand` | none | The new `MEMBER_OF` traversal family stays on SQLite. |
+| `team_membership_ordered` | `edge` | `ordered_membership_expand` | none | Ordered team-membership traversal also stays on SQLite. |
 
 Thread-control example:
 
@@ -160,38 +305,42 @@ Large-run command used:
 
 ```bash
 HUMEMDB_THREADS=8 python scripts/benchmarks/cypher_graph_path.py \
-  --nodes 1000000 \
+  --nodes 100000 \
   --fanout 4 \
   --tag-fanout 2 \
-  --repetitions 5 \
+  --repetitions 3 \
   --warmup 1 \
-  --batch-size 20000
+  --batch-size 5000
 ```
 
 Dataset:
 
-- 1,000,000 total nodes
-  - 500,000 `User` nodes
-  - 350,000 `Document` nodes
-  - 150,000 `Topic` nodes
-- 3,050,000 total edges
-  - 2,000,000 `KNOWS` edges
-  - 350,000 `AUTHORED` edges
-  - 700,000 `TAGGED` edges
-- Approximately 10,950,000 total rows across graph tables and graph property tables
-- 1 warmup iteration and 5 timed repetitions per stage
-- Initial load time: 33052.16 ms
+- 100,000 total nodes
+  - 50,000 `User` nodes
+  - 35,000 `Document` nodes
+  - 15,000 `Topic` nodes
+- 305,000 total edges
+  - 200,000 `KNOWS` edges
+  - 35,000 `AUTHORED` edges
+  - 70,000 `TAGGED` edges
+- Approximately 1,095,000 total rows across graph tables and graph property tables
+- 1 warmup iteration and 3 timed repetitions per stage
+- Initial load time: 3317.85 ms
 
 Observed means:
 
-| Workload          | SQLite raw SQL | DuckDB raw SQL | SQLite Cypher | DuckDB Cypher | Takeaway                                                                  |
-| ----------------- | -------------: | -------------: | ------------: | ------------: | ------------------------------------------------------------------------- |
-| `user_lookup`     |        0.02 ms |     1157.15 ms |       0.05 ms |    1167.23 ms | SQLite is overwhelmingly better for anchored user-node lookup.            |
-| `document_lookup` |        0.02 ms |     1179.71 ms |       0.07 ms |    1166.71 ms | SQLite is also overwhelmingly better for selective document lookup.       |
-| `topic_lookup`    |        0.02 ms |      939.52 ms |       0.07 ms |     941.15 ms | Selective topic lookup strongly favors SQLite.                            |
-| `social_expand`   |     1648.92 ms |     1221.28 ms |    1620.89 ms |    1220.32 ms | DuckDB wins once traversal broadens into the high-fanout social edge set. |
-| `author_expand`   |      492.37 ms |     1160.95 ms |     500.58 ms |    1163.97 ms | A selective author-to-document expansion still favors SQLite.             |
-| `tagged_expand`   |      100.08 ms |     1137.34 ms |      97.61 ms |    1125.02 ms | A selective document-to-topic expansion also still favors SQLite.         |
+| Workload | SQLite raw SQL | DuckDB raw SQL | SQLite Cypher | DuckDB Cypher | Takeaway |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `user_lookup` | 0.02 ms | 158.48 ms | 0.07 ms | 161.53 ms | Anchored user lookup remains overwhelmingly SQLite-favored. |
+| `document_lookup` | 0.02 ms | 159.24 ms | 0.08 ms | 159.31 ms | Anchored document lookup also strongly favors SQLite. |
+| `topic_lookup` | 0.02 ms | 137.80 ms | 0.06 ms | 129.24 ms | Anchored topic lookup remains strongly SQLite-favored. |
+| `social_expand` | 155.14 ms | 180.88 ms | 165.25 ms | 188.36 ms | On this 100k-node graph, even the broader `KNOWS` traversal still favors SQLite. |
+| `social_expand_unfiltered` | 13.60 ms | 117.46 ms | 14.06 ms | 120.11 ms | Full fanout with only a `LIMIT` is still far from a DuckDB win here. |
+| `social_reverse_since_anchor` | 125.44 ms | 191.43 ms | 132.82 ms | 203.11 ms | Reverse-edge traversal with a relationship-property anchor remains SQLite-favored. |
+| `author_expand` | 48.09 ms | 170.93 ms | 50.37 ms | 176.73 ms | Selective authored traversal still clearly favors SQLite. |
+| `author_expand_ordered` | 82.25 ms | 193.70 ms | 83.48 ms | 192.80 ms | Adding ordering and `LIMIT` does not flip this authored traversal to DuckDB. |
+| `tagged_expand` | 10.14 ms | 169.26 ms | 10.20 ms | 168.10 ms | Selective document-to-topic traversal remains very strongly SQLite-favored. |
+| `tagged_topic_fanout` | 18.90 ms | 137.21 ms | 19.98 ms | 138.99 ms | A broader topic-side fanout still does not justify DuckDB on this graph size. |
 
 Compiler overhead:
 
@@ -204,10 +353,15 @@ Graph findings:
 
 - The multi-label graph benchmark makes the routing boundary clearer than the earlier
   single-label version did.
-- SQLite remains the better route for selective node lookup and for selective traversals
-  over the `AUTHORED` and `TAGGED` edges.
-- DuckDB only pulled ahead on the broad `KNOWS` expansion workload, which is exactly the
-  sort of graph-analytic traversal where parallel scan capacity starts to matter.
+- The 100k-node table above still shows SQLite winning the current matrix, but the full
+  routing sweep now shows one real Cypher crossover: broad `KNOWS` traversal first
+  flips to DuckDB at `1M` total nodes.
+- Most other current Cypher workloads still stay on SQLite even at `1M`, including
+  anchored lookups, selective traversals, ordered traversals, topic fanout, and the
+  added `Team`/`MEMBER_OF` graph family.
+- The current evidence therefore still says Cypher routing should be more conservative
+  than SQL routing: broad graph fanout may cross, but the portable `HumemCypher v0`
+  surface has a much narrower DuckDB-friendly region today.
 
 ## [`vector_search.py`](./vector_search.py)
 

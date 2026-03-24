@@ -19,6 +19,15 @@ repository README.
 
 ## Current benchmark map
 
+The routing benchmarks now also have automation helpers:
+
+- [`routing_sweep.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag
+  }}/scripts/benchmarks/routing_sweep.py) runs SQL and Cypher scale ladders and writes
+  merged JSON summaries.
+- [`routing_threshold_report.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag
+  }}/scripts/benchmarks/routing_threshold_report.py) summarizes those JSON files into
+  workload crossover reports.
+
 ### Translation overhead benchmark
 
 ```bash
@@ -44,6 +53,10 @@ Current takeaway:
 
 - SQLite stays stronger for point lookups and smaller filtered reads.
 - DuckDB wins broader grouped scans and analytical aggregates.
+- The SQL benchmark now carries workload-shape and selectivity labels so future routing
+  thresholds can be tied to parsed plan metadata instead of hand-picked query names.
+- The SQL benchmark also now covers wider table schemas plus windowed, `EXISTS`, and
+  `DISTINCT` query shapes, and can emit JSON summaries with `--output-json`.
 
 ### Graph benchmark
 
@@ -57,6 +70,21 @@ Current takeaway:
 
 - SQLite is very strong for selective graph traversal.
 - DuckDB becomes compelling only once the read broadens into graph-analytic shapes.
+- The current Cypher sweep is still not broad enough to justify hard automatic graph
+  routing in the product: only one current broad-fanout family crosses, so SQLite should
+  remain the default graph recommendation for now.
+- The Cypher benchmark now carries workload-shape and selectivity labels so later graph
+  routing work can reason about anchored lookup versus broader traversal families.
+- The Cypher benchmark also now includes `Team` nodes plus `MEMBER_OF` edges and can
+  emit JSON summaries with `--output-json`.
+
+### Routing sweep helpers
+
+Use the routing sweep helper when you want to compare the same workload families across
+multiple scales without manually running each command yourself.
+
+Use the threshold report helper when you want a workload-by-workload summary of where
+DuckDB first wins, if it wins at all.
 
 ### Vector benchmark
 

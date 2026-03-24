@@ -7,6 +7,7 @@ details into the rest of the package.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from functools import lru_cache
 import logging
 from typing import Any
@@ -27,6 +28,23 @@ _SUPPORTED_STATEMENT_NAMES = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class SQLTranslationPlan:
+    """Validated SQL translation plus lightweight planning metadata."""
+
+    translated_text: str
+    statement_name: str
+    is_read_only: bool
+    cte_count: int
+    join_count: int
+    aggregate_count: int
+    window_count: int
+    has_order_by: bool
+    has_limit: bool
+    has_group_by: bool
+    has_distinct: bool
+
+
 def translate_sql(text: str, *, target: Route) -> str:
     """Translate PostgreSQL-like SQL into backend-specific SQL.
 
@@ -44,7 +62,7 @@ def translate_sql(text: str, *, target: Route) -> str:
     logger.debug("Translating SQL for target=%s", target)
 
     try:
-        return _translate_sql_cached(text, target)
+        return _translate_sql_plan_cached(text, target).translated_text
     except sqlglot_errors.ParseError as exc:
         logger.debug("Failed to parse SQL for target=%s", target)
         raise ValueError(
@@ -52,19 +70,46 @@ def translate_sql(text: str, *, target: Route) -> str:
         ) from exc
 
 
+def translate_sql_plan(text: str, *, target: Route) -> SQLTranslationPlan:
+    """Return validated SQL translation plus lightweight planning metadata."""
+
+    logger.debug("Planning SQL translation for target=%s", target)
+
+    try:
+        return _translate_sql_plan_cached(text, target)
+    except sqlglot_errors.ParseError as exc:
+        logger.debug("Failed to parse SQL plan for target=%s", target)
+        raise ValueError(
+            "HumemDB could not parse the SQL as PostgreSQL-like HumemSQL."
+        ) from exc
+
+
 @lru_cache(maxsize=512)
-def _translate_sql_cached(text: str, target: Route) -> str:
-    """Cache SQL translations for repeated query shapes."""
+def _translate_sql_plan_cached(text: str, target: Route) -> SQLTranslationPlan:
+    """Cache SQL translations and lightweight planning metadata."""
 
     expression = parse_one(text, read="postgres")
     _validate_humemsql_v0(expression)
     translated = expression.sql(dialect=target)
+    statement_name = type(expression).__name__
     logger.debug(
         "Translated SQL statement kind=%s target=%s",
-        type(expression).__name__,
+        statement_name,
         target,
     )
-    return translated
+    return SQLTranslationPlan(
+        translated_text=translated,
+        statement_name=statement_name,
+        is_read_only=_expression_is_read_only(expression),
+        cte_count=_expression_cte_count(expression),
+        join_count=_expression_join_count(expression),
+        aggregate_count=_expression_aggregate_count(expression),
+        window_count=_expression_window_count(expression),
+        has_order_by=_expression_has_order_by(expression),
+        has_limit=_expression_has_limit(expression),
+        has_group_by=_expression_has_group_by(expression),
+        has_distinct=_expression_has_distinct(expression),
+    )
 
 
 def _validate_humemsql_v0(expression: Any) -> None:
@@ -90,3 +135,70 @@ def _validate_humemsql_v0(expression: Any) -> None:
         raise ValueError(
             "HumemDB HumemSQL v0 does not support recursive CTEs."
         )
+
+
+def _expression_is_read_only(expression: Any) -> bool:
+    """Return whether one parsed HumemSQL expression is read-only."""
+
+    if type(expression).__name__ != "Select":
+        return False
+
+    with_clause = getattr(expression, "args", {}).get("with_")
+    ctes = list(getattr(with_clause, "expressions", ())) if with_clause else []
+    return all(_expression_is_read_only(getattr(cte, "this", None)) for cte in ctes)
+
+
+def _expression_cte_count(expression: Any) -> int:
+    """Return the number of CTE bindings attached to one expression."""
+
+    with_clause = getattr(expression, "args", {}).get("with_")
+    if with_clause is None:
+        return 0
+    return len(getattr(with_clause, "expressions", ()))
+
+
+def _expression_join_count(expression: Any) -> int:
+    """Return the number of JOIN nodes present in one parsed expression."""
+
+    return sum(1 for node in expression.walk() if type(node).__name__ == "Join")
+
+
+def _expression_aggregate_count(expression: Any) -> int:
+    """Return the number of aggregate nodes present in one parsed expression."""
+
+    return sum(
+        1
+        for node in expression.walk()
+        if type(node).__name__
+        in {"Count", "Sum", "Avg", "Min", "Max", "Stddev", "Variance"}
+    )
+
+
+def _expression_window_count(expression: Any) -> int:
+    """Return the number of window-function nodes present in one expression."""
+
+    return sum(1 for node in expression.walk() if type(node).__name__ == "Window")
+
+
+def _expression_has_order_by(expression: Any) -> bool:
+    """Return whether one parsed expression contains ORDER BY."""
+
+    return getattr(expression, "args", {}).get("order") is not None
+
+
+def _expression_has_limit(expression: Any) -> bool:
+    """Return whether one parsed expression contains LIMIT."""
+
+    return getattr(expression, "args", {}).get("limit") is not None
+
+
+def _expression_has_group_by(expression: Any) -> bool:
+    """Return whether one parsed expression contains GROUP BY."""
+
+    return getattr(expression, "args", {}).get("group") is not None
+
+
+def _expression_has_distinct(expression: Any) -> bool:
+    """Return whether one parsed expression contains DISTINCT."""
+
+    return getattr(expression, "args", {}).get("distinct") is not None

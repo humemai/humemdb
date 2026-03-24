@@ -320,21 +320,34 @@ Status: done.
 
 Broaden grammar coverage and harden parser/planner support.
 
-Status: next.
+Status: in progress.
 
 - [ ] Expand `HumemSQL v0` beyond the initial statement subset toward a broader
   PostgreSQL-like portable grammar where the semantics are clear and testable.
-- [ ] Move HumemSQL vector support from the current narrow text-shape lowering toward
+- [x] Move HumemSQL vector support from the current narrow text-shape lowering toward
   proper SQL AST inspection and lowering, so PostgreSQL-like vector syntax is a real
-  language feature rather than a regex-shaped special case.
+  language feature rather than a regex-shaped special case, while keeping a narrow
+  fallback only where parser support is still missing.
 - [ ] Expand `HumemCypher v0` beyond the initial narrow `CREATE` and `MATCH` subset
   toward a broader Cypher grammar where the relational lowering remains defensible.
-  Maybe [openCypher](https://github.com/opencypher/openCypher) will help?
-- [ ] Move Cypher vector support from the current narrow text-shape lowering toward a
-  real parsed `SEARCH ... VECTOR INDEX ...` construct and plan node.
+- [x] Use existing grammar references such as
+  [openCypher](https://github.com/opencypher/openCypher) where they help clarify the
+  supported subset, without claiming full compatibility.
+- [x] Move Cypher vector support from the current narrow text-shape lowering toward a
+  parsed `SEARCH ... VECTOR INDEX ...` analysis path under the current Cypher parser
+  boundary, while leaving a fuller first-class plan node for later work.
 - [ ] Keep rejecting unsupported constructs clearly instead of pretending to support
   full PostgreSQL or full Cypher compatibility before the implementation is actually
   there.
+- [x] Expand the translation-overhead benchmark so parser, lowering, and planning cost
+  stays visible as grammar coverage broadens.
+- [x] Keep frontend benchmark evidence attached to parser/planner changes so grammar
+  work does not silently become a latency bottleneck.
+- [x] Reuse parsed plans where possible instead of reparsing at execution time, so the
+  planner boundary becomes a real internal seam rather than duplicated frontend work.
+- [x] Move SQL read-only classification and lightweight SQL/Cypher shape extraction
+  onto parsed structure so later routing is driven by validated plan metadata rather
+  than first-keyword heuristics.
 - [ ] Treat this as the phase where grammar breadth and internal language correctness
   are reconsidered seriously, not as part of the initial public snapshot.
 
@@ -350,23 +363,48 @@ Status: planned.
   the current language-level vector forms from the query text.
 - [x] Treat query-type inference as a convenience feature, not as part of the core
   vector model.
-- [ ] Keep `route` internal even if automatic routing is added.
+- [ ] Keep `route` internal even after automatic routing is added.
 - [ ] Build on the current text-surface inference and parser/planner work instead of
   reintroducing public query-type controls.
+- [ ] Validate the supported portable SQL and Cypher subsets before routing a query.
 - [ ] Keep internal direct vector-object calls explicit instead of trying to infer
   vector intent from arbitrary free-form text.
-- [ ] Classify read versus write queries safely.
-- [ ] Detect simple OLTP versus OLAP query shapes.
-- [ ] Validate the supported portable SQL and Cypher subsets before routing.
-- [ ] Keep the first automatic-routing implementation in Python.
-- [ ] Point reads and transactional queries to SQLite.
-- [ ] Send broader scans, aggregates, and analytics to DuckDB.
+- [ ] Classify queries safely at first: read versus write, then simple OLTP-style
+  versus OLAP-style read shapes.
+- [ ] Keep the first automatic-routing implementation in Python and make its behavior
+  explainable in tests and logs.
+- [ ] Route writes, point reads, and explicit transactional work to SQLite.
+- [ ] Route broader scans, aggregates, and analytical reads to DuckDB.
+- [x] Keep SQL OLAP-to-DuckDB recommendation conservative until the benchmark suite
+  produces calibrated admission thresholds; do not treat every join or aggregate as
+  enough evidence on its own.
 - [ ] Keep routing explainable and overridable internally, even if it is no longer a
   main public knob.
+- [ ] Extend the benchmark suite so routing decisions are justified by measured
+  workload results, not architecture preferences.
+- [x] Broaden the benchmark matrix beyond a few obvious DuckDB wins: keep expanding
+  SQL and Cypher workload families so selective joins, anchored graph traversals,
+  reverse-edge reads, broad fanout, ordered limits, and CTE-backed rollups are all
+  measured before routing rules harden.
+- [x] Make the SQL and Cypher benchmark scripts emit machine-readable JSON summaries so
+  scale sweeps and threshold extraction can be automated instead of hand-read from
+  terminal output.
+- [x] Add a routing sweep helper plus a threshold-report helper so SQL and Cypher
+  crossover summaries can be reproduced from code rather than ad hoc shell history.
+- [ ] Record the current graph-routing boundary explicitly in code and docs: present
+  Cypher evidence is still not broad enough to harden automatic DuckDB routing beyond
+  a narrow broad-fanout case, so graph reads should remain SQLite-preferred until the
+  benchmark matrix gets stronger.
+- [ ] Re-run relational, graph, and candidate-filtered vector benchmarks when routing
+  heuristics change so the multimodel story remains evidence-backed.
+- [ ] Define a small representative routing benchmark set that can catch
+  misclassification regressions before they become product behavior.
 
 ## Phase 11
 
 Add larger ingestion strategies.
+
+Status: planned.
 
 - [ ] Keep SQLite as the canonical ingest target because it remains the source of truth.
 - [ ] Add larger file-based and workload-specific ingestion paths only when the simple
@@ -393,10 +431,16 @@ Add larger ingestion strategies.
   of assuming one bulk-load path fits everything.
 - [ ] Keep this as an ingestion/runtime phase, not a change to the public query
   surfaces.
+- [ ] Add ingest benchmarks for transactional insert, CSV load, graph CSV ingest, and
+  staging/normalize flows so larger ingest paths are admitted by evidence.
+- [ ] Measure ingest-to-query freshness and end-to-end load cost, not just raw rows per
+  second.
 
 ## Phase 12
 
 Evaluate broader graph property values.
+
+Status: planned.
 
 - [ ] Decide whether HumemDB graph properties should remain scalar-only or expand toward
   lists, nested values, or more document-like payloads.
@@ -404,10 +448,14 @@ Evaluate broader graph property values.
 - [ ] Define the storage, indexing, filtering, ordering, and return semantics before
   claiming support for broader graph properties.
 - [ ] Keep this explicitly out of the initial public snapshot.
+- [ ] If broader graph property values are explored, benchmark their storage and query
+  cost against the scalar baseline before widening the model.
 
 ## Phase 13
 
 Add indexed vector runtime and vector index lifecycle once indexed search is real.
+
+Status: planned.
 
 - [ ] Keep this out of the current exact-baseline work.
 - [ ] Add explicit vector index build, rebuild, refresh, inspect, and drop operations
@@ -417,12 +465,18 @@ Add indexed vector runtime and vector index lifecycle once indexed search is rea
 - [ ] Add matching SQL and Cypher support later so vector indexing is not permanently
   object-API-only.
 - [ ] Keep exact search free of mandatory index-build steps.
+- [ ] Use vector benchmarks to define the admission bar for indexed search: build cost,
+  refresh cost, latency, recall, and memory overhead must justify the added runtime.
+- [ ] Extend the current vector sweep and tuning benchmarks so exact versus indexed
+  crossover points are measured rather than guessed.
 - [ ] Treat this as the phase where indexed ANN semantics and lifecycle are defined
   together, not separately.
 
 ## Phase 14
 
 Harden the public surfaces for `v0.1.0`.
+
+Status: planned.
 
 - [ ] Review whether `HumemSQL v0`, `HumemCypher v0`, and `HumemVector v0` are
   stable, coherent, and documented enough to ship as one explicit `v0.1.0`
@@ -438,12 +492,18 @@ Harden the public surfaces for `v0.1.0`.
   loader unless measured evidence justifies lower-level optimization work.
 - [ ] Add public-surface tests that defend the documented semantics instead of only
   the current happy paths.
+- [ ] Turn the benchmark suite into a release-hardening tool with stable representative
+  workloads and explicit regression thresholds.
+- [ ] Make release decisions depend on benchmark regressions as well as correctness
+  regressions.
 - [ ] Use this phase to close the gap between a useful `v0` implementation and a
   release candidate that is stable enough to publish.
 
 ## Phase 15
 
 Release `v0.1.0`.
+
+Status: planned.
 
 - [ ] Cut the GitHub `v0.1.0` release once `db.query(...)`, the docs, and the
   explicit SQL/Cypher/vector baseline form one coherent public snapshot.
@@ -457,12 +517,16 @@ Release `v0.1.0`.
 - [ ] Require the direct vector-only story to be clear before release: it is an
   internal/experimental runtime, not the main public abstraction.
 - [ ] Require the public `v0` paths to be green in tests before release.
+- [ ] Require the benchmark suite to be green enough before release that the routing and
+  multimodel claims remain defensible.
 - [ ] Do not block `v0.1.0` on `db.ask(...)`, later model work, or future planner
   refinement.
 
 ## Phase 16
 
 Add `db.ask(...)` as the final major public surface.
+
+Status: planned.
 
 - [ ] Keep `db.ask(...)` as the natural-language public surface built on top of the
   already-cleaned `db.query(...)` surface and internal plan layer.
@@ -474,5 +538,8 @@ Add `db.ask(...)` as the final major public surface.
   instead of pretending to solve arbitrary natural-language database questions.
 - [ ] Start with an existing model or constrained NL-to-plan flow before considering
   any model training.
+- [ ] Benchmark `db.ask(...)` separately from raw `db.query(...)` so NL latency,
+  planner quality, and end-to-end overhead are visible instead of being conflated with
+  core runtime performance.
 - [ ] Keep this phase focused on the first coherent NL UX, not on perfect automation
   or a fully general planner.

@@ -59,6 +59,7 @@ class ParameterRef:
 CypherValue = PropertyValue | ParameterRef
 PropertyItems = tuple[tuple[str, CypherValue], ...]
 ScalarQueryParam = str | int | float | bool | None
+CypherVectorLimitRef = int | str
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +70,15 @@ class _EncodedNodePropertyWrite:
     encoded_value: object
     value_type: str
     vector_value: VectorPropertyValue | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CypherVectorQueryAnalysis:
+    """Parsed analysis for one narrow Cypher vector SEARCH query."""
+
+    candidate_query_text: str
+    query_param_name: str
+    limit_ref: CypherVectorLimitRef
 
 
 @dataclass(frozen=True, slots=True)
@@ -269,6 +279,19 @@ class SetNodePlan:
     assignments: tuple[SetItem, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class CypherPlanShape:
+    """Lightweight metadata derived from one parsed Cypher plan."""
+
+    plan_name: str
+    is_read_only: bool
+    pattern_kind: Literal["node", "relationship"]
+    predicate_count: int
+    has_inline_properties: bool
+    has_order_by: bool
+    has_limit: bool
+
+
 GraphPlan = (
     CreateNodePlan
     | CreateRelationshipPlan
@@ -316,6 +339,13 @@ _REL_PATTERN_RE = re.compile(
     r"(?:\s*\{\s*(?P<properties>.*)\s*\})?$"
 )
 _RETURN_ITEM_RE = re.compile(rf"^(?P<alias>{_IDENTIFIER})\.(?P<field>{_IDENTIFIER})$")
+_CYPHER_VECTOR_SEARCH_RE = re.compile(
+    rf"^(?P<alias>{_IDENTIFIER})\s+IN\s*\(\s*"
+    rf"VECTOR\s+INDEX\s+(?P<index>{_IDENTIFIER})\s+"
+    rf"FOR\s+(?P<query>\${_IDENTIFIER})\s+"
+    rf"LIMIT\s+(?P<limit>\${_IDENTIFIER}|\d+)\s*\)$",
+    flags=re.IGNORECASE,
+)
 
 _UNSUPPORTED_KEYWORDS = {
     "with",
@@ -379,6 +409,7 @@ def execute_cypher(
     params: QueryParameters,
     sqlite: SQLiteEngine,
     duckdb: DuckDBEngine,
+    plan: GraphPlan | None = None,
 ) -> QueryResult:
     """Execute a minimal Cypher statement through the HumemDB graph path.
 
@@ -388,6 +419,7 @@ def execute_cypher(
         params: Optional named or positional Cypher parameters.
         sqlite: Canonical SQLite engine that owns graph storage.
         duckdb: DuckDB engine used for read-only graph queries.
+        plan: Optional pre-parsed Cypher plan to reuse instead of reparsing `text`.
 
     Returns:
         A normalized `QueryResult`.
@@ -397,7 +429,8 @@ def execute_cypher(
             DuckDB.
     """
 
-    plan = _bind_plan_values(parse_cypher(text), _normalize_params(params))
+    parsed_plan = plan or parse_cypher(text)
+    plan = _bind_plan_values(parsed_plan, _normalize_params(params))
     logger.debug(
         "Executing Cypher plan kind=%s route=%s",
         type(plan).__name__,
@@ -481,6 +514,136 @@ def parse_cypher(text: str) -> GraphPlan:
     )
 
 
+def analyze_cypher_vector_query(text: str) -> CypherVectorQueryAnalysis | None:
+    """Return parsed metadata for one narrow Cypher SEARCH vector query."""
+
+    statement = text.strip().rstrip(";").strip()
+    if not statement:
+        return None
+
+    match_match = _CYPHER_MATCH_PREFIX.match(statement)
+    if match_match is None:
+        return None
+
+    search_index = _find_keyword(statement, "search")
+    if search_index is None:
+        return None
+
+    return_index = _find_keyword(statement, "return")
+    if return_index is None or return_index < search_index:
+        raise ValueError(
+            "HumemCypher v0 SEARCH queries require SEARCH ... RETURN ... in that order."
+        )
+
+    match_body = statement[match_match.end():search_index].strip()
+    search_text = statement[search_index + len("search"):return_index].strip()
+    return_clause = statement[return_index + len("return"):].strip()
+    if not match_body or not search_text or not return_clause:
+        raise ValueError(
+            "HumemCypher v0 SEARCH queries require MATCH, SEARCH, and RETURN clauses."
+        )
+
+    search_match = _CYPHER_VECTOR_SEARCH_RE.fullmatch(search_text)
+    if search_match is None:
+        raise ValueError(
+            "HumemCypher v0 SEARCH queries currently require "
+            "SEARCH alias IN (VECTOR INDEX embedding FOR $query LIMIT ...)."
+        )
+
+    index_name = search_match.group("index")
+    if index_name.casefold() != "embedding":
+        raise ValueError(
+            "HumemCypher v0 SEARCH queries currently require VECTOR INDEX embedding."
+        )
+
+    candidate_query_text = f"MATCH {match_body} RETURN {return_clause}"
+    candidate_plan = parse_cypher(candidate_query_text)
+    search_alias = search_match.group("alias")
+    if search_alias not in _match_plan_node_aliases(candidate_plan):
+        raise ValueError(
+            "HumemCypher v0 SEARCH queries must target a matched node alias."
+        )
+
+    limit_token = search_match.group("limit")
+    limit_ref: CypherVectorLimitRef
+    if limit_token.startswith("$"):
+        limit_ref = limit_token[1:]
+    else:
+        limit_ref = int(limit_token)
+
+    return CypherVectorQueryAnalysis(
+        candidate_query_text=candidate_query_text,
+        query_param_name=search_match.group("query")[1:],
+        limit_ref=limit_ref,
+    )
+
+
+def analyze_cypher_plan(plan: GraphPlan) -> CypherPlanShape:
+    """Return lightweight structural metadata for one parsed Cypher plan."""
+
+    if isinstance(plan, CreateNodePlan):
+        return CypherPlanShape(
+            plan_name=type(plan).__name__,
+            is_read_only=False,
+            pattern_kind="node",
+            predicate_count=0,
+            has_inline_properties=bool(plan.node.properties),
+            has_order_by=False,
+            has_limit=False,
+        )
+
+    if isinstance(plan, CreateRelationshipPlan):
+        return CypherPlanShape(
+            plan_name=type(plan).__name__,
+            is_read_only=False,
+            pattern_kind="relationship",
+            predicate_count=0,
+            has_inline_properties=bool(
+                plan.left.properties
+                or plan.relationship.properties
+                or plan.right.properties
+            ),
+            has_order_by=False,
+            has_limit=False,
+        )
+
+    if isinstance(plan, MatchNodePlan):
+        return CypherPlanShape(
+            plan_name=type(plan).__name__,
+            is_read_only=True,
+            pattern_kind="node",
+            predicate_count=len(plan.predicates),
+            has_inline_properties=bool(plan.node.properties),
+            has_order_by=bool(plan.order_by),
+            has_limit=plan.limit is not None,
+        )
+
+    if isinstance(plan, MatchRelationshipPlan):
+        return CypherPlanShape(
+            plan_name=type(plan).__name__,
+            is_read_only=True,
+            pattern_kind="relationship",
+            predicate_count=len(plan.predicates),
+            has_inline_properties=bool(
+                plan.left.properties
+                or plan.relationship.properties
+                or plan.right.properties
+            ),
+            has_order_by=bool(plan.order_by),
+            has_limit=plan.limit is not None,
+        )
+
+    return CypherPlanShape(
+        plan_name=type(plan).__name__,
+        is_read_only=False,
+        pattern_kind="node",
+        predicate_count=len(plan.predicates),
+        has_inline_properties=bool(plan.node.properties),
+        has_order_by=False,
+        has_limit=False,
+    )
+
+
 def _parse_create(body: str) -> GraphPlan:
     """Parse one CREATE body into a node or single-edge creation plan."""
 
@@ -556,6 +719,18 @@ def _parse_match(body: str) -> GraphPlan:
         order_by,
         limit,
     )
+
+
+def _match_plan_node_aliases(
+    plan: GraphPlan,
+) -> tuple[str, ...]:
+    """Return node aliases that a Cypher SEARCH query may legally target."""
+
+    if isinstance(plan, MatchNodePlan):
+        return (plan.node.alias,)
+    if isinstance(plan, MatchRelationshipPlan):
+        return (plan.left.alias, plan.right.alias)
+    return ()
 
 
 def _parse_match_set(body: str) -> SetNodePlan:

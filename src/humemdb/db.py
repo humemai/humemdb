@@ -25,7 +25,7 @@ import logging
 import re
 from numbers import Integral
 from pathlib import Path
-from typing import Any, Mapping, Protocol, Sequence, TypeAlias, cast
+from typing import Any, Literal, Mapping, Protocol, Sequence, TypeAlias, cast
 
 from ._vector_runtime import (
     DirectVectorSearchPlan as _DirectVectorSearchPlan,
@@ -42,9 +42,20 @@ from ._vector_runtime import (
     plan_sql_vector_write as _vectorrt_plan_sql_vector_write,
     plan_sql_vector_write_batch as _vectorrt_plan_sql_vector_write_batch,
 )
-from .cypher import ensure_graph_schema, execute_cypher
+from .cypher import (
+    CypherPlanShape as _CypherPlanShape,
+    GraphPlan as _GraphPlan,
+    analyze_cypher_plan,
+    ensure_graph_schema,
+    execute_cypher,
+    parse_cypher,
+)
 from .engines import DuckDBEngine, SQLiteEngine
-from .sql import translate_sql
+from .sql import (
+    SQLTranslationPlan as _SQLTranslationPlan,
+    translate_sql,
+    translate_sql_plan,
+)
 from .types import BatchParameters, QueryParameters, QueryResult, QueryType, Route
 from .vector import (
     ExactVectorIndex,
@@ -57,15 +68,6 @@ from .vector import (
     upsert_vector_metadata,
 )
 
-_READ_ONLY_KEYWORDS = {
-    "select",
-    "show",
-    "describe",
-    "explain",
-    "with",
-    "pragma",
-}
-
 logger = logging.getLogger(__name__)
 
 _CYPHER_MATCH_PREFIX = re.compile(r"^MATCH\b")
@@ -77,6 +79,41 @@ DirectVectorRow: TypeAlias = (
     | tuple[int, Sequence[float]]
     | Mapping[str, object]
 )
+WorkloadKind: TypeAlias = Literal[
+    "transactional_read",
+    "transactional_write",
+    "analytical_read",
+    "graph_read",
+    "graph_write",
+    "vector_search",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class _WorkloadProfile:
+    """Explainable workload classification derived from validated query structure."""
+
+    kind: WorkloadKind
+    is_read_only: bool
+    preferred_route: Route
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class _OlapRoutingThresholds:
+    """Benchmark-calibrated thresholds for admitting SQL OLAP reads to DuckDB."""
+
+    benchmark_calibrated: bool
+    min_join_count: int = 0
+    min_aggregate_count: int = 0
+    min_cte_count: int = 0
+    min_window_count: int = 0
+    require_order_by_or_limit: bool = False
+
+
+_DEFAULT_OLAP_ROUTING_THRESHOLDS = _OlapRoutingThresholds(
+    benchmark_calibrated=True,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +124,12 @@ class _QueryExecutionPlan:
     route: Route
     query_type: QueryType
     params: QueryParameters
+    workload: _WorkloadProfile
     translated_text: str | None = None
+    sql_plan: _SQLTranslationPlan | None = None
+    cypher_plan: _GraphPlan | None = None
+    cypher_shape: _CypherPlanShape | None = None
+    sql_is_read_only: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -415,6 +457,14 @@ class HumemDB:
     def _execute_query_plan(self, plan: _QueryExecutionPlan) -> QueryResult:
         """Dispatch one normalized query plan onto the correct execution path."""
 
+        logger.debug(
+            "Dispatching query_type=%s workload=%s preferred_route=%s actual_route=%s",
+            plan.query_type,
+            plan.workload.kind,
+            plan.workload.preferred_route,
+            plan.route,
+        )
+
         if plan.query_type == "vector":
             logger.debug("Routing vector query to exact SQLite/NumPy path")
             return self._execute_vector_query(plan)
@@ -437,13 +487,27 @@ class HumemDB:
         """Execute one normalized Cypher query plan."""
 
         self._ensure_graph_schema()
-        logger.debug("Routing Cypher query to graph path on route=%s", plan.route)
+        if plan.route == "duckdb" and not plan.workload.is_read_only:
+            logger.debug(
+                "Rejected graph write on DuckDB workload=%s",
+                plan.workload.kind,
+            )
+            raise ValueError(
+                "HumemDB does not allow direct Cypher writes to DuckDB; SQLite is "
+                "the source of truth."
+            )
+        logger.debug(
+            "Routing Cypher query to graph path on route=%s workload=%s",
+            plan.route,
+            plan.workload.kind,
+        )
         return execute_cypher(
             plan.text,
             route=plan.route,
             params=plan.params,
             sqlite=self.sqlite,
             duckdb=self.duckdb,
+            plan=plan.cypher_plan,
         )
 
     def _execute_sql_query_plan(self, plan: _QueryExecutionPlan) -> QueryResult:
@@ -454,7 +518,10 @@ class HumemDB:
             raise ValueError("HumemDB internal SQL plans require translated SQL text.")
 
         if plan.route == "sqlite":
-            logger.debug("Routing SQL query to SQLite")
+            logger.debug(
+                "Routing SQL query to SQLite workload=%s",
+                plan.workload.kind,
+            )
             write_plan = _vectorrt_plan_sql_vector_write(plan.text, plan.params)
             result = self.sqlite.execute(
                 translated_text,
@@ -483,13 +550,19 @@ class HumemDB:
             return result
 
         if plan.route == "duckdb":
-            if not _is_read_only_query(plan.text):
-                logger.debug("Rejected direct write routed to DuckDB")
+            if not plan.workload.is_read_only:
+                logger.debug(
+                    "Rejected direct write routed to DuckDB workload=%s",
+                    plan.workload.kind,
+                )
                 raise ValueError(
                     "HumemDB does not allow direct writes to DuckDB; "
                     "SQLite is the source of truth."
                 )
-            logger.debug("Routing read-only SQL query to DuckDB")
+            logger.debug(
+                "Routing read-only SQL query to DuckDB workload=%s",
+                plan.workload.kind,
+            )
             return self.duckdb.execute(
                 translated_text,
                 plan.params,
@@ -678,8 +751,12 @@ class HumemDB:
 
         candidate_query = plan.candidate_query
 
-        if candidate_query.query_type == "sql" and not _is_read_only_query(
-            candidate_query.text
+        if (
+            candidate_query.query_type == "sql"
+            and not translate_sql_plan(
+                candidate_query.text,
+                target=candidate_query.route,
+            ).is_read_only
         ):
             raise ValueError(
                 "HumemVector v0 SQL vector candidate query must be a read-only "
@@ -844,7 +921,7 @@ class HumemDB:
     ) -> None:
         """Drop cached exact indexes after raw SQL writes that touch vector tables."""
 
-        if _is_read_only_query(original_text):
+        if translate_sql_plan(original_text, target="sqlite").is_read_only:
             return
         if not _touches_vector_entries(translated_text):
             return
@@ -1029,21 +1106,6 @@ class _TransactionContext:
         self.db.rollback(route=self.route)
 
 
-def _is_read_only_query(text: str) -> bool:
-    """Return whether a SQL statement is treated as read-only.
-
-    This is intentionally lightweight and only supports the small amount of policy
-    enforcement needed to keep DuckDB read-only through the public API.
-    """
-
-    stripped = text.lstrip()
-    if not stripped:
-        return False
-
-    keyword = stripped.split(None, 1)[0].lower()
-    return keyword in _READ_ONLY_KEYWORDS
-
-
 def _infer_query_type(text: str) -> QueryType:
     """Infer the public query type for the current SQL/Cypher/vector subset.
 
@@ -1078,15 +1140,165 @@ def _plan_query(
     resolved_query_type = query_type or _infer_query_type(text)
     _validate_public_query_params(resolved_query_type, params)
     translated_text = None
+    sql_plan = None
+    cypher_plan = None
+    cypher_shape = None
+    sql_is_read_only = None
     if resolved_query_type == "sql" and route in {"sqlite", "duckdb"}:
-        translated_text = translate_sql(text, target=route)
+        sql_plan = translate_sql_plan(text, target=route)
+        translated_text = sql_plan.translated_text
+        sql_is_read_only = sql_plan.is_read_only
+    elif resolved_query_type == "cypher":
+        cypher_plan = parse_cypher(text)
+        cypher_shape = analyze_cypher_plan(cypher_plan)
+    workload = _classify_workload(
+        resolved_query_type,
+        sql_plan=sql_plan,
+        cypher_shape=cypher_shape,
+    )
 
     return _QueryExecutionPlan(
         text=text,
         route=route,
         query_type=resolved_query_type,
         params=params,
+        workload=workload,
         translated_text=translated_text,
+        sql_plan=sql_plan,
+        cypher_plan=cypher_plan,
+        cypher_shape=cypher_shape,
+        sql_is_read_only=sql_is_read_only,
+    )
+
+
+def _classify_workload(
+    query_type: QueryType,
+    *,
+    sql_plan: _SQLTranslationPlan | None,
+    cypher_shape: _CypherPlanShape | None,
+    olap_thresholds: _OlapRoutingThresholds = _DEFAULT_OLAP_ROUTING_THRESHOLDS,
+) -> _WorkloadProfile:
+    """Classify one parsed query into a small routing-oriented workload profile."""
+
+    if query_type == "vector":
+        return _WorkloadProfile(
+            kind="vector_search",
+            is_read_only=True,
+            preferred_route="sqlite",
+            reason="Vector search runs against the SQLite-backed exact NumPy index.",
+        )
+
+    if query_type == "cypher":
+        if cypher_shape is None:
+            raise ValueError("HumemDB internal Cypher plans require plan metadata.")
+        if not cypher_shape.is_read_only:
+            return _WorkloadProfile(
+                kind="graph_write",
+                is_read_only=False,
+                preferred_route="sqlite",
+                reason="Cypher CREATE and SET mutate the canonical SQLite graph store.",
+            )
+        return _WorkloadProfile(
+            kind="graph_read",
+            is_read_only=True,
+            preferred_route="sqlite",
+            reason=(
+                "Current Cypher benchmark evidence is not broad enough to harden "
+                "automatic DuckDB routing, so read-only graph queries stay on "
+                "SQLite by default."
+            ),
+        )
+
+    if sql_plan is None:
+        raise ValueError("HumemDB internal SQL plans require translation metadata.")
+
+    if not sql_plan.is_read_only:
+        return _WorkloadProfile(
+            kind="transactional_write",
+            is_read_only=False,
+            preferred_route="sqlite",
+            reason="SQL writes target the canonical SQLite store.",
+        )
+
+    if (
+        sql_plan.cte_count > 0
+        or sql_plan.join_count > 0
+        or sql_plan.aggregate_count > 0
+        or sql_plan.window_count > 0
+        or sql_plan.has_group_by
+        or sql_plan.has_distinct
+    ):
+        if _matches_sql_olap_thresholds(sql_plan, olap_thresholds):
+            return _WorkloadProfile(
+                kind="analytical_read",
+                is_read_only=True,
+                preferred_route="duckdb",
+                reason=(
+                    "Read-only SQL crossed the current benchmark-calibrated OLAP "
+                    "thresholds for DuckDB."
+                ),
+            )
+        return _WorkloadProfile(
+            kind="analytical_read",
+            is_read_only=True,
+            preferred_route="sqlite",
+            reason=(
+                "Read-only SQL is analytical, but DuckDB admission stays disabled "
+                "until OLAP routing thresholds are benchmark-calibrated."
+            ),
+        )
+
+    return _WorkloadProfile(
+        kind="transactional_read",
+        is_read_only=True,
+        preferred_route="sqlite",
+        reason="Simple read-only SQL stays classified as transactional.",
+    )
+
+
+def _matches_sql_olap_thresholds(
+    sql_plan: _SQLTranslationPlan,
+    thresholds: _OlapRoutingThresholds,
+) -> bool:
+    """Return whether one SQL read crosses benchmark-calibrated DuckDB thresholds."""
+
+    if not thresholds.benchmark_calibrated:
+        return False
+
+    if not _has_broad_sql_analytical_shape(sql_plan):
+        return False
+
+    if sql_plan.join_count < thresholds.min_join_count:
+        return False
+    if sql_plan.aggregate_count < thresholds.min_aggregate_count:
+        return False
+    if sql_plan.cte_count < thresholds.min_cte_count:
+        return False
+    if sql_plan.window_count < thresholds.min_window_count:
+        return False
+    if thresholds.require_order_by_or_limit and not (
+        sql_plan.has_order_by or sql_plan.has_limit
+    ):
+        return False
+    return True
+
+
+def _has_broad_sql_analytical_shape(sql_plan: _SQLTranslationPlan) -> bool:
+    """Return whether one SQL read matches the current conservative DuckDB shape."""
+
+    if sql_plan.window_count > 0:
+        return True
+
+    if sql_plan.aggregate_count <= 0:
+        return False
+
+    return (
+        sql_plan.has_group_by
+        or sql_plan.has_distinct
+        or sql_plan.join_count > 0
+        or sql_plan.cte_count > 0
+        or sql_plan.has_order_by
+        or sql_plan.has_limit
     )
 
 

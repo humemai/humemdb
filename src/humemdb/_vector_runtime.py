@@ -13,26 +13,19 @@ from typing import Any, Literal, Mapping, Sequence, TypeAlias, TypedDict, cast
 from sqlglot import parse_one
 from sqlglot import errors as sqlglot_errors
 
+from .cypher import analyze_cypher_vector_query
 from .types import BatchParameters, QueryParameters, QueryResult, Route
 from .vector import VectorMetric, encode_vector_blob
 
 VECTOR_RESULT_COLUMNS = ("target", "namespace", "target_id", "score")
 _CYPHER_MATCH_PREFIX = re.compile(r"^MATCH\b")
+_NAMED_SQL_PARAM_RE = re.compile(r"@([A-Za-z_]\w*)")
 _SQL_VECTOR_QUERY_RE = re.compile(
     r"^(?P<candidate_query>.+?)\s+ORDER\s+BY\s+"
     r"(?P<embedding>[A-Za-z_][\w.]*)\s*"
     r"(?P<operator><->|<=>|<#>)\s*"
     r"(?P<query>\$[A-Za-z_]\w*)\s+"
     r"LIMIT\s+(?P<limit>\$[A-Za-z_]\w*|\d+)\s*;?\s*$",
-    flags=re.IGNORECASE | re.DOTALL,
-)
-_CYPHER_VECTOR_QUERY_RE = re.compile(
-    r"^(?P<match>MATCH\b.+?)\s+"
-    r"SEARCH\s+(?P<alias>[A-Za-z_]\w*)\s+IN\s*\(\s*"
-    r"VECTOR\s+INDEX\s+(?P<index>[A-Za-z_][\w.]*)\s+"
-    r"FOR\s+(?P<query>\$[A-Za-z_]\w*)\s+"
-    r"LIMIT\s+(?P<limit>\$[A-Za-z_]\w*|\d+)\s*\)\s*"
-    r"(?P<return>RETURN\b.+?)\s*;?\s*$",
     flags=re.IGNORECASE | re.DOTALL,
 )
 _SQL_VECTOR_OPERATOR_TO_METRIC: dict[str, VectorMetric] = {
@@ -141,6 +134,16 @@ class SQLVectorUpdateAnalysis(TypedDict):
     id_literal: int | None
 
 
+@dataclass(frozen=True, slots=True)
+class SQLCandidateVectorQueryAnalysis:
+    """Parsed SQL vector-query analysis for one narrow language-level query."""
+
+    candidate_query_text: str
+    metric: VectorMetric
+    query_param_name: str
+    limit_ref: SQLParamRef
+
+
 def plan_candidate_vector_query(
     text: str,
     params: QueryParameters,
@@ -155,61 +158,48 @@ def plan_candidate_vector_query(
             "vector syntax."
         )
 
-    sql_match = _SQL_VECTOR_QUERY_RE.match(stripped)
-    if sql_match is not None:
-        embedding_ref = sql_match.group("embedding")
-        if not _looks_like_embedding_ref(embedding_ref):
-            raise ValueError(
-                "HumemVector v0 SQL vector queries currently require ORDER BY "
-                "an embedding column."
-            )
-
-        query_param_name = _param_name(sql_match.group("query"))
-        limit_token = sql_match.group("limit")
-        excluded_params = {query_param_name}
-        if limit_token.startswith("$"):
-            excluded_params.add(_param_name(limit_token))
+    sql_analysis = _analyze_sql_candidate_vector_query(stripped)
+    if sql_analysis is not None:
+        excluded_params = {sql_analysis.query_param_name}
+        if isinstance(sql_analysis.limit_ref, str):
+            excluded_params.add(sql_analysis.limit_ref)
 
         return CandidateVectorQueryPlan(
             candidate_query=CandidateQueryPlan(
-                text=_strip_trailing_semicolon(sql_match.group("candidate_query")),
+                text=sql_analysis.candidate_query_text,
                 query_type="sql",
                 route="sqlite",
                 params=_candidate_query_params(mapping_params, excluded_params),
             ),
-            query=_required_mapping_value(mapping_params, query_param_name),
-            top_k=_resolve_vector_limit(limit_token, mapping_params),
-            metric=_SQL_VECTOR_OPERATOR_TO_METRIC[sql_match.group("operator")],
+            query=_required_mapping_value(
+                mapping_params,
+                sql_analysis.query_param_name,
+            ),
+            top_k=_resolve_vector_limit_ref(sql_analysis.limit_ref, mapping_params),
+            metric=sql_analysis.metric,
         )
 
-    cypher_match = _CYPHER_VECTOR_QUERY_RE.match(stripped)
-    if cypher_match is not None:
-        index_name = cypher_match.group("index")
-        if not _looks_like_embedding_ref(index_name):
-            raise ValueError(
-                "HumemVector v0 Cypher SEARCH queries currently require "
-                "VECTOR INDEX embedding."
-            )
+    cypher_analysis = analyze_cypher_vector_query(stripped)
+    if cypher_analysis is not None:
+        excluded_params = {cypher_analysis.query_param_name}
+        if isinstance(cypher_analysis.limit_ref, str):
+            excluded_params.add(cypher_analysis.limit_ref)
 
-        query_param_name = _param_name(cypher_match.group("query"))
-        limit_token = cypher_match.group("limit")
-        excluded_params = {query_param_name}
-        if limit_token.startswith("$"):
-            excluded_params.add(_param_name(limit_token))
-
-        candidate_text = (
-            f"{_strip_trailing_semicolon(cypher_match.group('match'))} "
-            f"{_strip_trailing_semicolon(cypher_match.group('return'))}"
-        )
         return CandidateVectorQueryPlan(
             candidate_query=CandidateQueryPlan(
-                text=candidate_text,
+                text=cypher_analysis.candidate_query_text,
                 query_type="cypher",
                 route="sqlite",
                 params=_candidate_query_params(mapping_params, excluded_params),
             ),
-            query=_required_mapping_value(mapping_params, query_param_name),
-            top_k=_resolve_vector_limit(limit_token, mapping_params),
+            query=_required_mapping_value(
+                mapping_params,
+                cypher_analysis.query_param_name,
+            ),
+            top_k=_resolve_vector_limit_ref(
+                cypher_analysis.limit_ref,
+                mapping_params,
+            ),
             metric="cosine",
         )
 
@@ -225,8 +215,8 @@ def is_vector_query_text(text: str) -> bool:
 
     stripped = text.strip()
     return bool(
-        _SQL_VECTOR_QUERY_RE.match(stripped)
-        or _CYPHER_VECTOR_QUERY_RE.match(stripped)
+        _analyze_sql_candidate_vector_query(stripped) is not None
+        or analyze_cypher_vector_query(stripped) is not None
     )
 
 
@@ -271,6 +261,17 @@ def _resolve_vector_limit(
     return int(token)
 
 
+def _resolve_vector_limit_ref(
+    limit_ref: SQLParamRef,
+    params: Mapping[str, Any],
+) -> int:
+    """Resolve one parsed SQL vector LIMIT reference into an integer."""
+
+    if isinstance(limit_ref, str):
+        return int(_required_mapping_value(params, limit_ref))
+    return int(limit_ref)
+
+
 def _candidate_query_params(
     params: Mapping[str, Any],
     excluded_keys: set[str],
@@ -289,6 +290,177 @@ def _looks_like_embedding_ref(identifier: str) -> bool:
     """Return whether one vector syntax identifier points at `embedding`."""
 
     return identifier.split(".")[-1].casefold() == "embedding"
+
+
+def _analyze_sql_candidate_vector_query(
+    text: str,
+) -> SQLCandidateVectorQueryAnalysis | None:
+    """Return parsed analysis for one supported SQL vector query, if any."""
+
+    if not _looks_like_sql_vector_query_text(text):
+        return None
+
+    try:
+        expression = parse_one(text, read="postgres")
+    except sqlglot_errors.ParseError:
+        return _analyze_sql_candidate_vector_query_regex(text)
+
+    if expression.key != "select":
+        return None
+
+    order = expression.args.get("order")
+    ordered_expressions = list(getattr(order, "expressions", ()))
+    if len(ordered_expressions) != 1:
+        return None
+
+    ordered = ordered_expressions[0]
+    metric = _sql_vector_metric(getattr(ordered, "this", None))
+    if metric is None:
+        return None
+
+    vector_expression = getattr(ordered, "this", None)
+    embedding_expr = getattr(vector_expression, "args", {}).get("this")
+    embedding_ref = _sql_identifier_text(embedding_expr)
+    if not embedding_ref or not _looks_like_embedding_ref(embedding_ref):
+        raise ValueError(
+            "HumemVector v0 SQL vector queries currently require ORDER BY "
+            "an embedding column."
+        )
+
+    query_param_name = _named_sql_param_name(
+        getattr(vector_expression, "args", {}).get("expression")
+    )
+    if query_param_name is None:
+        raise ValueError(
+            "HumemVector v0 SQL vector queries currently require the query "
+            "vector to come from a named parameter."
+        )
+
+    limit_ref = _sql_limit_ref(expression.args.get("limit"))
+    if limit_ref is None:
+        return None
+
+    candidate_expression = expression.copy()
+    candidate_expression.set("order", None)
+    candidate_expression.set("limit", None)
+    _sql_select_table_name(candidate_expression)
+
+    return SQLCandidateVectorQueryAnalysis(
+        candidate_query_text=_restore_named_sql_params(
+            candidate_expression.sql(dialect="postgres")
+        ),
+        metric=metric,
+        query_param_name=query_param_name,
+        limit_ref=limit_ref,
+    )
+
+
+def _analyze_sql_candidate_vector_query_regex(
+    text: str,
+) -> SQLCandidateVectorQueryAnalysis | None:
+    """Fallback SQL vector-query analysis for operators sqlglot does not parse."""
+
+    sql_match = _SQL_VECTOR_QUERY_RE.match(text)
+    if sql_match is None:
+        return None
+
+    embedding_ref = sql_match.group("embedding")
+    if not _looks_like_embedding_ref(embedding_ref):
+        raise ValueError(
+            "HumemVector v0 SQL vector queries currently require ORDER BY "
+            "an embedding column."
+        )
+
+    limit_token = sql_match.group("limit")
+    limit_ref: SQLParamRef
+    if limit_token.startswith("$"):
+        limit_ref = _param_name(limit_token)
+    else:
+        limit_ref = int(limit_token)
+
+    return SQLCandidateVectorQueryAnalysis(
+        candidate_query_text=_strip_trailing_semicolon(
+            sql_match.group("candidate_query")
+        ),
+        metric=_SQL_VECTOR_OPERATOR_TO_METRIC[sql_match.group("operator")],
+        query_param_name=_param_name(sql_match.group("query")),
+        limit_ref=limit_ref,
+    )
+
+
+def _looks_like_sql_vector_query_text(text: str) -> bool:
+    """Return whether text is worth attempting to parse as SQL vector syntax."""
+
+    lowered = text.casefold()
+    return (
+        "order by" in lowered
+        and "limit" in lowered
+        and any(operator in text for operator in ("<->", "<=>", "<#>"))
+    )
+
+
+def _sql_vector_metric(expression: Any) -> VectorMetric | None:
+    """Return the vector metric represented by one parsed SQL ORDER BY node."""
+
+    if expression is None:
+        return None
+
+    expression_name = type(expression).__name__
+    if expression_name == "Distance":
+        return "l2"
+    if expression_name == "NullSafeEQ":
+        return "cosine"
+    if expression_name == "Dot":
+        return "dot"
+    return None
+
+
+def _named_sql_param_name(expression: Any) -> str | None:
+    """Return the `$name` param referenced by one parsed SQL expression."""
+
+    if expression is None or type(expression).__name__ != "Parameter":
+        return None
+
+    parameter_var = getattr(expression, "args", {}).get("this")
+    parameter_name = getattr(parameter_var, "this", None)
+    if parameter_name is None:
+        return None
+    return str(parameter_name)
+
+
+def _sql_limit_ref(limit_expression: Any) -> SQLParamRef | None:
+    """Return the parsed SQL LIMIT reference for one candidate vector query."""
+
+    limit_value = getattr(limit_expression, "expression", None)
+    if limit_value is None:
+        return None
+
+    named_param = _named_sql_param_name(limit_value)
+    if named_param is not None:
+        return named_param
+
+    if type(limit_value).__name__ == "Literal":
+        return int(str(getattr(limit_value, "this", limit_value)))
+
+    return None
+
+
+def _restore_named_sql_params(text: str) -> str:
+    """Convert sqlglot named parameter rendering back into `$name` form."""
+
+    return _NAMED_SQL_PARAM_RE.sub(r"$\1", text)
+
+
+def _sql_identifier_text(expression: Any) -> str:
+    """Return one parsed identifier as text suitable for embedding checks."""
+
+    table_name = getattr(getattr(expression, "args", {}).get("table"), "name", None)
+    column_name = getattr(expression, "name", None)
+    if table_name and column_name:
+        return f"{table_name}.{column_name}"
+    if column_name:
+        return str(column_name)
+    return str(expression or "")
 
 
 def _strip_trailing_semicolon(text: str) -> str:
@@ -360,6 +532,12 @@ def sql_candidate_query_table_name(text: str) -> str:
         raise ValueError(
             "HumemVector v0 SQL vector candidate query must be valid HumemSQL v0."
         ) from exc
+
+    return _sql_select_table_name(expression)
+
+
+def _sql_select_table_name(expression: Any) -> str:
+    """Return the single base table name for one narrow parsed SQL SELECT."""
 
     if type(expression).__name__ != "Select":
         raise ValueError(

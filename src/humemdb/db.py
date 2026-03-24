@@ -35,6 +35,7 @@ from ._vector_runtime import (
     ResolvedVectorCandidates as _ResolvedVectorCandidates,
     CandidateVectorQueryResult as _CandidateVectorQueryResult,
     CandidateVectorQueryPlan as _CandidateVectorQueryPlan,
+    SQLVectorQueryPlan as _SQLVectorQueryPlan,
     TargetNamespacedVectorRow as _TargetNamespacedVectorRow,
     VECTOR_RESULT_COLUMNS as _VECTOR_RESULT_COLUMNS,
     candidate_vector_result_from_query_result,
@@ -58,7 +59,14 @@ from .sql import (
     translate_sql,
     translate_sql_plan,
 )
-from .types import BatchParameters, QueryParameters, QueryResult, QueryType, Route
+from .types import (
+    BatchParameters,
+    InternalQueryType,
+    QueryParameters,
+    QueryResult,
+    QueryType,
+    Route,
+)
 from .vector import (
     ExactVectorIndex,
     VectorMetric,
@@ -124,7 +132,7 @@ class _QueryExecutionPlan:
 
     text: str
     route: Route
-    query_type: QueryType
+    query_type: InternalQueryType
     params: QueryParameters
     workload: _WorkloadProfile
     translated_text: str | None = None
@@ -452,6 +460,15 @@ class HumemDB:
             raise ValueError(
                 "HumemDB internal vector plans require a precomputed vector plan."
             )
+        public_query_type: QueryType
+        if isinstance(vector_plan, _SQLVectorQueryPlan):
+            logger.debug("Routing SQL-backed vector query to exact SQLite/NumPy path")
+            public_query_type = "sql"
+        else:
+            logger.debug(
+                "Routing Cypher-backed vector query to exact SQLite/NumPy path"
+            )
+            public_query_type = "cypher"
         resolved_candidates = self._resolve_candidate_vector_query(
             vector_plan,
         )
@@ -460,6 +477,7 @@ class HumemDB:
             top_k=vector_plan.top_k,
             metric=vector_plan.metric,
             resolved_candidates=resolved_candidates,
+            public_query_type=public_query_type,
         )
 
     def _execute_query_plan(self, plan: _QueryExecutionPlan) -> QueryResult:
@@ -473,8 +491,11 @@ class HumemDB:
             plan.route,
         )
 
-        if plan.query_type == "vector":
-            logger.debug("Routing vector query to exact SQLite/NumPy path")
+        if plan.vector_plan is not None:
+            logger.debug(
+                "Routing explicit %s vector plan to exact SQLite/NumPy path",
+                type(plan.vector_plan).__name__,
+            )
             return self._execute_vector_query(plan)
 
         if plan.query_type == "cypher":
@@ -486,8 +507,7 @@ class HumemDB:
         logger.debug("Rejected unsupported query_type=%s", plan.query_type)
         raise NotImplementedError(
             "HumemDB currently supports query_type='sql' for HumemSQL v0, "
-            "query_type='cypher' for HumemCypher v0, and "
-            "query_type='vector' for exact HumemVector v0 search; "
+            "query_type='cypher' for HumemCypher v0; "
             f"got {plan.query_type!r}."
         )
 
@@ -655,6 +675,7 @@ class HumemDB:
         top_k: int,
         metric: VectorMetric,
         resolved_candidates: _ResolvedVectorCandidates,
+        public_query_type: QueryType | None = None,
     ) -> QueryResult:
         """Execute one exact vector search against resolved candidate indexes."""
 
@@ -663,7 +684,7 @@ class HumemDB:
                 rows=(),
                 columns=_VECTOR_RESULT_COLUMNS,
                 route="sqlite",
-                query_type="vector",
+                query_type=public_query_type,
                 rowcount=0,
             )
 
@@ -689,7 +710,7 @@ class HumemDB:
             rows=rows,
             columns=_VECTOR_RESULT_COLUMNS,
             route="sqlite",
-            query_type="vector",
+            query_type=public_query_type,
             rowcount=len(rows),
         )
 
@@ -759,30 +780,30 @@ class HumemDB:
 
         candidate_query = plan.candidate_query
 
-        if (
-            candidate_query.query_type == "sql"
-            and not translate_sql_plan(
+        if isinstance(plan, _SQLVectorQueryPlan):
+            if not translate_sql_plan(
                 candidate_query.text,
                 target=candidate_query.route,
-            ).is_read_only
-        ):
-            raise ValueError(
-                "HumemVector v0 SQL vector candidate query must be a read-only "
-                "SQL query."
-            )
-        normalized_candidate_query = candidate_query.text.lstrip()
-        if candidate_query.query_type == "cypher" and not _CYPHER_MATCH_PREFIX.match(
-            normalized_candidate_query
-        ):
-            raise ValueError(
-                "HumemVector v0 Cypher vector candidate query must be a MATCH query."
-            )
+            ).is_read_only:
+                raise ValueError(
+                    "HumemVector v0 SQL vector candidate query must be a read-only "
+                    "SQL query."
+                )
+            candidate_query_type: Literal["sql", "cypher"] = "sql"
+        else:
+            normalized_candidate_query = candidate_query.text.lstrip()
+            if not _CYPHER_MATCH_PREFIX.match(normalized_candidate_query):
+                raise ValueError(
+                    "HumemVector v0 Cypher vector candidate query must be a "
+                    "MATCH query."
+                )
+            candidate_query_type = "cypher"
 
         candidate_result = self._execute_query_plan(
             _plan_query(
                 candidate_query.text,
                 route=candidate_query.route,
-                query_type=candidate_query.query_type,
+                query_type=candidate_query_type,
                 params=candidate_query.params,
             )
         )
@@ -1114,7 +1135,7 @@ class _TransactionContext:
         self.db.rollback(route=self.route)
 
 
-def _infer_query_type(text: str) -> QueryType:
+def _infer_query_type(text: str) -> InternalQueryType:
     """Infer the public query type for the current SQL/Cypher/vector subset.
 
     The inference stays intentionally narrow. Vector intent must be explicit in the
@@ -1140,7 +1161,7 @@ def _plan_query(
     text: str,
     *,
     route: Route | None,
-    query_type: QueryType | None = None,
+    query_type: InternalQueryType | None = None,
     params: QueryParameters,
 ) -> _QueryExecutionPlan:
     """Build the thin internal dispatch plan for one `db.query(...)` call."""
@@ -1190,7 +1211,7 @@ def _plan_query(
 
 
 def _classify_workload(
-    query_type: QueryType,
+    query_type: InternalQueryType,
     *,
     sql_plan: _SQLTranslationPlan | None,
     cypher_shape: _CypherPlanShape | None,

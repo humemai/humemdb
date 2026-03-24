@@ -24,7 +24,13 @@ from typing import Any, Mapping, Sequence, TypeAlias
 import duckdb
 
 from .runtime import HUMEMDB_THREADS_ENV, resolve_thread_budget_from_env
-from .types import BatchParameters, QueryParameters, QueryResult, QueryType
+from .types import (
+    BatchParameters,
+    InternalQueryType,
+    QueryParameters,
+    QueryResult,
+    QueryType,
+)
 
 _AUTO_COMMIT_KEYWORDS = {
     "alter",
@@ -79,7 +85,7 @@ class SQLiteEngine:
         text: str,
         params: QueryParameters = None,
         *,
-        query_type: QueryType = "sql",
+        query_type: InternalQueryType = "sql",
     ) -> QueryResult:
         """Execute SQL on SQLite and return a normalized result.
 
@@ -100,7 +106,7 @@ class SQLiteEngine:
             rows=rows,
             columns=columns,
             route="sqlite",
-            query_type=query_type,
+            query_type=_public_query_type(query_type),
             rowcount=cursor.rowcount,
         )
 
@@ -109,7 +115,7 @@ class SQLiteEngine:
         text: str,
         params_seq: BatchParameters,
         *,
-        query_type: QueryType = "sql",
+        query_type: InternalQueryType = "sql",
     ) -> QueryResult:
         """Execute the same SQL statement for multiple parameter sets.
 
@@ -134,7 +140,7 @@ class SQLiteEngine:
             rows=rows,
             columns=columns,
             route="sqlite",
-            query_type=query_type,
+            query_type=_public_query_type(query_type),
             rowcount=cursor.rowcount,
         )
 
@@ -264,7 +270,7 @@ class DuckDBEngine:
         text: str,
         params: QueryParameters = None,
         *,
-        query_type: QueryType = "sql",
+        query_type: InternalQueryType = "sql",
     ) -> QueryResult:
         """Execute SQL on DuckDB and return a normalized result.
 
@@ -285,7 +291,7 @@ class DuckDBEngine:
             rows=rows,
             columns=columns,
             route="duckdb",
-            query_type=query_type,
+            query_type=_public_query_type(query_type),
             rowcount=cursor.rowcount,
         )
 
@@ -334,6 +340,14 @@ class DuckDBEngine:
 
         self.connection.close()
         logger.debug("Closed DuckDB connection")
+
+
+def _public_query_type(query_type: InternalQueryType) -> QueryType | None:
+    """Normalize one internal query label onto the public result surface."""
+
+    if query_type == "vector":
+        return None
+    return query_type
 
 
 def _collect_rows(

@@ -571,6 +571,93 @@ class HumemDBTest(unittest.TestCase):
                 result = db.query("SELECT id, name FROM users ORDER BY id")
 
                 self.assertEqual(result.rows, ((1, "Alice"), (2, "Bob")))
+                self.assertEqual(result.route, "sqlite")
+
+    def test_query_auto_routes_broad_sql_read_to_duckdb(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            duckdb_path = Path(tmpdir) / "humem.duckdb"
+
+            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+                db.query(
+                    (
+                        "CREATE TABLE events ("
+                        "id INTEGER PRIMARY KEY, "
+                        "kind TEXT NOT NULL, "
+                        "value INTEGER NOT NULL)"
+                    )
+                )
+                db.executemany(
+                    "INSERT INTO events (id, kind, value) VALUES ($id, $kind, $value)",
+                    [
+                        {"id": 1, "kind": "click", "value": 10},
+                        {"id": 2, "kind": "click", "value": 20},
+                        {"id": 3, "kind": "view", "value": 5},
+                    ],
+                )
+
+                result = db.query(
+                    (
+                        "SELECT kind, COUNT(*) AS total "
+                        "FROM events GROUP BY kind ORDER BY total DESC"
+                    )
+                )
+
+                self.assertEqual(result.route, "duckdb")
+                self.assertEqual(result.rows, (("click", 2), ("view", 1)))
+
+    def test_query_explicit_sqlite_route_overrides_sql_auto_routing(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            duckdb_path = Path(tmpdir) / "humem.duckdb"
+
+            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+                db.query(
+                    (
+                        "CREATE TABLE events ("
+                        "id INTEGER PRIMARY KEY, "
+                        "kind TEXT NOT NULL, "
+                        "value INTEGER NOT NULL)"
+                    )
+                )
+                db.executemany(
+                    "INSERT INTO events (id, kind, value) VALUES ($id, $kind, $value)",
+                    [
+                        {"id": 1, "kind": "click", "value": 10},
+                        {"id": 2, "kind": "click", "value": 20},
+                        {"id": 3, "kind": "view", "value": 5},
+                    ],
+                )
+
+                result = db.query(
+                    (
+                        "SELECT kind, COUNT(*) AS total "
+                        "FROM events GROUP BY kind ORDER BY total DESC"
+                    ),
+                    route="sqlite",
+                )
+
+                self.assertEqual(result.route, "sqlite")
+                self.assertEqual(result.rows, (("click", 2), ("view", 1)))
+
+    def test_query_auto_routes_read_only_cypher_to_sqlite(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            duckdb_path = Path(tmpdir) / "humem.duckdb"
+
+            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+                db.query("CREATE (u:User {name: 'Alice'})")
+
+                result = db.query("MATCH (u:User) RETURN u.name")
+
+                self.assertEqual(result.route, "sqlite")
+                self.assertEqual(result.rows, (("Alice",),))
 
     def test_sqlite_transaction_context_commits_on_success(self) -> None:
         HumemDB = _humemdb_class()
@@ -791,6 +878,50 @@ class HumemDBTest(unittest.TestCase):
         self.assertEqual(plan.workload.kind, "graph_read")
         self.assertEqual(plan.workload.preferred_route, "sqlite")
         self.assertIn("not broad enough", plan.workload.reason)
+
+    def test_query_plan_carries_sql_vector_plan_metadata(self) -> None:
+        db_module = importlib.import_module("humemdb.db")
+        plan_query = getattr(db_module, "_plan_query")
+
+        plan = plan_query(
+            "SELECT id FROM docs ORDER BY embedding <=> $query LIMIT $limit",
+            route=None,
+            params={"query": [1.0, 0.0], "limit": 2},
+        )
+
+        self.assertEqual(plan.query_type, "vector")
+        self.assertEqual(plan.route, "sqlite")
+        self.assertIsNotNone(plan.vector_plan)
+        assert plan.vector_plan is not None
+        self.assertEqual(plan.vector_plan.metric, "cosine")
+        self.assertEqual(plan.vector_plan.top_k, 2)
+        self.assertEqual(plan.vector_plan.candidate_query.query_type, "sql")
+        self.assertEqual(plan.vector_plan.candidate_query.target, "sql_row")
+        self.assertEqual(plan.vector_plan.candidate_query.namespace, "docs")
+
+    def test_query_plan_carries_cypher_vector_plan_metadata(self) -> None:
+        db_module = importlib.import_module("humemdb.db")
+        plan_query = getattr(db_module, "_plan_query")
+
+        plan = plan_query(
+            (
+                "MATCH (u:User) "
+                "SEARCH u IN (VECTOR INDEX embedding FOR $query LIMIT $limit) "
+                "RETURN u.id"
+            ),
+            route=None,
+            params={"query": [1.0, 0.0], "limit": 1},
+        )
+
+        self.assertEqual(plan.query_type, "vector")
+        self.assertEqual(plan.route, "sqlite")
+        self.assertIsNotNone(plan.vector_plan)
+        assert plan.vector_plan is not None
+        self.assertEqual(plan.vector_plan.metric, "cosine")
+        self.assertEqual(plan.vector_plan.top_k, 1)
+        self.assertEqual(plan.vector_plan.candidate_query.query_type, "cypher")
+        self.assertEqual(plan.vector_plan.candidate_query.target, "graph_node")
+        self.assertEqual(plan.vector_plan.candidate_query.namespace, "")
 
     def test_query_plan_classifies_simple_sql_as_transactional_read(self) -> None:
         db_module = importlib.import_module("humemdb.db")
@@ -1746,6 +1877,25 @@ class HumemDBTest(unittest.TestCase):
 
                 self.assertEqual(result.rows[0][:3], ("sql_row", "docs", 1))
 
+    def test_sql_vector_dot_rejects_invalid_candidate_query(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+
+            with HumemDB(str(sqlite_path)) as db:
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "candidate query must be valid HumemSQL v0",
+                ):
+                    db.query(
+                        (
+                            "SELECT id FROM docs WHERE "
+                            "ORDER BY embedding <#> $query LIMIT 1"
+                        ),
+                        params={"query": [1.0, 0.0]},
+                    )
+
     def test_sql_vector_syntax_keeps_large_fraction_scope_exact(self) -> None:
         HumemDB = _humemdb_class()
 
@@ -1875,6 +2025,48 @@ class HumemDBTest(unittest.TestCase):
                     (
                         "MATCH (u:User {cohort: 'alpha'}) "
                         "SEARCH u IN (VECTOR INDEX embedding FOR $query LIMIT $limit) "
+                        "RETURN u.id ORDER BY u.id"
+                    ),
+                    params={
+                        "query": [1.0, 0.0],
+                        "limit": 2,
+                    },
+                )
+
+                self.assertEqual(
+                    tuple(row[:3] for row in result.rows),
+                    (
+                        ("graph_node", "", alice.rows[0][0]),
+                        ("graph_node", "", bob.rows[0][0]),
+                    ),
+                )
+
+    def test_cypher_vector_query_accepts_lowercase_search_keywords(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+
+            with HumemDB(str(sqlite_path)) as db:
+                alice = db.query(
+                    (
+                        "CREATE (u:User {"
+                        "name: 'Alice', cohort: 'alpha', embedding: $embedding})"
+                    ),
+                    params={"embedding": [1.0, 0.0]},
+                )
+                bob = db.query(
+                    (
+                        "CREATE (u:User {"
+                        "name: 'Bob', cohort: 'alpha', embedding: $embedding})"
+                    ),
+                    params={"embedding": [0.9, 0.1]},
+                )
+
+                result = db.query(
+                    (
+                        "MATCH (u:User {cohort: 'alpha'}) "
+                        "search u in (vector index embedding for $query limit $limit) "
                         "RETURN u.id ORDER BY u.id"
                     ),
                     params={

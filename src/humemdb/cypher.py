@@ -82,6 +82,16 @@ class CypherVectorQueryAnalysis:
 
 
 @dataclass(frozen=True, slots=True)
+class CypherVectorSearchClause:
+    """Parsed `SEARCH alias IN (VECTOR INDEX ... FOR ... LIMIT ...)` clause."""
+
+    alias: str
+    index_name: str
+    query_param_name: str
+    limit_ref: CypherVectorLimitRef
+
+
+@dataclass(frozen=True, slots=True)
 class Predicate:
     """Simple equality predicate used by the initial Cypher `WHERE` subset.
 
@@ -339,13 +349,6 @@ _REL_PATTERN_RE = re.compile(
     r"(?:\s*\{\s*(?P<properties>.*)\s*\})?$"
 )
 _RETURN_ITEM_RE = re.compile(rf"^(?P<alias>{_IDENTIFIER})\.(?P<field>{_IDENTIFIER})$")
-_CYPHER_VECTOR_SEARCH_RE = re.compile(
-    rf"^(?P<alias>{_IDENTIFIER})\s+IN\s*\(\s*"
-    rf"VECTOR\s+INDEX\s+(?P<index>{_IDENTIFIER})\s+"
-    rf"FOR\s+(?P<query>\${_IDENTIFIER})\s+"
-    rf"LIMIT\s+(?P<limit>\${_IDENTIFIER}|\d+)\s*\)$",
-    flags=re.IGNORECASE,
-)
 
 _UNSUPPORTED_KEYWORDS = {
     "with",
@@ -543,37 +546,88 @@ def analyze_cypher_vector_query(text: str) -> CypherVectorQueryAnalysis | None:
             "HumemCypher v0 SEARCH queries require MATCH, SEARCH, and RETURN clauses."
         )
 
-    search_match = _CYPHER_VECTOR_SEARCH_RE.fullmatch(search_text)
-    if search_match is None:
-        raise ValueError(
-            "HumemCypher v0 SEARCH queries currently require "
-            "SEARCH alias IN (VECTOR INDEX embedding FOR $query LIMIT ...)."
-        )
-
-    index_name = search_match.group("index")
-    if index_name.casefold() != "embedding":
+    search_clause = _parse_cypher_vector_search_clause(search_text)
+    if search_clause.index_name.casefold() != "embedding":
         raise ValueError(
             "HumemCypher v0 SEARCH queries currently require VECTOR INDEX embedding."
         )
 
     candidate_query_text = f"MATCH {match_body} RETURN {return_clause}"
     candidate_plan = parse_cypher(candidate_query_text)
-    search_alias = search_match.group("alias")
-    if search_alias not in _match_plan_node_aliases(candidate_plan):
+    if search_clause.alias not in _match_plan_node_aliases(candidate_plan):
         raise ValueError(
             "HumemCypher v0 SEARCH queries must target a matched node alias."
         )
 
-    limit_token = search_match.group("limit")
-    limit_ref: CypherVectorLimitRef
-    if limit_token.startswith("$"):
-        limit_ref = limit_token[1:]
-    else:
-        limit_ref = int(limit_token)
-
     return CypherVectorQueryAnalysis(
         candidate_query_text=candidate_query_text,
-        query_param_name=search_match.group("query")[1:],
+        query_param_name=search_clause.query_param_name,
+        limit_ref=search_clause.limit_ref,
+    )
+
+
+def _parse_cypher_vector_search_clause(text: str) -> CypherVectorSearchClause:
+    """Parse one narrow Cypher `SEARCH ... IN (VECTOR INDEX ... FOR ... LIMIT ...)`."""
+
+    clause = text.strip()
+    if not clause:
+        raise ValueError(
+            "HumemCypher v0 SEARCH queries currently require "
+            "SEARCH alias IN (VECTOR INDEX embedding FOR $query LIMIT ...)."
+        )
+
+    in_index = _find_keyword(clause, "in")
+    if in_index is None:
+        raise ValueError(
+            "HumemCypher v0 SEARCH queries currently require "
+            "SEARCH alias IN (VECTOR INDEX embedding FOR $query LIMIT ...)."
+        )
+
+    alias = _parse_cypher_identifier_token(clause[:in_index].strip(), "SEARCH alias")
+    container_text = clause[in_index + len("in"):].strip()
+    if not container_text.startswith("(") or not container_text.endswith(")"):
+        raise ValueError(
+            "HumemCypher v0 SEARCH queries currently require "
+            "SEARCH alias IN (VECTOR INDEX embedding FOR $query LIMIT ...)."
+        )
+
+    body = container_text[1:-1].strip()
+    vector_index_text = _consume_keyword_prefix(body, "vector")
+    index_text = _consume_keyword_prefix(vector_index_text, "index")
+
+    for_index = _find_keyword(index_text, "for")
+    if for_index is None:
+        raise ValueError(
+            "HumemCypher v0 SEARCH queries currently require "
+            "SEARCH alias IN (VECTOR INDEX embedding FOR $query LIMIT ...)."
+        )
+    index_name = _parse_cypher_identifier_token(
+        index_text[:for_index].strip(),
+        "VECTOR INDEX name",
+    )
+
+    for_text = index_text[for_index + len("for"):].strip()
+    limit_index = _find_keyword(for_text, "limit")
+    if limit_index is None:
+        raise ValueError(
+            "HumemCypher v0 SEARCH queries currently require "
+            "SEARCH alias IN (VECTOR INDEX embedding FOR $query LIMIT ...)."
+        )
+
+    query_token = for_text[:limit_index].strip()
+    if not re.fullmatch(rf"\${_IDENTIFIER}", query_token):
+        raise ValueError(
+            "HumemCypher v0 SEARCH queries currently require the query vector "
+            "to come from a named parameter."
+        )
+
+    limit_ref = _parse_cypher_vector_limit_ref(
+        for_text[limit_index + len("limit"):].strip()
+    )
+    return CypherVectorSearchClause(
+        alias=alias,
+        index_name=index_name,
+        query_param_name=query_token[1:],
         limit_ref=limit_ref,
     )
 
@@ -2293,6 +2347,44 @@ def _find_keyword(text: str, keyword: str) -> int | None:
     if match is None:
         return None
     return match.start()
+
+
+def _consume_keyword_prefix(text: str, keyword: str) -> str:
+    """Remove one required leading keyword and return the remaining text."""
+
+    stripped = text.strip()
+    match = re.match(rf"^{keyword}\b", stripped, flags=re.IGNORECASE)
+    if match is None:
+        raise ValueError(
+            "HumemCypher v0 SEARCH queries currently require "
+            "SEARCH alias IN (VECTOR INDEX embedding FOR $query LIMIT ...)."
+        )
+    return stripped[match.end():].strip()
+
+
+def _parse_cypher_identifier_token(text: str, label: str) -> str:
+    """Validate one narrow Cypher identifier token."""
+
+    if not re.fullmatch(_IDENTIFIER, text):
+        raise ValueError(f"HumemCypher v0 {label} must be an identifier.")
+    return text
+
+
+def _parse_cypher_vector_limit_ref(text: str) -> CypherVectorLimitRef:
+    """Parse one Cypher vector SEARCH limit token into a literal or param ref."""
+
+    if not text:
+        raise ValueError(
+            "HumemCypher v0 SEARCH queries currently require a LIMIT value."
+        )
+    if re.fullmatch(r"\d+", text):
+        return int(text)
+    if re.fullmatch(rf"\${_IDENTIFIER}", text):
+        return text[1:]
+    raise ValueError(
+        "HumemCypher v0 SEARCH queries currently require literal or "
+        "parameterized LIMIT."
+    )
 
 
 def _split_comma_separated(text: str) -> list[str]:

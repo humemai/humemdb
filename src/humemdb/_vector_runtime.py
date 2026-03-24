@@ -52,6 +52,8 @@ class CandidateQueryPlan:
     text: str
     query_type: CandidateQueryType
     route: Route
+    target: str
+    namespace: str
     params: QueryParameters
 
 
@@ -163,12 +165,18 @@ def plan_candidate_vector_query(
         excluded_params = {sql_analysis.query_param_name}
         if isinstance(sql_analysis.limit_ref, str):
             excluded_params.add(sql_analysis.limit_ref)
+        target, namespace = target_namespace_for_vector_query(
+            sql_analysis.candidate_query_text,
+            candidate_query_type="sql",
+        )
 
         return CandidateVectorQueryPlan(
             candidate_query=CandidateQueryPlan(
                 text=sql_analysis.candidate_query_text,
                 query_type="sql",
                 route="sqlite",
+                target=target,
+                namespace=namespace,
                 params=_candidate_query_params(mapping_params, excluded_params),
             ),
             query=_required_mapping_value(
@@ -184,12 +192,18 @@ def plan_candidate_vector_query(
         excluded_params = {cypher_analysis.query_param_name}
         if isinstance(cypher_analysis.limit_ref, str):
             excluded_params.add(cypher_analysis.limit_ref)
+        target, namespace = target_namespace_for_vector_query(
+            cypher_analysis.candidate_query_text,
+            candidate_query_type="cypher",
+        )
 
         return CandidateVectorQueryPlan(
             candidate_query=CandidateQueryPlan(
                 text=cypher_analysis.candidate_query_text,
                 query_type="cypher",
                 route="sqlite",
+                target=target,
+                namespace=namespace,
                 params=_candidate_query_params(mapping_params, excluded_params),
             ),
             query=_required_mapping_value(
@@ -364,12 +378,27 @@ def _analyze_sql_candidate_vector_query_regex(
     if sql_match is None:
         return None
 
+    operator = sql_match.group("operator")
+    if operator != "<#>":
+        return None
+
     embedding_ref = sql_match.group("embedding")
     if not _looks_like_embedding_ref(embedding_ref):
         raise ValueError(
             "HumemVector v0 SQL vector queries currently require ORDER BY "
             "an embedding column."
         )
+
+    candidate_query_text = _strip_trailing_semicolon(
+        sql_match.group("candidate_query")
+    )
+    try:
+        candidate_expression = parse_one(candidate_query_text, read="postgres")
+    except sqlglot_errors.ParseError as exc:
+        raise ValueError(
+            "HumemVector v0 SQL vector candidate query must be valid HumemSQL v0."
+        ) from exc
+    _sql_select_table_name(candidate_expression)
 
     limit_token = sql_match.group("limit")
     limit_ref: SQLParamRef
@@ -379,10 +408,8 @@ def _analyze_sql_candidate_vector_query_regex(
         limit_ref = int(limit_token)
 
     return SQLCandidateVectorQueryAnalysis(
-        candidate_query_text=_strip_trailing_semicolon(
-            sql_match.group("candidate_query")
-        ),
-        metric=_SQL_VECTOR_OPERATOR_TO_METRIC[sql_match.group("operator")],
+        candidate_query_text=candidate_query_text,
+        metric=_SQL_VECTOR_OPERATOR_TO_METRIC[operator],
         query_param_name=_param_name(sql_match.group("query")),
         limit_ref=limit_ref,
     )
@@ -612,15 +639,11 @@ def vector_candidate_keys_from_result(
 def candidate_vector_result_from_query_result(
     result: QueryResult,
     *,
-    candidate_query_text: str,
-    candidate_query_type: CandidateQueryType,
+    target: str,
+    namespace: str,
 ) -> CandidateVectorQueryResult:
     """Normalize one SQL/Cypher candidate query into vector candidate keys."""
 
-    target, namespace = target_namespace_for_vector_query(
-        candidate_query_text,
-        candidate_query_type=candidate_query_type,
-    )
     candidate_keys = vector_candidate_keys_from_result(
         result,
         target=target,

@@ -336,6 +336,10 @@ Status: in progress.
 - [x] Move Cypher vector support from the current narrow text-shape lowering toward a
   parsed `SEARCH ... VECTOR INDEX ...` analysis path under the current Cypher parser
   boundary, while leaving a fuller first-class plan node for later work.
+- [x] Carry language-level vector planning through explicit internal plan variants
+  instead of one generic candidate-query blob: SQL-backed and Cypher-backed vector
+  query plans now exist as separate internal plan shapes, and their candidate-query
+  plans are also language-specific.
 - [ ] Keep rejecting unsupported constructs clearly instead of pretending to support
   full PostgreSQL or full Cypher compatibility before the implementation is actually
   there.
@@ -369,12 +373,18 @@ Status: in progress.
 - [x] Validate the supported portable SQL and Cypher subsets before routing a query.
 - [ ] Keep internal direct vector-object calls explicit instead of trying to infer
   vector intent from arbitrary free-form text.
+- [ ] Stop using `query_type == "vector"` as the main internal dispatcher switch once
+  the explicit SQL-vector and Cypher-vector plan variants are strong enough to drive
+  execution directly from plan shape.
 - [x] Classify queries safely at first: read versus write, then simple OLTP-style
   versus OLAP-style read shapes.
 - [x] Keep the first automatic-routing implementation in Python and make its behavior
   explainable in tests and logs.
 - [x] Route writes, point reads, and explicit transactional work to SQLite.
 - [x] Route broader scans, aggregates, and analytical reads to DuckDB.
+- [x] Ship the first conservative omitted-route automatic-routing slice: broad
+  analytical SQL may route to DuckDB, while writes, ambiguous SQL, and current
+  Cypher reads remain SQLite-preferred by default.
 - [x] Keep SQL OLAP-to-DuckDB recommendation conservative until the benchmark suite
   produces calibrated admission thresholds; do not treat every join or aggregate as
   enough evidence on its own.

@@ -46,11 +46,10 @@ PendingTargetNamespacedVectorRow: TypeAlias = tuple[
 
 
 @dataclass(frozen=True, slots=True)
-class CandidateQueryPlan:
-    """Thin internal plan for the SQL/Cypher candidate query in vector search."""
+class SQLCandidateQueryPlan:
+    """Thin internal plan for one SQL candidate query in vector search."""
 
     text: str
-    query_type: CandidateQueryType
     route: Route
     target: str
     namespace: str
@@ -58,13 +57,37 @@ class CandidateQueryPlan:
 
 
 @dataclass(frozen=True, slots=True)
-class CandidateVectorQueryPlan:
-    """Thin internal plan for one candidate-query vector execution."""
+class CypherCandidateQueryPlan:
+    """Thin internal plan for one Cypher candidate query in vector search."""
 
-    candidate_query: CandidateQueryPlan
+    text: str
+    route: Route
+    target: str
+    namespace: str
+    params: QueryParameters
+
+
+@dataclass(frozen=True, slots=True)
+class SQLVectorQueryPlan:
+    """Internal plan for one SQL-backed candidate-query vector execution."""
+
+    candidate_query: SQLCandidateQueryPlan
     query: Sequence[float]
     top_k: int
     metric: VectorMetric
+
+
+@dataclass(frozen=True, slots=True)
+class CypherVectorQueryPlan:
+    """Internal plan for one Cypher-backed candidate-query vector execution."""
+
+    candidate_query: CypherCandidateQueryPlan
+    query: Sequence[float]
+    top_k: int
+    metric: VectorMetric
+
+
+CandidateVectorQueryPlan: TypeAlias = SQLVectorQueryPlan | CypherVectorQueryPlan
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,10 +193,9 @@ def plan_candidate_vector_query(
             candidate_query_type="sql",
         )
 
-        return CandidateVectorQueryPlan(
-            candidate_query=CandidateQueryPlan(
+        return SQLVectorQueryPlan(
+            candidate_query=SQLCandidateQueryPlan(
                 text=sql_analysis.candidate_query_text,
-                query_type="sql",
                 route="sqlite",
                 target=target,
                 namespace=namespace,
@@ -197,10 +219,9 @@ def plan_candidate_vector_query(
             candidate_query_type="cypher",
         )
 
-        return CandidateVectorQueryPlan(
-            candidate_query=CandidateQueryPlan(
+        return CypherVectorQueryPlan(
+            candidate_query=CypherCandidateQueryPlan(
                 text=cypher_analysis.candidate_query_text,
-                query_type="cypher",
                 route="sqlite",
                 target=target,
                 namespace=namespace,

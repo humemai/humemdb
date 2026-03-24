@@ -6,7 +6,7 @@ queries and the core type aliases used across the package.
 The current API surface is deliberately conservative:
 
 - routes are explicit and limited to SQLite or DuckDB
-- query types are explicit; `sql`, `cypher`, and exact `vector` search are implemented
+- public query types are explicit; `sql` and `cypher` are implemented
 - public query params use mapping-style named bindings across SQL, Cypher, and the
     vector frontend
 
@@ -21,7 +21,8 @@ from dataclasses import dataclass
 from typing import Any, Literal, Mapping, Sequence, TypeAlias
 
 Route: TypeAlias = Literal["sqlite", "duckdb"]
-QueryType: TypeAlias = Literal["sql", "cypher", "vector"]
+QueryType: TypeAlias = Literal["sql", "cypher"]
+InternalQueryType: TypeAlias = Literal["sql", "cypher", "vector"]
 QueryParameters: TypeAlias = Mapping[str, Any] | Sequence[Any] | None
 BatchParameters: TypeAlias = Sequence[Mapping[str, Any] | Sequence[Any]]
 
@@ -37,7 +38,8 @@ class QueryResult:
         rows: Fully materialized query rows as tuples.
         columns: Column names in result order.
         route: The engine that executed the query.
-        query_type: The logical query type requested by the caller.
+        query_type: The public query-language label requested by the caller, when
+            one applies. Direct vector-method results leave this as `None`.
         rowcount: The driver-reported affected row count for write statements, or the
             driver-specific value for read statements.
     """
@@ -45,7 +47,7 @@ class QueryResult:
     rows: tuple[tuple[Any, ...], ...]
     columns: tuple[str, ...]
     route: Route
-    query_type: QueryType
+    query_type: QueryType | None
     rowcount: int
 
     def first(self) -> tuple[Any, ...] | None:

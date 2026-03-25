@@ -199,7 +199,7 @@ def _compile_cypher_bound(plan: Any, params: dict[str, Any]) -> Any:
 
 
 def _seed_direct_vectors(db: Any, batches: list[list[tuple[int, list[float]]]]) -> None:
-    with db.transaction(route="sqlite"):
+    with db.transaction():
         for batch in batches:
             db.insert_vectors(batch)
 
@@ -230,7 +230,7 @@ def _candidate_indexes_for_target_keys(
 
 
 def _seed_cypher_vectors(db: Any, item_ids: np.ndarray, matrix: np.ndarray) -> None:
-    with db.transaction(route="sqlite"):
+    with db.transaction():
         for item_id, vector in zip(item_ids, matrix, strict=True):
             cohort = "alpha" if int(item_id) <= len(item_ids) // 2 else "beta"
             db.query(
@@ -238,7 +238,6 @@ def _seed_cypher_vectors(db: Any, item_ids: np.ndarray, matrix: np.ndarray) -> N
                     "CREATE (u:User {"
                     "id: $id, name: $name, cohort: $cohort, embedding: $embedding})"
                 ),
-                route="sqlite",
                 params={
                     "id": int(item_id),
                     "name": f"user_{int(item_id):05d}",
@@ -338,9 +337,8 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
                     "topic TEXT NOT NULL, "
                     "embedding BLOB)"
                 ),
-                route="sqlite",
             )
-            with sql_db.transaction(route="sqlite"):
+            with sql_db.transaction():
                 for batch in batches:
                     sql_rows = []
                     for item_id, vector in batch:
@@ -359,7 +357,6 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
                             "VALUES ($id, $title, $topic, $embedding)"
                         ),
                         sql_rows,
-                        route="sqlite",
                     )
             stage_timings_ms["sql_owned_ingest_ms"] = (
                 time.perf_counter() - started
@@ -379,7 +376,6 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
             )
             sql_candidate_result = sql_db.query(
                 sql_candidate_query_text,
-                route="sqlite",
                 params=sql_candidate_params,
             )
             sql_candidate_item_ids = _candidate_target_keys_from_result(
@@ -405,7 +401,6 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
             latency_summaries_ms["sql_candidate_query_only"] = _time_operation(
                 lambda: sql_db.query(
                     sql_candidate_query_text,
-                    route="sqlite",
                     params=sql_candidate_params,
                 ),
                 warmup=config.warmup,
@@ -432,7 +427,6 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
             latency_summaries_ms["sql_vector_query_end_to_end"] = _time_query_batch(
                 lambda query: sql_db.query(
                     sql_vector_query_text,
-                    route="sqlite",
                     params={
                         "query": query,
                         "top_k": config.top_k,
@@ -466,7 +460,6 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
             cypher_plan = parse_cypher(cypher_candidate_query_text)
             cypher_candidate_result = cypher_db.query(
                 cypher_candidate_query_text,
-                route="sqlite",
                 params=cypher_candidate_params,
             )
             cypher_candidate_item_ids = _candidate_target_keys_from_result(
@@ -492,7 +485,6 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
             latency_summaries_ms["cypher_candidate_query_only"] = _time_operation(
                 lambda: cypher_db.query(
                     cypher_candidate_query_text,
-                    route="sqlite",
                     params=cypher_candidate_params,
                 ),
                 warmup=config.warmup,
@@ -519,7 +511,6 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
             latency_summaries_ms["cypher_vector_query_end_to_end"] = _time_query_batch(
                 lambda query: cypher_db.query(
                     cypher_vector_query_text,
-                    route="sqlite",
                     params={
                         "query": query,
                         "top_k": config.top_k,

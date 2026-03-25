@@ -10,7 +10,8 @@ from humemdb.cypher import MatchRelationshipPlan
 from humemdb.cypher import _bind_plan_values
 from humemdb.cypher import _compile_match_plan
 from humemdb.cypher import parse_cypher
-from humemdb.sql import _translate_sql_cached
+from humemdb.db import _plan_cypher_query
+from humemdb.sql import _translate_sql_plan_cached
 from humemdb.sql import translate_sql
 
 
@@ -185,6 +186,71 @@ CYPHER_WORKLOADS: dict[str, CypherWorkload] = {
         ),
         params={"name": "user_0042"},
     ),
+    "node_range_filter": CypherWorkload(
+        family="node",
+        complexity="medium",
+        query=(
+            "MATCH (u:User) "
+            "WHERE u.age >= $min_age "
+            "RETURN u.name, u.age, u.region "
+            "ORDER BY u.age, u.name LIMIT 10"
+        ),
+        params={"min_age": 30},
+    ),
+    "node_string_predicates": CypherWorkload(
+        family="node",
+        complexity="medium",
+        query=(
+            "MATCH (u:User) "
+            "WHERE u.name STARTS WITH $prefix AND u.region CONTAINS $fragment "
+            "RETURN u.name, u.region "
+            "ORDER BY u.name LIMIT 10"
+        ),
+        params={"prefix": "user_00", "fragment": "region_"},
+    ),
+    "node_null_predicates": CypherWorkload(
+        family="node",
+        complexity="medium",
+        query=(
+            "MATCH (u:User) "
+            "WHERE u.nickname IS NULL AND u.region IS NOT NULL "
+            "RETURN u.name, u.region "
+            "ORDER BY u.name LIMIT 10"
+        ),
+        params={},
+    ),
+    "node_mixed_boolean": CypherWorkload(
+        family="node",
+        complexity="complex",
+        query=(
+            "MATCH (u:User) "
+            "WHERE u.age >= $min_age AND u.active = $active OR u.name = $name "
+            "RETURN u.name, u.age, u.region "
+            "ORDER BY u.name LIMIT 10"
+        ),
+        params={"min_age": 40, "active": True, "name": "user_0042"},
+    ),
+    "node_parenthesized_boolean": CypherWorkload(
+        family="node",
+        complexity="complex",
+        query=(
+            "MATCH (u:User) "
+            "WHERE (u.age >= $min_age OR u.name = $name) AND u.active = $active "
+            "RETURN u.name, u.age, u.region "
+            "ORDER BY u.name LIMIT 10"
+        ),
+        params={"min_age": 40, "name": "user_0042", "active": True},
+    ),
+    "node_distinct_offset": CypherWorkload(
+        family="node",
+        complexity="medium",
+        query=(
+            "MATCH (u:User) "
+            "RETURN DISTINCT u.region "
+            "ORDER BY u.region OFFSET 5 LIMIT 10"
+        ),
+        params={},
+    ),
     "relationship_expand": CypherWorkload(
         family="edge",
         complexity="medium",
@@ -196,6 +262,61 @@ CYPHER_WORKLOADS: dict[str, CypherWorkload] = {
         ),
         params={"region": "region_3", "strength": 8},
     ),
+    "relationship_untyped": CypherWorkload(
+        family="edge",
+        complexity="medium",
+        query=(
+            "MATCH (a:User)-[r]->(b:User) "
+            "WHERE a.region = $region AND b.active = $active "
+            "RETURN a.name, r.type, b.name "
+            "ORDER BY a.name LIMIT 10"
+        ),
+        params={"region": "region_3", "active": True},
+    ),
+    "relationship_offset_window": CypherWorkload(
+        family="edge",
+        complexity="medium",
+        query=(
+            "MATCH (a:User)-[r:KNOWS]->(b:User) "
+            "WHERE a.region = $region "
+            "RETURN a.name, r.since, b.name "
+            "ORDER BY r.since DESC OFFSET 25 LIMIT 50"
+        ),
+        params={"region": "region_3"},
+    ),
+    "relationship_string_predicates": CypherWorkload(
+        family="edge",
+        complexity="complex",
+        query=(
+            "MATCH (a:User)-[r:KNOWS]->(b:User) "
+            "WHERE r.note CONTAINS $fragment AND b.name ENDS WITH $suffix "
+            "RETURN a.name, r.note, b.name "
+            "ORDER BY b.name LIMIT 10"
+        ),
+        params={"fragment": "met", "suffix": "42"},
+    ),
+    "relationship_null_predicates": CypherWorkload(
+        family="edge",
+        complexity="complex",
+        query=(
+            "MATCH (a:User)-[r:KNOWS]->(b:User) "
+            "WHERE r.note IS NOT NULL "
+            "RETURN a.name, r.note, b.name "
+            "ORDER BY b.name LIMIT 10"
+        ),
+        params={},
+    ),
+    "relationship_type_alternation": CypherWorkload(
+        family="edge",
+        complexity="complex",
+        query=(
+            "MATCH (a:User)-[r:KNOWS|FOLLOWS]->(b:User) "
+            "WHERE a.region = $region "
+            "RETURN a.name, r.type, b.name "
+            "ORDER BY a.name LIMIT 10"
+        ),
+        params={"region": "region_3"},
+    ),
     "relationship_reverse": CypherWorkload(
         family="edge",
         complexity="medium",
@@ -206,6 +327,16 @@ CYPHER_WORKLOADS: dict[str, CypherWorkload] = {
             "ORDER BY a.name LIMIT 10"
         ),
         params={"region": "region_5"},
+    ),
+    "relationship_anonymous_endpoints": CypherWorkload(
+        family="edge",
+        complexity="complex",
+        query=(
+            "MATCH (:User {region: $region})-[r:KNOWS]->(:User {active: $active}) "
+            "RETURN r.type, r.since "
+            "ORDER BY r.since DESC LIMIT 10"
+        ),
+        params={"region": "region_3", "active": True},
     ),
     "relationship_property_anchor": CypherWorkload(
         family="edge",
@@ -228,6 +359,17 @@ CYPHER_WORKLOADS: dict[str, CypherWorkload] = {
             "ORDER BY r.since DESC, a.name, b.name LIMIT 5"
         ),
         params={"name": "user_0042", "active": True, "since": 2024},
+    ),
+    "relationship_mixed_boolean": CypherWorkload(
+        family="edge",
+        complexity="complex",
+        query=(
+            "MATCH (a:User)-[r:KNOWS]->(b:User) "
+            "WHERE r.since >= $since AND r.strength >= $strength OR b.name = $name "
+            "RETURN a.name, r.since, r.strength, b.name "
+            "ORDER BY b.name LIMIT 10"
+        ),
+        params={"since": 2022, "strength": 2, "name": "user_0042"},
     ),
 }
 
@@ -289,7 +431,7 @@ def _print_summary(label: str, summary: TimingSummary) -> None:
 
 
 def _sql_cold_translation(query: str, target: str) -> str:
-    _translate_sql_cached.cache_clear()
+    _translate_sql_plan_cached.cache_clear()
     return translate_sql(query, target=target)
 
 
@@ -304,6 +446,12 @@ def _compile_cypher_bound(plan, params: dict[str, str | int | float | bool | Non
             "Translation benchmark only supports MATCH-based Cypher workloads."
         )
     return _compile_match_plan(bound_plan)
+
+
+def _plan_cypher_runtime(query: str):
+    """Plan Cypher through the real generated-first runtime planning path."""
+
+    return _plan_cypher_query(query)[0]
 
 
 def main() -> None:
@@ -348,28 +496,39 @@ def main() -> None:
 
     print("Cypher translation")
     print(
-        "  Note: HumemCypher v0 compilation is route-agnostic today; "
-        "the same compiled SQL is sent to SQLite or DuckDB."
+        "  Note: parse timing measures the handwritten parser directly, while "
+        "runtime planning measures the generated-first planning path that "
+        "`db.query(...)` uses for admitted Cypher shapes."
+    )
+    print(
+        "  Compilation remains route-agnostic today; the same compiled SQL is "
+        "sent to SQLite or DuckDB."
     )
     for name, workload in CYPHER_WORKLOADS.items():
-        parsed_plan = parse_cypher(workload.query)
+        runtime_plan = _plan_cypher_runtime(workload.query)
         parse_summary = _time_callable(
             lambda query=workload.query: parse_cypher(query),
             warmup=args.warmup,
             repetitions=args.repetitions,
         )
-        compile_summary = _time_callable(
-            lambda parsed_plan=parsed_plan,
-            params=workload.params: _compile_cypher_bound(parsed_plan, params),
+        runtime_plan_summary = _time_callable(
+            lambda query=workload.query: _plan_cypher_runtime(query),
             warmup=args.warmup,
             repetitions=args.repetitions,
         )
-        compiled = _compile_cypher_bound(parsed_plan, workload.params)
+        compile_summary = _time_callable(
+            lambda runtime_plan=runtime_plan,
+            params=workload.params: _compile_cypher_bound(runtime_plan, params),
+            warmup=args.warmup,
+            repetitions=args.repetitions,
+        )
+        compiled = _compile_cypher_bound(runtime_plan, workload.params)
 
         print(f"  Workload: {name}")
         print(f"    Family: {workload.family}")
         print(f"    Complexity: {workload.complexity}")
         _print_summary("parse_cypher(...)", parse_summary)
+        _print_summary("runtime plan", runtime_plan_summary)
         _print_summary("bind+compile", compile_summary)
         print(f"    Output length: {len(compiled.sql)} chars")
         print(f"    Bound params: {len(compiled.params)}")

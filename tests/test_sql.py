@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -95,10 +96,27 @@ class TestSQL(unittest.TestCase):
             duckdb_path = Path(tmpdir) / "humem.duckdb"
 
             with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
-                result = db.query("SELECT 1::INTEGER AS value", route="duckdb")
+                db.query(
+                    "CREATE TABLE events (id INTEGER PRIMARY KEY, kind TEXT NOT NULL)"
+                )
+                db.executemany(
+                    "INSERT INTO events (id, kind) VALUES ($id, $kind)",
+                    [
+                        {"id": 1, "kind": "click"},
+                        {"id": 2, "kind": "click"},
+                        {"id": 3, "kind": "view"},
+                    ],
+                )
+                result = db.query(
+                    (
+                        "SELECT kind, COUNT(*)::INTEGER AS value "
+                        "FROM events GROUP BY kind ORDER BY value DESC"
+                    )
+                )
 
-                self.assertEqual(result.columns, ("value",))
-                self.assertEqual(result.rows, ((1,),))
+                self.assertEqual(result.route, "duckdb")
+                self.assertEqual(result.columns, ("kind", "value"))
+                self.assertEqual(result.rows, (("click", 2), ("view", 1)))
 
     def test_sqlite_query_accepts_postgres_ilike_syntax(self) -> None:
         HumemDB = humemdb_class()
@@ -155,24 +173,297 @@ class TestSQL(unittest.TestCase):
             duckdb_path = Path(tmpdir) / "humem.duckdb"
 
             with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
-                db.duckdb.execute("CREATE TABLE metrics (name VARCHAR, value INTEGER)")
-                db.duckdb.execute(
-                    "INSERT INTO metrics VALUES (?, ?)",
-                    params=("queries", 1),
+                db.query(
+                    "CREATE TABLE metrics (name TEXT NOT NULL, value INTEGER NOT NULL)"
+                )
+                db.executemany(
+                    "INSERT INTO metrics (name, value) VALUES ($name, $value)",
+                    [
+                        {"name": "queries", "value": 1},
+                        {"name": "queries", "value": 2},
+                        {"name": "writes", "value": 1},
+                    ],
                 )
 
                 result = db.query(
                     (
                         "WITH m AS (SELECT name, value FROM metrics) "
-                        "SELECT name, value FROM m"
-                    ),
-                    route="duckdb",
+                        "SELECT name, SUM(value) AS total "
+                        "FROM m GROUP BY name ORDER BY total DESC"
+                    )
                 )
 
-                self.assertEqual(result.rows, (("queries", 1),))
+                self.assertEqual(result.route, "duckdb")
+                self.assertEqual(result.rows, (("queries", 3), ("writes", 1)))
 
-    def test_duckdb_rejects_data_modifying_cte_queries(self) -> None:
+    def test_sql_query_supports_case_when_exists_runtime_shape(self) -> None:
         HumemDB = humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            duckdb_path = Path(tmpdir) / "humem.duckdb"
+
+            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+                db.query(
+                    "CREATE TABLE users (id INTEGER PRIMARY KEY, deleted_at TEXT)"
+                )
+                db.query(
+                    "CREATE TABLE orders ("
+                    "id INTEGER PRIMARY KEY, user_id INTEGER, status TEXT)"
+                )
+                db.executemany(
+                    "INSERT INTO users (id, deleted_at) VALUES ($id, $deleted_at)",
+                    [
+                        {"id": 1, "deleted_at": None},
+                        {"id": 2, "deleted_at": None},
+                    ],
+                )
+                db.executemany(
+                    (
+                        "INSERT INTO orders (id, user_id, status) "
+                        "VALUES ($id, $user_id, $status)"
+                    ),
+                    [{"id": 1, "user_id": 1, "status": "paid"}],
+                )
+
+                result = db.query(
+                    (
+                        "SELECT u.id, "
+                        "CASE WHEN EXISTS ("
+                        "SELECT 1 FROM orders o "
+                        "WHERE o.user_id = u.id AND o.status = 'paid'"
+                        ") THEN 'buyer' ELSE 'prospect' END AS cohort "
+                        "FROM users u "
+                        "WHERE u.deleted_at IS NULL "
+                        "ORDER BY u.id LIMIT 10"
+                    )
+                )
+
+                self.assertEqual(result.route, "duckdb")
+                self.assertEqual(result.rows, ((1, "buyer"), (2, "prospect")))
+
+    def test_sql_query_supports_cte_and_union_runtime_shape(self) -> None:
+        HumemDB = humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            duckdb_path = Path(tmpdir) / "humem.duckdb"
+
+            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+                result = db.query(
+                    (
+                        "WITH regional_totals AS ("
+                        "SELECT 'east' AS region, 2 AS total_orders "
+                        "UNION ALL "
+                        "SELECT 'west' AS region, 3 AS total_orders"
+                        ") "
+                        "SELECT region, total_orders "
+                        "FROM regional_totals ORDER BY total_orders DESC"
+                    )
+                )
+
+                self.assertEqual(result.route, "sqlite")
+                self.assertEqual(result.rows, (("west", 3), ("east", 2)))
+
+    def test_sql_query_supports_cte_multi_join_runtime_shape(self) -> None:
+        HumemDB = humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            duckdb_path = Path(tmpdir) / "humem.duckdb"
+
+            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+                db.query(
+                    "CREATE TABLE users ("
+                    "id INTEGER PRIMARY KEY, segment TEXT, country_id INTEGER)"
+                )
+                db.query(
+                    "CREATE TABLE orders ("
+                    "id INTEGER PRIMARY KEY, user_id INTEGER, status TEXT, "
+                    "total_cents INTEGER, created_at DATE)"
+                )
+                db.query(
+                    "CREATE TABLE countries (id INTEGER PRIMARY KEY, name TEXT)"
+                )
+                db.executemany(
+                    "INSERT INTO countries (id, name) VALUES ($id, $name)",
+                    [{"id": 1, "name": "US"}, {"id": 2, "name": "CA"}],
+                )
+                db.executemany(
+                    (
+                        "INSERT INTO users (id, segment, country_id) "
+                        "VALUES ($id, $segment, $country_id)"
+                    ),
+                    [
+                        {"id": 1, "segment": "pro", "country_id": 1},
+                        {"id": 2, "segment": "free", "country_id": 2},
+                        {"id": 3, "segment": "pro", "country_id": None},
+                    ],
+                )
+                db.executemany(
+                    (
+                        "INSERT INTO orders ("
+                        "id, user_id, status, total_cents, created_at"
+                        ") VALUES ($id, $user_id, $status, $total_cents, $created_at)"
+                    ),
+                    [
+                        {
+                            "id": 1,
+                            "user_id": 1,
+                            "status": "paid",
+                            "total_cents": 1000,
+                            "created_at": "2026-01-05",
+                        },
+                        {
+                            "id": 2,
+                            "user_id": 1,
+                            "status": "paid",
+                            "total_cents": 3000,
+                            "created_at": "2026-01-06",
+                        },
+                        {
+                            "id": 3,
+                            "user_id": 2,
+                            "status": "paid",
+                            "total_cents": 2000,
+                            "created_at": "2026-01-07",
+                        },
+                        {
+                            "id": 4,
+                            "user_id": 3,
+                            "status": "refunded",
+                            "total_cents": 500,
+                            "created_at": "2026-01-08",
+                        },
+                    ],
+                )
+
+                result = db.query(
+                    (
+                        "WITH recent_paid AS ("
+                        "SELECT user_id, total_cents, created_at "
+                        "FROM orders "
+                        "WHERE status = 'paid' AND created_at >= DATE '2026-01-01'"
+                        "), top_users AS ("
+                        "SELECT user_id, SUM(total_cents) AS spent_cents "
+                        "FROM recent_paid GROUP BY user_id"
+                        ") "
+                        "SELECT u.segment, c.name AS country, "
+                        "AVG(t.spent_cents) AS avg_spend "
+                        "FROM top_users t "
+                        "JOIN users u ON u.id = t.user_id "
+                        "LEFT JOIN countries c ON c.id = u.country_id "
+                        "GROUP BY u.segment, c.name "
+                        "ORDER BY avg_spend DESC, u.segment"
+                    )
+                )
+
+                self.assertEqual(result.route, "duckdb")
+                self.assertEqual(
+                    result.rows,
+                    (("pro", "US", 4000.0), ("free", "CA", 2000.0)),
+                )
+
+    def test_sql_query_supports_windowed_rank_cte_runtime_shape(self) -> None:
+        HumemDB = humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            duckdb_path = Path(tmpdir) / "humem.duckdb"
+
+            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+                db.query(
+                    (
+                        "CREATE TABLE events ("
+                        "id INTEGER PRIMARY KEY, user_id INTEGER, "
+                        "event_type TEXT, created_at TEXT)"
+                    )
+                )
+                db.executemany(
+                    (
+                        "INSERT INTO events (id, user_id, event_type, created_at) "
+                        "VALUES ($id, $user_id, $event_type, $created_at)"
+                    ),
+                    [
+                        {
+                            "id": 1,
+                            "user_id": 1,
+                            "event_type": "login",
+                            "created_at": "2026-01-03",
+                        },
+                        {
+                            "id": 2,
+                            "user_id": 1,
+                            "event_type": "click",
+                            "created_at": "2026-01-05",
+                        },
+                        {
+                            "id": 3,
+                            "user_id": 1,
+                            "event_type": "purchase",
+                            "created_at": "2026-01-06",
+                        },
+                        {
+                            "id": 4,
+                            "user_id": 1,
+                            "event_type": "share",
+                            "created_at": "2026-01-07",
+                        },
+                        {
+                            "id": 5,
+                            "user_id": 2,
+                            "event_type": "login",
+                            "created_at": "2026-01-02",
+                        },
+                        {
+                            "id": 6,
+                            "user_id": 2,
+                            "event_type": "click",
+                            "created_at": "2026-01-04",
+                        },
+                        {
+                            "id": 7,
+                            "user_id": 2,
+                            "event_type": "logout",
+                            "created_at": "2026-01-08",
+                        },
+                    ],
+                )
+
+                result = db.query(
+                    (
+                        "WITH ranked AS ("
+                        "SELECT e.user_id, e.event_type, e.created_at, "
+                        "ROW_NUMBER() OVER ("
+                        "PARTITION BY e.user_id ORDER BY e.created_at DESC"
+                        ") AS rn "
+                        "FROM events e"
+                        ") "
+                        "SELECT user_id, event_type, created_at "
+                        "FROM ranked WHERE rn <= 3 "
+                        "ORDER BY user_id, created_at DESC"
+                    )
+                )
+
+                self.assertEqual(result.route, "duckdb")
+                self.assertEqual(
+                    result.rows,
+                    (
+                        (1, "share", "2026-01-07"),
+                        (1, "purchase", "2026-01-06"),
+                        (1, "click", "2026-01-05"),
+                        (2, "logout", "2026-01-08"),
+                        (2, "click", "2026-01-04"),
+                        (2, "login", "2026-01-02"),
+                    ),
+                )
+
+    def test_internal_duckdb_sql_write_guard_still_rejects_non_read_only_plans(
+        self,
+    ) -> None:
+        HumemDB = humemdb_class()
+        db_module = importlib.import_module("humemdb.db")
+        plan_query = getattr(db_module, "_plan_query")
 
         with tempfile.TemporaryDirectory() as tmpdir:
             sqlite_path = Path(tmpdir) / "humem.sqlite3"
@@ -182,19 +473,17 @@ class TestSQL(unittest.TestCase):
                 db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
                 )
+                plan = plan_query(
+                    "INSERT INTO users (name) VALUES ($name)",
+                    route="duckdb",
+                    params={"name": "Alice"},
+                )
 
                 with self.assertRaisesRegex(
                     ValueError,
                     "does not allow direct writes to DuckDB",
                 ):
-                    db.query(
-                        (
-                            "WITH inserted AS ("
-                            "INSERT INTO users (name) VALUES ('Alice')"
-                            ") SELECT name FROM users"
-                        ),
-                        route="duckdb",
-                    )
+                    getattr(db, "_execute_sql_query_plan")(plan)
 
     def test_sql_rejects_positional_params(self) -> None:
         HumemDB = humemdb_class()

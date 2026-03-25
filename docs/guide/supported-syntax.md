@@ -14,7 +14,7 @@ Current SQL direction:
 
 - PostgreSQL-like source syntax
 - translated through `sqlglot`
-- executed on SQLite or DuckDB depending on the explicit or inferred route
+- executed on SQLite or DuckDB depending on the inferred runtime route
 - backend-specific SQL is not part of the public contract
 
 Current statement subset:
@@ -24,6 +24,14 @@ Current statement subset:
 - `UPDATE`
 - `DELETE`
 - `CREATE`
+
+Currently defended broader read shapes:
+
+- non-recursive `WITH` clauses and multi-CTE read queries
+- `UNION ALL`
+- window functions such as `ROW_NUMBER() OVER (...)`
+- `CASE` expressions, including `CASE WHEN EXISTS (...)`
+- correlated `EXISTS` predicates in admitted read queries
 
 Current parameter style:
 
@@ -62,24 +70,53 @@ What HumemDB is **not** claiming here:
 Current Cypher direction:
 
 - Neo4j-like graph query syntax
-- handwritten narrow parser and relational lowering over SQLite-backed graph tables
+- generated parser-backed narrow frontend plus relational lowering over SQLite-backed graph tables
 - explicit subset rather than broad Cypher compatibility
-- omitted `route` currently keeps Cypher on SQLite by default, even though explicit
-  `route="duckdb"` still exists for narrow graph-read use
+- public Cypher execution currently stays on SQLite; there is no public route override
 
 Current statement subset:
 
-- `CREATE` for one labeled node
-- `CREATE` for one directed relationship between two labeled nodes
+- `CREATE` for one labeled node, with or without an explicit node alias
+- `CREATE` for one directed relationship between two labeled nodes, in either arrow
+  direction, and endpoint node aliases may be omitted
+- `CREATE` may also form a single labeled self-loop when the same node alias is repeated
+  consistently on both ends of the relationship pattern
+- `CREATE` also admits one narrow multi-pattern form with two labeled node patterns
+  followed by one relationship pattern that reuses exactly those two created aliases
 - `MATCH` for labeled nodes and single directed relationships
-- `MATCH ... SET` for narrow node property updates
+- `MATCH ... SET` for narrow node or relationship property updates
+- `MATCH ... DETACH DELETE` for one matched node alias
+- `MATCH ... DELETE` for one matched relationship alias
+- `MATCH` over one node pattern followed by `CREATE` of one directed relationship
+  pattern when at least one created endpoint reuses the matched node alias
 
 Current read-clause subset:
 
-- simple property equality predicates in `WHERE`
-- `AND` between those predicates
+- simple scalar comparison predicates in `WHERE` using `=`, `<`, `<=`, `>`, or `>=`
+- `AND` within one clause, plus narrow top-level `OR` across those comparison clauses
+- `AND` binds within each `OR` branch, and parenthesized regrouping of admitted
+  comparison clauses is supported
+- string property predicates with `STARTS WITH`, `ENDS WITH`, and `CONTAINS`
+- property null predicates with `IS NULL` and `IS NOT NULL`
+- relationship `MATCH` patterns may omit endpoint node aliases when those nodes are only
+  used structurally
+- relationship match patterns may omit the relationship type entirely when broad
+  matching is intended
+- relationship match patterns may use narrow type alternation such as `:KNOWS|FOLLOWS`
+- in the admitted `MATCH ... CREATE` subset, one matched alias may be reused to create
+  an existing-node self-loop or to connect that matched node to one newly created
+  labeled endpoint node
+- the admitted `MATCH ... CREATE` subset also includes two disconnected matched node
+  patterns followed by one relationship create that connects those two matched aliases
+  directly
+- richer boolean expressions such as `NOT`, path predicates, or function-style boolean
+  filters are still outside the subset
+- direct graph fields still stay narrow: node `label` and relationship `type` are
+  equality-only, and unknown aliases are rejected
 - `RETURN alias.field`
+- `RETURN DISTINCT alias.field`
 - `ORDER BY alias.field [ASC|DESC]`
+- integer-literal `SKIP` or `OFFSET`
 - integer-literal `LIMIT`
 - named parameters such as `$name`
 

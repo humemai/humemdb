@@ -9,7 +9,7 @@ import sys
 from typing import Literal
 
 
-BenchmarkName = Literal["sql", "cypher"]
+BenchmarkName = Literal["sql", "cypher", "vector"]
 
 
 def _parse_args() -> argparse.Namespace:
@@ -21,7 +21,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--benchmark",
-        choices=("all", "sql", "cypher"),
+        choices=("all", "sql", "cypher", "vector"),
         default="all",
         help="Which benchmark family to sweep.",
     )
@@ -34,6 +34,27 @@ def _parse_args() -> argparse.Namespace:
         "--cypher-scales",
         default="100000,1000000",
         help="Comma-separated node-count scales for the Cypher benchmark.",
+    )
+    parser.add_argument(
+        "--vector-scales",
+        default="2000,10000,50000",
+        help="Comma-separated row-count scales for the vector benchmark.",
+    )
+    parser.add_argument(
+        "--vector-dimensions-grid",
+        default="256",
+        help="Comma-separated vector dimensions to include in the vector sweep.",
+    )
+    parser.add_argument(
+        "--vector-top-k-grid",
+        default="10",
+        help="Comma-separated top-k values to include in the vector sweep.",
+    )
+    parser.add_argument(
+        "--vector-queries",
+        type=int,
+        default=16,
+        help="Query count to pass through to the vector benchmark sweep.",
     )
     parser.add_argument(
         "--warmup",
@@ -190,6 +211,54 @@ def _run_cypher_sweep(
     return summary
 
 
+def _run_vector_sweep(
+    *,
+    scales: tuple[int, ...],
+    dimensions_grid: tuple[int, ...],
+    top_k_grid: tuple[int, ...],
+    queries: int,
+    warmup: int,
+    repetitions: int,
+    output_dir: Path,
+    env: dict[str, str],
+) -> dict[str, object]:
+    benchmark_file = Path(__file__).with_name("vector_search_sweep.py")
+    command = [
+        sys.executable,
+        str(benchmark_file),
+        "--rows-grid",
+        ",".join(str(scale) for scale in scales),
+        "--dimensions-grid",
+        ",".join(str(value) for value in dimensions_grid),
+        "--top-k-grid",
+        ",".join(str(value) for value in top_k_grid),
+        "--queries",
+        str(queries),
+        "--warmup",
+        str(warmup),
+        "--repetitions",
+        str(repetitions),
+        "--output",
+        "json",
+    ]
+    print("[routing_sweep] running", " ".join(command))
+    completed = subprocess.run(
+        command,
+        check=True,
+        env=env,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    summary = json.loads(completed.stdout)
+    summary["benchmark"] = "vector_routing_sweep"
+    summary_path = output_dir / "vector_summary.json"
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return summary
+
+
 def main() -> None:
     args = _parse_args()
     output_dir = args.output_dir
@@ -198,6 +267,9 @@ def main() -> None:
 
     sql_scales = _parse_scales(args.sql_scales)
     cypher_scales = _parse_scales(args.cypher_scales)
+    vector_scales = _parse_scales(args.vector_scales)
+    vector_dimensions_grid = _parse_scales(args.vector_dimensions_grid)
+    vector_top_k_grid = _parse_scales(args.vector_top_k_grid)
     merged: dict[str, object] = {
         "benchmark": "routing_sweep",
         "thread_limit": env.get("HUMEMDB_THREADS", "default"),
@@ -214,6 +286,17 @@ def main() -> None:
     if args.benchmark in {"all", "cypher"}:
         merged["cypher"] = _run_cypher_sweep(
             scales=cypher_scales,
+            warmup=args.warmup,
+            repetitions=args.repetitions,
+            output_dir=output_dir,
+            env=env,
+        )
+    if args.benchmark in {"all", "vector"}:
+        merged["vector"] = _run_vector_sweep(
+            scales=vector_scales,
+            dimensions_grid=vector_dimensions_grid,
+            top_k_grid=vector_top_k_grid,
+            queries=args.vector_queries,
             warmup=args.warmup,
             repetitions=args.repetitions,
             output_dir=output_dir,

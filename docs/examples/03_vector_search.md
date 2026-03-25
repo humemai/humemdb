@@ -4,39 +4,37 @@
 
 ## What the Python example does
 
-The script generates a sizable exact-search workload rather than only a handful of
-vectors.
+The script exercises a mixed vector workload rather than only one standalone direct
+vector set.
 
-- 36,000 generated vectors in one direct vector set
-- 16 dimensions per vector
+- 60,009 direct vectors in one exact-search set
+- 8-dimensional embeddings reused across direct, SQL-owned, and graph-owned vectors
+- direct vector inserts with explicit ids and inline metadata
+- metadata updates through `set_vector_metadata(...)`
 - exact search through `search_vectors(...)`
-- direct metadata-filtered vector search
-- SQL candidate-filtered vector search over candidate row ids
-- Cypher candidate-filtered vector search over candidate node ids
-- row-owned and node-owned vector writes through the SQL and Cypher frontends
-- cache invalidation after inserting additional vectors
+- SQL candidate-filtered vector search over row-owned embeddings
+- Cypher candidate-filtered vector search over graph-node embeddings
+- SQL `UPDATE` and `DELETE` flows that invalidate vector state
+- Cypher `SET`, `DELETE`, and `DETACH DELETE` flows that keep graph-owned vectors in sync
+- step-by-step timing printed from the script itself
 
 ## Why this example matters
 
 HumemDB currently positions the public vector runtime as an exact SQLite-plus-NumPy
-baseline. This example exercises tens of thousands of generated points while staying
-inside the current public `v0` surface.
+baseline. This example shows how that exact runtime behaves across all three public
+vector ownership models while staying inside the current public `v0` surface.
 
 ## Representative flow
 
 ```python
 with HumemDB("vectors.sqlite3") as db:
-    direct_rows = build_vectors()
-    direct_rows[0] = _direct_record(
-    direct_rows[0],
-    metadata={"cluster": "early", "tier": "primary"},
-    )
-    db.insert_vectors(direct_rows)
+    db.insert_vectors(build_direct_rows())
+    db.set_vector_metadata([(1001, {"fresh": True})])
 
     result = db.search_vectors(
-      _embedding(1.0, 0.0, 0.0),
-      top_k=5,
-      metric="cosine",
+        _embedding(1.0, 0.12, 0.0),
+        top_k=4,
+        metric="cosine",
     )
 ```
 
@@ -45,19 +43,19 @@ with HumemDB("vectors.sqlite3") as db:
 - SQLite is the canonical vector store.
 - The canonical vector identity is `target`, `namespace`, and `target_id`.
 - The public path is exact, not ANN.
-- The current direct vector path auto-assigns direct ids starting at `1`, accepts
-  insert-time metadata records, and searches one vector-only set loaded from SQLite.
+- The current direct vector path can auto-assign ids or accept explicit import-style
+  ids, and it accepts insert-time metadata records.
 - Direct vectors are intentionally searched through `search_vectors(...)`, while
   SQL-row and Cypher-node vector search is expressed inside `db.query(...)` text.
 - Narrow vector-only categorization comes from metadata equality filters.
-- SQL rows and Cypher nodes can keep their ids system-assigned, then resolve candidate ids and reuse the same exact
-  ranking path.
+- SQL rows and Cypher nodes can keep their ids system-assigned, then resolve candidate
+  ids and reuse the same exact ranking path.
 - Vector results expose their provenance explicitly, so mixed direct, row-owned, and
   graph-owned vectors do not rely on one shared global id space.
 - When vectors belong to rows or nodes, the intended write surface is still SQL or
   Cypher themselves, not extra helper APIs.
-- Exact-vector caches are invalidated automatically after SQL writes that touch vector
-  storage.
+- Exact-vector caches are invalidated automatically after direct inserts and after SQL
+  or Cypher writes that touch vector storage.
 
 ## Metrics
 

@@ -39,6 +39,7 @@ class SQLTranslationPlan:
     join_count: int
     aggregate_count: int
     window_count: int
+    exists_count: int
     has_order_by: bool
     has_limit: bool
     has_group_by: bool
@@ -105,6 +106,7 @@ def _translate_sql_plan_cached(text: str, target: Route) -> SQLTranslationPlan:
         join_count=_expression_join_count(expression),
         aggregate_count=_expression_aggregate_count(expression),
         window_count=_expression_window_count(expression),
+        exists_count=_expression_exists_count(expression),
         has_order_by=_expression_has_order_by(expression),
         has_limit=_expression_has_limit(expression),
         has_group_by=_expression_has_group_by(expression),
@@ -178,6 +180,12 @@ def _expression_window_count(expression: Any) -> int:
     """Return the number of window-function nodes present in one expression."""
 
     return sum(1 for node in expression.walk() if type(node).__name__ == "Window")
+
+
+def _expression_exists_count(expression: Any) -> int:
+    """Return the number of EXISTS nodes present in one expression."""
+
+    return sum(1 for node in expression.walk() if type(node).__name__ == "Exists")
 
 
 def _expression_has_order_by(expression: Any) -> bool:

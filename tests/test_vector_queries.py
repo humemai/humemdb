@@ -23,7 +23,6 @@ class TestVectorQueries(unittest.TestCase):
                         "topic TEXT NOT NULL, "
                         "embedding BLOB)"
                     ),
-                    route="sqlite",
                 )
 
                 db.executemany(
@@ -51,18 +50,15 @@ class TestVectorQueries(unittest.TestCase):
                             "embedding": [0.0, 1.0],
                         },
                     ],
-                    route="sqlite",
                 )
 
                 db.query(
                     "UPDATE docs SET embedding = $embedding WHERE id = $id",
-                    route="sqlite",
                     params={"embedding": [1.0, 0.0], "id": 1},
                 )
 
                 relational = db.query(
                     "SELECT id, title FROM docs WHERE topic = $topic ORDER BY id",
-                    route="sqlite",
                     params={"topic": "alpha"},
                 )
                 self.assertEqual(
@@ -75,7 +71,6 @@ class TestVectorQueries(unittest.TestCase):
                         "SELECT id FROM docs WHERE topic = $topic "
                         "ORDER BY embedding <=> $query LIMIT 3"
                     ),
-                    route="sqlite",
                     params={
                         "query": [1.0, 0.0],
                         "topic": "alpha",
@@ -106,7 +101,6 @@ class TestVectorQueries(unittest.TestCase):
                             "CREATE (u:User {"
                             "name: $name, cohort: $cohort, embedding: $embedding})"
                         ),
-                        route="sqlite",
                         params={
                             "name": name,
                             "cohort": cohort,
@@ -117,7 +111,6 @@ class TestVectorQueries(unittest.TestCase):
 
                 db.query(
                     "MATCH (u:User {name: 'Alice'}) SET u.embedding = $embedding",
-                    route="sqlite",
                     params={"embedding": [1.0, 0.0]},
                 )
 
@@ -125,8 +118,7 @@ class TestVectorQueries(unittest.TestCase):
                     (
                         "MATCH (u:User {cohort: 'alpha'}) "
                         "RETURN u.id, u.name ORDER BY u.id"
-                    ),
-                    route="sqlite",
+                    )
                 )
                 self.assertEqual(
                     graph_result.rows,
@@ -139,7 +131,6 @@ class TestVectorQueries(unittest.TestCase):
                         "SEARCH u IN (VECTOR INDEX embedding FOR $query LIMIT 3) "
                         "RETURN u.id ORDER BY u.id"
                     ),
-                    route="sqlite",
                     params={
                         "query": [1.0, 0.0],
                     },
@@ -447,6 +438,149 @@ class TestVectorQueries(unittest.TestCase):
                 )
                 self.assertEqual(result.rows[0][2], node_id)
                 self.assertAlmostEqual(result.rows[0][3], 1.0, places=6)
+
+    def test_cypher_match_set_updates_vector_and_scalar_properties_together(
+        self,
+    ) -> None:
+        HumemDB = humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+
+            with HumemDB(str(sqlite_path)) as db:
+                created = db.query(
+                    (
+                        "CREATE (u:User {"
+                        "name: $name, cohort: $cohort, embedding: $embedding})"
+                    ),
+                    params={
+                        "name": "Alice",
+                        "cohort": "alpha",
+                        "embedding": [0.0, 1.0],
+                    },
+                )
+                node_id = created.rows[0][0]
+
+                updated = db.query(
+                    "MATCH (u:User {name: $name}) "
+                    "SET u.embedding = $embedding, u.cohort = $cohort",
+                    params={
+                        "name": "Alice",
+                        "embedding": [1.0, 0.0],
+                        "cohort": "beta",
+                    },
+                )
+
+                self.assertEqual(updated.rowcount, 1)
+
+                graph_result = db.query(
+                    "MATCH (u:User {name: 'Alice'}) RETURN u.cohort"
+                )
+                self.assertEqual(graph_result.rows, (("beta",),))
+
+                vector_result = db.query(
+                    (
+                        "MATCH (u:User {cohort: 'beta'}) "
+                        "SEARCH u IN (VECTOR INDEX embedding FOR $query LIMIT 1) "
+                        "RETURN u.id ORDER BY u.id"
+                    ),
+                    params={"query": [1.0, 0.0]},
+                )
+                self.assertEqual(vector_result.rows[0][2], node_id)
+                self.assertAlmostEqual(vector_result.rows[0][3], 1.0, places=6)
+
+    def test_cypher_detach_delete_invalidates_graph_vector_cache(self) -> None:
+        HumemDB = humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+
+            with HumemDB(str(sqlite_path)) as db:
+                created = db.query(
+                    (
+                        "CREATE (u:User {"
+                        "name: $name, cohort: $cohort, embedding: $embedding})"
+                    ),
+                    params={
+                        "name": "Alice",
+                        "cohort": "alpha",
+                        "embedding": [1.0, 0.0],
+                    },
+                )
+                node_id = created.rows[0][0]
+
+                initial = db.query(
+                    (
+                        "MATCH (u:User {cohort: 'alpha'}) "
+                        "SEARCH u IN (VECTOR INDEX embedding FOR $query LIMIT 1) "
+                        "RETURN u.id ORDER BY u.id"
+                    ),
+                    params={"query": [1.0, 0.0]},
+                )
+                self.assertEqual(initial.rows[0][2], node_id)
+                self.assertTrue(db.vectors_cached())
+
+                deleted = db.query(
+                    "MATCH (u:User {name: 'Alice'}) DETACH DELETE u"
+                )
+
+                self.assertEqual(deleted.rowcount, 1)
+                self.assertFalse(db.vectors_cached())
+
+                result = db.query(
+                    (
+                        "MATCH (u:User {cohort: 'alpha'}) "
+                        "SEARCH u IN (VECTOR INDEX embedding FOR $query LIMIT 1) "
+                        "RETURN u.id ORDER BY u.id"
+                    ),
+                    params={"query": [1.0, 0.0]},
+                )
+                self.assertEqual(result.rows, ())
+
+    def test_cypher_rejects_second_vector_property_for_same_node(self) -> None:
+        HumemDB = humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+
+            with HumemDB(str(sqlite_path)) as db:
+                created = db.query(
+                    (
+                        "CREATE (u:User {"
+                        "name: $name, cohort: $cohort, embedding: $embedding})"
+                    ),
+                    params={
+                        "name": "Alice",
+                        "cohort": "alpha",
+                        "embedding": [0.0, 1.0],
+                    },
+                )
+                node_id = created.rows[0][0]
+
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "only one vector-valued property per node",
+                ):
+                    db.query(
+                        "MATCH (u:User {name: 'Alice'}) SET u.profile = $embedding",
+                        params={"embedding": [1.0, 0.0]},
+                    )
+
+                graph_result = db.query(
+                    "MATCH (u:User {name: 'Alice'}) RETURN u.embedding, u.profile"
+                )
+                self.assertEqual(graph_result.rows, (((0.0, 1.0), None),))
+
+                vector_result = db.query(
+                    (
+                        "MATCH (u:User {cohort: 'alpha'}) "
+                        "SEARCH u IN (VECTOR INDEX embedding FOR $query LIMIT 1) "
+                        "RETURN u.id ORDER BY u.id"
+                    ),
+                    params={"query": [0.0, 1.0]},
+                )
+                self.assertEqual(vector_result.rows[0][2], node_id)
+                self.assertAlmostEqual(vector_result.rows[0][3], 1.0, places=6)
 
     def test_sql_vector_syntax_supports_candidate_query_filter(self) -> None:
         HumemDB = humemdb_class()

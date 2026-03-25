@@ -15,8 +15,8 @@ The current public surfaces are intentionally explicit:
 - direct vector search lives on explicit vector methods such as `search_vectors(...)`.
 - candidate-filtered vector search still exists when SQL or Cypher text defines the candidate set,
   but that is a narrower advanced path rather than the main public entry point.
-- `route` and `query_type` remain part of the current implementation, but they are not
-  the intended long-term center of the public API.
+- HumemDB applies routing internally; the public query surface no longer exposes
+  `route` or `query_type`.
 
 ## Why HumemDB exists
 
@@ -28,17 +28,20 @@ stays visible.
 ## What is shipped today
 
 - Portable PostgreSQL-like SQL translation for a narrow `SELECT` / `INSERT` /
-  `UPDATE` / `DELETE` / `CREATE` subset.
-- SQLite-backed graph tables with narrow Cypher `CREATE` and `MATCH` flows.
+  `UPDATE` / `DELETE` / `CREATE` subset, including defended non-recursive CTE,
+  window, `UNION ALL`, and `CASE` plus correlated `EXISTS` read shapes.
+- SQLite-backed graph tables with generated-parser-backed Cypher `CREATE`, `MATCH`,
+  `MATCH ... SET`, and narrow `MATCH ... DELETE` flows.
 - Vector search with an exact SQLite-plus-NumPy baseline today and room for indexed
   ANN paths where the benchmark justifies them.
-- Explicit transaction control per route.
+- Explicit transaction control through `db.transaction()` on the canonical SQLite
+  write path.
 
 ## What is intentionally out of scope for `v0`
 
 - Full PostgreSQL compatibility.
 - Full Cypher compatibility.
-- Automatic routing.
+- Public backend override knobs.
 - Indexed ANN as the default vector path.
 - A broad internal IR before mixed-mode composition actually requires it.
 

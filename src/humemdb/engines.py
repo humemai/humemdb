@@ -78,6 +78,7 @@ class SQLiteEngine:
         """
 
         self.connection = sqlite3.connect(self.path)
+        self.connection.execute("PRAGMA foreign_keys = ON")
         logger.debug("Opened SQLite connection path=%s", self.path)
 
     def execute(
@@ -157,6 +158,12 @@ class SQLiteEngine:
         self.connection.execute("BEGIN")
         self._in_transaction = True
         logger.debug("SQLite transaction started")
+
+    @property
+    def in_transaction(self) -> bool:
+        """Return whether an explicit SQLite transaction is currently active."""
+
+        return self._in_transaction
 
     def commit(self) -> None:
         """Commit the current SQLite transaction.

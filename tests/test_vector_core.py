@@ -113,7 +113,7 @@ class TestVectorCore(unittest.TestCase):
 
             with HumemDB(str(sqlite_path)) as db:
                 vector.ensure_vector_schema(db.sqlite)
-                with db.transaction(route="sqlite"):
+                with db.transaction():
                     vector.insert_vectors(
                         db.sqlite,
                         [

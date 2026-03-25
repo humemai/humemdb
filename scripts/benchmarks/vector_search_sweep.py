@@ -130,6 +130,10 @@ def main() -> None:
             "lancedb_mode": args.lancedb_mode,
             "lancedb_tuned_family": args.lancedb_tuned_family,
         },
+        "acceptance_thresholds": {
+            "indexed_recall": args.min_indexed_recall,
+            "sq8_recall": args.min_sq8_recall,
+        },
         "scenario_summaries": scenario_summaries,
         "overall": overall,
     }

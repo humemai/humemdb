@@ -37,7 +37,7 @@ python scripts/benchmarks/translation_overhead.py --warmup 100 --repetitions 100
 Current purpose:
 
 - isolate cached and uncached PostgreSQL-like SQL translation overhead
-- isolate Cypher parse and bind+compile overhead
+- isolate Cypher parse, generated-first runtime planning, and bind+compile overhead
 - keep frontend cost separate from backend execution cost when routing decisions are
     being discussed
 
@@ -99,7 +99,10 @@ Current takeaway:
   remain the default graph recommendation for now.
 - The Cypher benchmark now carries workload-shape and selectivity labels so later graph
   routing work can reason about anchored lookup versus broader traversal families.
-- The Cypher benchmark also now includes `Team` nodes plus `MEMBER_OF` edges and can
+- The Cypher benchmark also now includes untyped relationship reads, narrow
+  relationship-type alternation reads, anonymous-endpoint relationship reads,
+  reverse-direction relationship fanout reads, `Team` nodes, and `MEMBER_OF` edges,
+  and can
   emit JSON summaries with `--output-json`.
 
 Current Cypher crossover summary from the full routing sweep:

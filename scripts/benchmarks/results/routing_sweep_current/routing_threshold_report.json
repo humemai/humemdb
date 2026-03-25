@@ -1,0 +1,1144 @@
+{
+  "cypher": [
+    {
+      "family": "edge",
+      "first_duckdb_scale": null,
+      "selectivity": "medium",
+      "shape": "selective_relationship_expand",
+      "winners": [
+        {
+          "duckdb_mean_ms": 172.57605834553638,
+          "scale": 100000,
+          "sqlite_mean_ms": 40.815277180323996,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 1035.8571390000482,
+          "scale": 1000000,
+          "sqlite_mean_ms": 440.71407088389,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "author_expand"
+    },
+    {
+      "family": "edge",
+      "first_duckdb_scale": null,
+      "selectivity": "medium",
+      "shape": "ordered_relationship_expand",
+      "winners": [
+        {
+          "duckdb_mean_ms": 192.00601040696105,
+          "scale": 100000,
+          "sqlite_mean_ms": 70.68851450458169,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 1214.323106687516,
+          "scale": 1000000,
+          "sqlite_mean_ms": 716.7033342023691,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "author_expand_ordered"
+    },
+    {
+      "family": "node",
+      "first_duckdb_scale": null,
+      "selectivity": "high",
+      "shape": "anchored_node_lookup",
+      "winners": [
+        {
+          "duckdb_mean_ms": 152.58867728213468,
+          "scale": 100000,
+          "sqlite_mean_ms": 0.08068699389696121,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 988.6477390925089,
+          "scale": 1000000,
+          "sqlite_mean_ms": 0.07740672056873639,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "document_lookup"
+    },
+    {
+      "family": "edge",
+      "first_duckdb_scale": 1000000,
+      "selectivity": "low",
+      "shape": "broad_relationship_expand",
+      "winners": [
+        {
+          "duckdb_mean_ms": 182.38490447402,
+          "scale": 100000,
+          "sqlite_mean_ms": 143.88446152831116,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 1049.1748061031103,
+          "scale": 1000000,
+          "sqlite_mean_ms": 1494.7196159822245,
+          "winner": "duckdb"
+        }
+      ],
+      "workload": "social_expand"
+    },
+    {
+      "family": "edge",
+      "first_duckdb_scale": null,
+      "selectivity": "low",
+      "shape": "anonymous_endpoint_expand",
+      "winners": [
+        {
+          "duckdb_mean_ms": 179.9321862248083,
+          "scale": 100000,
+          "sqlite_mean_ms": 25.01497712607185,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 964.2777730089923,
+          "scale": 1000000,
+          "sqlite_mean_ms": 253.02367703989148,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "social_expand_anonymous_endpoints"
+    },
+    {
+      "family": "edge",
+      "first_duckdb_scale": null,
+      "selectivity": "low",
+      "shape": "ordered_relationship_expand",
+      "winners": [
+        {
+          "duckdb_mean_ms": 200.25348849594593,
+          "scale": 100000,
+          "sqlite_mean_ms": 29.508139472454786,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 1204.5317183559139,
+          "scale": 1000000,
+          "sqlite_mean_ms": 264.3377703304092,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "social_expand_ordered"
+    },
+    {
+      "family": "edge",
+      "first_duckdb_scale": null,
+      "selectivity": "low",
+      "shape": "relationship_type_alternation",
+      "winners": [
+        {
+          "duckdb_mean_ms": 169.11088954657316,
+          "scale": 100000,
+          "sqlite_mean_ms": 29.024324224640925,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 1182.640654190133,
+          "scale": 1000000,
+          "sqlite_mean_ms": 297.92041378095746,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "social_expand_type_alternation"
+    },
+    {
+      "family": "edge",
+      "first_duckdb_scale": null,
+      "selectivity": "very_low",
+      "shape": "full_relationship_expand",
+      "winners": [
+        {
+          "duckdb_mean_ms": 107.61904607837398,
+          "scale": 100000,
+          "sqlite_mean_ms": 12.586045544594526,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 627.2920325088004,
+          "scale": 1000000,
+          "sqlite_mean_ms": 13.078167103230953,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "social_expand_unfiltered"
+    },
+    {
+      "family": "edge",
+      "first_duckdb_scale": null,
+      "selectivity": "low",
+      "shape": "untyped_relationship_expand",
+      "winners": [
+        {
+          "duckdb_mean_ms": 175.16225716099143,
+          "scale": 100000,
+          "sqlite_mean_ms": 22.483605581025284,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 1015.1222733159859,
+          "scale": 1000000,
+          "sqlite_mean_ms": 233.05100901052356,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "social_expand_untyped"
+    },
+    {
+      "family": "edge",
+      "first_duckdb_scale": 100000,
+      "selectivity": "medium",
+      "shape": "mixed_boolean_expand",
+      "winners": [
+        {
+          "duckdb_mean_ms": 241.40613339841366,
+          "scale": 100000,
+          "sqlite_mean_ms": 496.8941278445224,
+          "winner": "duckdb"
+        },
+        {
+          "duckdb_mean_ms": 1680.9499867570896,
+          "scale": 1000000,
+          "sqlite_mean_ms": 5054.924479375283,
+          "winner": "duckdb"
+        }
+      ],
+      "workload": "social_mixed_boolean"
+    },
+    {
+      "family": "edge",
+      "first_duckdb_scale": null,
+      "selectivity": "low",
+      "shape": "reverse_relationship_expand",
+      "winners": [
+        {
+          "duckdb_mean_ms": 184.72077247376242,
+          "scale": 100000,
+          "sqlite_mean_ms": 26.567712736626465,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 1142.1141512691975,
+          "scale": 1000000,
+          "sqlite_mean_ms": 266.50030274565023,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "social_reverse_expand_ordered"
+    },
+    {
+      "family": "edge",
+      "first_duckdb_scale": 1000000,
+      "selectivity": "medium",
+      "shape": "relationship_property_anchor",
+      "winners": [
+        {
+          "duckdb_mean_ms": 187.89445624376336,
+          "scale": 100000,
+          "sqlite_mean_ms": 109.23323795820276,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 1127.9384661465883,
+          "scale": 1000000,
+          "sqlite_mean_ms": 1192.0159407891333,
+          "winner": "duckdb"
+        }
+      ],
+      "workload": "social_reverse_since_anchor"
+    },
+    {
+      "family": "edge",
+      "first_duckdb_scale": null,
+      "selectivity": "high",
+      "shape": "selective_relationship_expand",
+      "winners": [
+        {
+          "duckdb_mean_ms": 165.5441508628428,
+          "scale": 100000,
+          "sqlite_mean_ms": 8.816249668598175,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 982.4517133335272,
+          "scale": 1000000,
+          "sqlite_mean_ms": 90.58776668583353,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "tagged_expand"
+    },
+    {
+      "family": "edge",
+      "first_duckdb_scale": null,
+      "selectivity": "low",
+      "shape": "topic_fanout_expand",
+      "winners": [
+        {
+          "duckdb_mean_ms": 138.79164742926756,
+          "scale": 100000,
+          "sqlite_mean_ms": 16.851309997340042,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 830.5440677019457,
+          "scale": 1000000,
+          "sqlite_mean_ms": 177.52255654583374,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "tagged_topic_fanout"
+    },
+    {
+      "family": "node",
+      "first_duckdb_scale": null,
+      "selectivity": "high",
+      "shape": "anchored_node_lookup",
+      "winners": [
+        {
+          "duckdb_mean_ms": 129.1400920599699,
+          "scale": 100000,
+          "sqlite_mean_ms": 0.06843342756231625,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 790.0678281051418,
+          "scale": 1000000,
+          "sqlite_mean_ms": 0.07831367353598277,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "team_lookup"
+    },
+    {
+      "family": "edge",
+      "first_duckdb_scale": null,
+      "selectivity": "medium",
+      "shape": "membership_expand",
+      "winners": [
+        {
+          "duckdb_mean_ms": 171.49039808039865,
+          "scale": 100000,
+          "sqlite_mean_ms": 11.125467407206694,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 1023.5017921465139,
+          "scale": 1000000,
+          "sqlite_mean_ms": 113.5046686977148,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "team_membership_expand"
+    },
+    {
+      "family": "edge",
+      "first_duckdb_scale": null,
+      "selectivity": "medium",
+      "shape": "ordered_membership_expand",
+      "winners": [
+        {
+          "duckdb_mean_ms": 192.11724726483226,
+          "scale": 100000,
+          "sqlite_mean_ms": 20.361891792466242,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 1211.2558159666758,
+          "scale": 1000000,
+          "sqlite_mean_ms": 189.8720103005568,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "team_membership_ordered"
+    },
+    {
+      "family": "node",
+      "first_duckdb_scale": null,
+      "selectivity": "high",
+      "shape": "anchored_node_lookup",
+      "winners": [
+        {
+          "duckdb_mean_ms": 141.84767799451947,
+          "scale": 100000,
+          "sqlite_mean_ms": 0.06294048701723416,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 800.1540109204749,
+          "scale": 1000000,
+          "sqlite_mean_ms": 0.06338364134232204,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "topic_lookup"
+    },
+    {
+      "family": "node",
+      "first_duckdb_scale": null,
+      "selectivity": "high",
+      "shape": "anchored_node_lookup",
+      "winners": [
+        {
+          "duckdb_mean_ms": 155.47150388980904,
+          "scale": 100000,
+          "sqlite_mean_ms": 0.07684668526053429,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 1018.6053986350696,
+          "scale": 1000000,
+          "sqlite_mean_ms": 0.11339349051316579,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "user_lookup"
+    }
+  ],
+  "recommended_runtime": {
+    "sql_olap_thresholds": {
+      "benchmark_calibrated": true,
+      "evidence": {
+        "duckdb_winning_workloads": [
+          "document_distinct_owner_regions",
+          "document_owner_region_rollup",
+          "event_active_user_rollup",
+          "event_aggregate_topk",
+          "event_cte_daily_rollup",
+          "event_exists_region_filter",
+          "event_region_join",
+          "event_window_rank",
+          "memory_hot_rollup",
+          "memory_owner_exists_projection",
+          "memory_owner_join_lookup"
+        ],
+        "sqlite_preferring_workloads": [
+          "document_tag_rollup",
+          "event_active_user_join_lookup",
+          "event_filtered_range",
+          "event_point_lookup",
+          "event_type_hot_window"
+        ]
+      },
+      "min_aggregate_count": 0,
+      "min_cte_count": 0,
+      "min_join_count": 0,
+      "min_window_count": 0,
+      "require_order_by_or_limit": false,
+      "rules": [
+        {
+          "min_aggregate_count": 0,
+          "min_cte_count": 0,
+          "min_exists_count": 0,
+          "min_join_count": 1,
+          "min_window_count": 0,
+          "require_distinct": true,
+          "require_group_by": false,
+          "require_order_by_or_limit": false
+        },
+        {
+          "min_aggregate_count": 2,
+          "min_cte_count": 0,
+          "min_exists_count": 0,
+          "min_join_count": 0,
+          "min_window_count": 0,
+          "require_distinct": false,
+          "require_group_by": true,
+          "require_order_by_or_limit": true
+        },
+        {
+          "min_aggregate_count": 2,
+          "min_cte_count": 1,
+          "min_exists_count": 0,
+          "min_join_count": 0,
+          "min_window_count": 0,
+          "require_distinct": false,
+          "require_group_by": true,
+          "require_order_by_or_limit": true
+        },
+        {
+          "min_aggregate_count": 0,
+          "min_cte_count": 0,
+          "min_exists_count": 0,
+          "min_join_count": 0,
+          "min_window_count": 1,
+          "require_distinct": false,
+          "require_group_by": false,
+          "require_order_by_or_limit": false
+        }
+      ]
+    }
+  },
+  "source": "scripts/benchmarks/results/routing_sweep_current/routing_sweep_summary.json",
+  "sql": [
+    {
+      "family": "document",
+      "first_duckdb_scale": 1000000,
+      "selectivity": "medium",
+      "shape": "distinct_join_projection",
+      "sql_features": {
+        "aggregate_count": 0,
+        "cte_count": 0,
+        "has_distinct": true,
+        "has_group_by": false,
+        "has_limit": false,
+        "has_order_by": false,
+        "is_read_only": true,
+        "join_count": 1,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "winners": [
+        {
+          "duckdb_mean_ms": 1.5752821539839108,
+          "scale": 10000,
+          "sqlite_mean_ms": 0.41502155363559723,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 4.489054903388023,
+          "scale": 100000,
+          "sqlite_mean_ms": 2.239514452715715,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 17.159977617363136,
+          "scale": 1000000,
+          "sqlite_mean_ms": 23.407912502686184,
+          "winner": "duckdb"
+        }
+      ],
+      "workload": "document_distinct_owner_regions"
+    },
+    {
+      "family": "document",
+      "first_duckdb_scale": 100000,
+      "selectivity": "medium",
+      "shape": "broad_multi_join_group",
+      "sql_features": {
+        "aggregate_count": 1,
+        "cte_count": 0,
+        "has_distinct": false,
+        "has_group_by": true,
+        "has_limit": false,
+        "has_order_by": true,
+        "is_read_only": true,
+        "join_count": 1,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "winners": [
+        {
+          "duckdb_mean_ms": 2.2759681257108846,
+          "scale": 10000,
+          "sqlite_mean_ms": 1.4574516875048478,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 5.027070331076781,
+          "scale": 100000,
+          "sqlite_mean_ms": 6.329311057925224,
+          "winner": "duckdb"
+        },
+        {
+          "duckdb_mean_ms": 19.97661730274558,
+          "scale": 1000000,
+          "sqlite_mean_ms": 40.52170319482684,
+          "winner": "duckdb"
+        }
+      ],
+      "workload": "document_owner_region_rollup"
+    },
+    {
+      "family": "document",
+      "first_duckdb_scale": null,
+      "selectivity": "high",
+      "shape": "selective_multi_join_group",
+      "sql_features": {
+        "aggregate_count": 1,
+        "cte_count": 0,
+        "has_distinct": false,
+        "has_group_by": true,
+        "has_limit": false,
+        "has_order_by": true,
+        "is_read_only": true,
+        "join_count": 2,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "winners": [
+        {
+          "duckdb_mean_ms": 2.426427944252888,
+          "scale": 10000,
+          "sqlite_mean_ms": 0.03749364987015724,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 6.183281075209379,
+          "scale": 100000,
+          "sqlite_mean_ms": 0.0781404475371043,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 25.061454623937607,
+          "scale": 1000000,
+          "sqlite_mean_ms": 0.13739351804057756,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "document_tag_rollup"
+    },
+    {
+      "family": "oltp_join",
+      "first_duckdb_scale": null,
+      "selectivity": "high",
+      "shape": "selective_join_lookup",
+      "sql_features": {
+        "aggregate_count": 0,
+        "cte_count": 0,
+        "has_distinct": false,
+        "has_group_by": false,
+        "has_limit": true,
+        "has_order_by": true,
+        "is_read_only": true,
+        "join_count": 1,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "winners": [
+        {
+          "duckdb_mean_ms": 3.0654401828845343,
+          "scale": 10000,
+          "sqlite_mean_ms": 0.029416910062233608,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 18.352408582965534,
+          "scale": 100000,
+          "sqlite_mean_ms": 0.19149063155055046,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 65.33014712234338,
+          "scale": 1000000,
+          "sqlite_mean_ms": 5.271237653990586,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "event_active_user_join_lookup"
+    },
+    {
+      "family": "analytics",
+      "first_duckdb_scale": 10000,
+      "selectivity": "medium",
+      "shape": "filtered_join_group",
+      "sql_features": {
+        "aggregate_count": 1,
+        "cte_count": 0,
+        "has_distinct": false,
+        "has_group_by": true,
+        "has_limit": false,
+        "has_order_by": true,
+        "is_read_only": true,
+        "join_count": 1,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "winners": [
+        {
+          "duckdb_mean_ms": 3.2635809232791266,
+          "scale": 10000,
+          "sqlite_mean_ms": 4.802332725375891,
+          "winner": "duckdb"
+        },
+        {
+          "duckdb_mean_ms": 17.749463208019733,
+          "scale": 100000,
+          "sqlite_mean_ms": 59.98552870005369,
+          "winner": "duckdb"
+        },
+        {
+          "duckdb_mean_ms": 68.3921673335135,
+          "scale": 1000000,
+          "sqlite_mean_ms": 672.779296990484,
+          "winner": "duckdb"
+        }
+      ],
+      "workload": "event_active_user_rollup"
+    },
+    {
+      "family": "analytics",
+      "first_duckdb_scale": 10000,
+      "selectivity": "low",
+      "shape": "scan_group_limit",
+      "sql_features": {
+        "aggregate_count": 1,
+        "cte_count": 0,
+        "has_distinct": false,
+        "has_group_by": true,
+        "has_limit": true,
+        "has_order_by": true,
+        "is_read_only": true,
+        "join_count": 0,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "winners": [
+        {
+          "duckdb_mean_ms": 3.072430224468311,
+          "scale": 10000,
+          "sqlite_mean_ms": 3.7742525649567447,
+          "winner": "duckdb"
+        },
+        {
+          "duckdb_mean_ms": 14.762563165277243,
+          "scale": 100000,
+          "sqlite_mean_ms": 41.87804087996483,
+          "winner": "duckdb"
+        },
+        {
+          "duckdb_mean_ms": 68.5122072075804,
+          "scale": 1000000,
+          "sqlite_mean_ms": 436.2839333092173,
+          "winner": "duckdb"
+        }
+      ],
+      "workload": "event_aggregate_topk"
+    },
+    {
+      "family": "analytics",
+      "first_duckdb_scale": 10000,
+      "selectivity": "low",
+      "shape": "cte_group_order",
+      "sql_features": {
+        "aggregate_count": 2,
+        "cte_count": 1,
+        "has_distinct": false,
+        "has_group_by": true,
+        "has_limit": true,
+        "has_order_by": true,
+        "is_read_only": true,
+        "join_count": 0,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "winners": [
+        {
+          "duckdb_mean_ms": 3.9692833088338375,
+          "scale": 10000,
+          "sqlite_mean_ms": 9.277537930756807,
+          "winner": "duckdb"
+        },
+        {
+          "duckdb_mean_ms": 23.787453460196655,
+          "scale": 100000,
+          "sqlite_mean_ms": 116.85457034036517,
+          "winner": "duckdb"
+        },
+        {
+          "duckdb_mean_ms": 72.27263040840626,
+          "scale": 1000000,
+          "sqlite_mean_ms": 2120.68992604812,
+          "winner": "duckdb"
+        }
+      ],
+      "workload": "event_cte_daily_rollup"
+    },
+    {
+      "family": "mixed",
+      "first_duckdb_scale": 10000,
+      "selectivity": "medium",
+      "shape": "exists_filter",
+      "sql_features": {
+        "aggregate_count": 1,
+        "cte_count": 0,
+        "has_distinct": false,
+        "has_group_by": false,
+        "has_limit": false,
+        "has_order_by": false,
+        "is_read_only": true,
+        "join_count": 0,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "winners": [
+        {
+          "duckdb_mean_ms": 2.817236352711916,
+          "scale": 10000,
+          "sqlite_mean_ms": 3.281377566357454,
+          "winner": "duckdb"
+        },
+        {
+          "duckdb_mean_ms": 14.09558393061161,
+          "scale": 100000,
+          "sqlite_mean_ms": 33.36587889740864,
+          "winner": "duckdb"
+        },
+        {
+          "duckdb_mean_ms": 62.430800714840494,
+          "scale": 1000000,
+          "sqlite_mean_ms": 355.691015565147,
+          "winner": "duckdb"
+        }
+      ],
+      "workload": "event_exists_region_filter"
+    },
+    {
+      "family": "oltp",
+      "first_duckdb_scale": null,
+      "selectivity": "medium",
+      "shape": "filtered_range",
+      "sql_features": {
+        "aggregate_count": 1,
+        "cte_count": 0,
+        "has_distinct": false,
+        "has_group_by": false,
+        "has_limit": false,
+        "has_order_by": false,
+        "is_read_only": true,
+        "join_count": 0,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "winners": [
+        {
+          "duckdb_mean_ms": 1.531135446081559,
+          "scale": 10000,
+          "sqlite_mean_ms": 0.20841105530659357,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 10.677259415388107,
+          "scale": 100000,
+          "sqlite_mean_ms": 1.6710689912239711,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 54.08928527807196,
+          "scale": 1000000,
+          "sqlite_mean_ms": 3.233000636100769,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "event_filtered_range"
+    },
+    {
+      "family": "oltp",
+      "first_duckdb_scale": null,
+      "selectivity": "high",
+      "shape": "point_lookup",
+      "sql_features": {
+        "aggregate_count": 0,
+        "cte_count": 0,
+        "has_distinct": false,
+        "has_group_by": false,
+        "has_limit": false,
+        "has_order_by": false,
+        "is_read_only": true,
+        "join_count": 0,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "winners": [
+        {
+          "duckdb_mean_ms": 1.4082480532427628,
+          "scale": 10000,
+          "sqlite_mean_ms": 0.008547212928533554,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 13.125347594420115,
+          "scale": 100000,
+          "sqlite_mean_ms": 0.008680081615845362,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 104.77216014017661,
+          "scale": 1000000,
+          "sqlite_mean_ms": 0.01362695669134458,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "event_point_lookup"
+    },
+    {
+      "family": "analytics",
+      "first_duckdb_scale": 10000,
+      "selectivity": "low",
+      "shape": "join_group_order",
+      "sql_features": {
+        "aggregate_count": 1,
+        "cte_count": 0,
+        "has_distinct": false,
+        "has_group_by": true,
+        "has_limit": false,
+        "has_order_by": true,
+        "is_read_only": true,
+        "join_count": 1,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "winners": [
+        {
+          "duckdb_mean_ms": 3.436491514245669,
+          "scale": 10000,
+          "sqlite_mean_ms": 4.543231800198555,
+          "winner": "duckdb"
+        },
+        {
+          "duckdb_mean_ms": 17.2059644634525,
+          "scale": 100000,
+          "sqlite_mean_ms": 64.94801522543032,
+          "winner": "duckdb"
+        },
+        {
+          "duckdb_mean_ms": 65.94054230178396,
+          "scale": 1000000,
+          "sqlite_mean_ms": 725.4605243603388,
+          "winner": "duckdb"
+        }
+      ],
+      "workload": "event_region_join"
+    },
+    {
+      "family": "oltp",
+      "first_duckdb_scale": null,
+      "selectivity": "high",
+      "shape": "filtered_ordered_limit",
+      "sql_features": {
+        "aggregate_count": 0,
+        "cte_count": 0,
+        "has_distinct": false,
+        "has_group_by": false,
+        "has_limit": true,
+        "has_order_by": true,
+        "is_read_only": true,
+        "join_count": 0,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "winners": [
+        {
+          "duckdb_mean_ms": 2.274431133021911,
+          "scale": 10000,
+          "sqlite_mean_ms": 0.08664373308420181,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 18.507375692327816,
+          "scale": 100000,
+          "sqlite_mean_ms": 0.27413060888648033,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 61.70988750333587,
+          "scale": 1000000,
+          "sqlite_mean_ms": 2.2457240459819636,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "event_type_hot_window"
+    },
+    {
+      "family": "analytics",
+      "first_duckdb_scale": 10000,
+      "selectivity": "medium",
+      "shape": "window_partition_order",
+      "sql_features": {
+        "aggregate_count": 0,
+        "cte_count": 0,
+        "has_distinct": false,
+        "has_group_by": false,
+        "has_limit": false,
+        "has_order_by": false,
+        "is_read_only": true,
+        "join_count": 0,
+        "statement_name": "Select",
+        "window_count": 1
+      },
+      "winners": [
+        {
+          "duckdb_mean_ms": 3.592615326245626,
+          "scale": 10000,
+          "sqlite_mean_ms": 14.662279436985651,
+          "winner": "duckdb"
+        },
+        {
+          "duckdb_mean_ms": 21.096177554378908,
+          "scale": 100000,
+          "sqlite_mean_ms": 135.58448028440276,
+          "winner": "duckdb"
+        },
+        {
+          "duckdb_mean_ms": 117.89746722206473,
+          "scale": 1000000,
+          "sqlite_mean_ms": 1325.1748884407182,
+          "winner": "duckdb"
+        }
+      ],
+      "workload": "event_window_rank"
+    },
+    {
+      "family": "memory",
+      "first_duckdb_scale": 1000000,
+      "selectivity": "medium",
+      "shape": "filtered_group_limit",
+      "sql_features": {
+        "aggregate_count": 2,
+        "cte_count": 0,
+        "has_distinct": false,
+        "has_group_by": true,
+        "has_limit": true,
+        "has_order_by": true,
+        "is_read_only": true,
+        "join_count": 0,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "winners": [
+        {
+          "duckdb_mean_ms": 1.7201560549438,
+          "scale": 10000,
+          "sqlite_mean_ms": 0.24704774841666222,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 2.6510825070242086,
+          "scale": 100000,
+          "sqlite_mean_ms": 0.9099999442696571,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 17.4085086522003,
+          "scale": 1000000,
+          "sqlite_mean_ms": 22.214094332108896,
+          "winner": "duckdb"
+        }
+      ],
+      "workload": "memory_hot_rollup"
+    },
+    {
+      "family": "memory",
+      "first_duckdb_scale": 1000000,
+      "selectivity": "medium",
+      "shape": "exists_projection",
+      "sql_features": {
+        "aggregate_count": 0,
+        "cte_count": 0,
+        "has_distinct": false,
+        "has_group_by": false,
+        "has_limit": true,
+        "has_order_by": true,
+        "is_read_only": true,
+        "join_count": 0,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "winners": [
+        {
+          "duckdb_mean_ms": 2.108117410292228,
+          "scale": 10000,
+          "sqlite_mean_ms": 0.9587733075022697,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 4.491955041885376,
+          "scale": 100000,
+          "sqlite_mean_ms": 4.103034113844235,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 28.376352197180193,
+          "scale": 1000000,
+          "sqlite_mean_ms": 44.22493247936169,
+          "winner": "duckdb"
+        }
+      ],
+      "workload": "memory_owner_exists_projection"
+    },
+    {
+      "family": "memory",
+      "first_duckdb_scale": 1000000,
+      "selectivity": "high",
+      "shape": "selective_join_lookup",
+      "sql_features": {
+        "aggregate_count": 0,
+        "cte_count": 0,
+        "has_distinct": false,
+        "has_group_by": false,
+        "has_limit": true,
+        "has_order_by": true,
+        "is_read_only": true,
+        "join_count": 1,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "winners": [
+        {
+          "duckdb_mean_ms": 1.8008328042924404,
+          "scale": 10000,
+          "sqlite_mean_ms": 0.2609843698640664,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 4.188887309283018,
+          "scale": 100000,
+          "sqlite_mean_ms": 1.2548972542087238,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 27.131867905457813,
+          "scale": 1000000,
+          "sqlite_mean_ms": 37.30302909389138,
+          "winner": "duckdb"
+        }
+      ],
+      "workload": "memory_owner_join_lookup"
+    }
+  ],
+  "thread_limit": "default",
+  "vector": [
+    {
+      "dimensions": 256,
+      "family": "vector",
+      "first_indexed_scale": null,
+      "shape": "candidate_filtered_ann",
+      "top_k": 10,
+      "winners": [
+        {
+          "filtered_candidate_count": 1001,
+          "lancedb_indexed_filtered_mean_ms": 1.1726968611280124,
+          "lancedb_indexed_filtered_recall": 0.30625,
+          "numpy_f32_filtered_mean_ms": 0.08858393994159997,
+          "scale": 2000,
+          "strategy": "default",
+          "winner": "numpy_exact"
+        },
+        {
+          "filtered_candidate_count": 5001,
+          "lancedb_indexed_filtered_mean_ms": 1.3102729086919378,
+          "lancedb_indexed_filtered_recall": 0.2,
+          "numpy_f32_filtered_mean_ms": 3.000073387132337,
+          "scale": 10000,
+          "strategy": "default",
+          "winner": "numpy_exact"
+        },
+        {
+          "filtered_candidate_count": 25001,
+          "lancedb_indexed_filtered_mean_ms": 1.5513841935899109,
+          "lancedb_indexed_filtered_recall": 0.18125,
+          "numpy_f32_filtered_mean_ms": 6.267469657662635,
+          "scale": 50000,
+          "strategy": "default",
+          "winner": "numpy_exact"
+        }
+      ],
+      "workload": "vector_dims256_topk10"
+    }
+  ]
+}

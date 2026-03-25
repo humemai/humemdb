@@ -34,6 +34,7 @@ What it reports:
 - cached SQL translation cost for SQLite and DuckDB targets
 - uncached SQL translation cost for SQLite and DuckDB targets
 - Cypher parse cost
+- Cypher runtime-planning cost through the generated-first `db.query(...)` planning path
 - Cypher bind+compile cost
 
 Large-run command used:
@@ -194,6 +195,10 @@ Current workload groups now include:
 - anchored node lookups
 - selective and reverse relationship-property anchored traversals
 - broader social fanout traversals
+- reverse-direction relationship fanout traversals with ordering
+- untyped relationship reads over admitted graph patterns
+- narrow relationship-type alternation reads such as `:KNOWS|FOLLOWS`
+- anonymous-endpoint relationship reads over admitted graph patterns
 - ordered limited traversals
 - topic-side fanout reads that are broader than the earlier selective TAGGED case
 - additional `Team` nodes and `MEMBER_OF` edges so graph routing is not benchmarked on
@@ -241,6 +246,7 @@ Purpose:
 
 - summarize the merged routing sweep JSON into a workload-by-workload crossover report
 - show the first scale where DuckDB wins for each SQL or Cypher workload, if any
+- show the first scale where indexed vector search wins with acceptable recall, if any
 
 Example command:
 
@@ -252,8 +258,9 @@ python scripts/benchmarks/routing_threshold_report.py \
 
 Current full-sweep inputs:
 
-- SQL scales: `10k`, `100k`, `1M`, `10M` event rows
+- SQL scales: `10k`, `100k`, `1M` event rows
 - Cypher scales: `100k`, `1M` total nodes
+- Vector scales: `2k`, `10k`, `50k` rows at `256` dims and `top_k=10`
 
 Current SQL crossover summary:
 
@@ -284,16 +291,27 @@ Current Cypher crossover summary:
 | `document_lookup` | `node` | `anchored_node_lookup` | none | Anchored document lookup stays on SQLite. |
 | `topic_lookup` | `node` | `anchored_node_lookup` | none | Anchored topic lookup stays on SQLite. |
 | `team_lookup` | `node` | `anchored_node_lookup` | none | The added `Team` node family also stays on SQLite. |
-| `social_expand` | `edge` | `broad_relationship_expand` | `1M` | Broad `KNOWS` traversal is the first current graph workload to cross to DuckDB. |
+| `social_expand` | `edge` | `broad_relationship_expand` | `1M` | Broad `KNOWS` traversal crosses, but only at the larger current graph scale. |
+| `social_mixed_boolean` | `edge` | `mixed_boolean_expand` | `100k` | Mixed boolean relationship filtering is the earliest current raw-backend graph crossover. |
 | `social_expand_ordered` | `edge` | `ordered_relationship_expand` | none | Ordering plus `LIMIT` still does not make this traversal a DuckDB win. |
+| `social_expand_untyped` | `edge` | `untyped_relationship_expand` | none | Untyped relationship expansion still stays on SQLite. |
+| `social_expand_type_alternation` | `edge` | `relationship_type_alternation` | none | Narrow type alternation does not justify DuckDB in the current sweep. |
+| `social_expand_anonymous_endpoints` | `edge` | `anonymous_endpoint_expand` | none | Anonymous-endpoint relationship reads still stay on SQLite. |
 | `social_expand_unfiltered` | `edge` | `full_relationship_expand` | none | Full fanout with a `LIMIT` still stays on SQLite in the current sweep. |
-| `social_reverse_since_anchor` | `edge` | `relationship_property_anchor` | none | Reverse-edge traversal with property anchoring stays SQLite-favored in the current sweep. |
+| `social_reverse_since_anchor` | `edge` | `relationship_property_anchor` | `1M` | Reverse-edge traversal with relationship-property anchoring only crosses at the larger scale. |
+| `social_reverse_expand_ordered` | `edge` | `reverse_relationship_expand` | none | Reverse ordered expansion remains SQLite-favored. |
 | `author_expand` | `edge` | `selective_relationship_expand` | none | Selective authored traversal stays on SQLite. |
 | `author_expand_ordered` | `edge` | `ordered_relationship_expand` | none | Ordered authored traversal still stays on SQLite. |
 | `tagged_expand` | `edge` | `selective_relationship_expand` | none | Selective tagged traversal stays on SQLite. |
 | `tagged_topic_fanout` | `edge` | `topic_fanout_expand` | none | Topic-side fanout still does not justify DuckDB. |
 | `team_membership_expand` | `edge` | `membership_expand` | none | The new `MEMBER_OF` traversal family stays on SQLite. |
 | `team_membership_ordered` | `edge` | `ordered_membership_expand` | none | Ordered team-membership traversal also stays on SQLite. |
+
+Current vector crossover summary:
+
+| Workload | Family | Shape | First indexed win | Takeaway |
+| --- | --- | --- | ---: | --- |
+| `vector_dims256_topk10` | `vector` | `candidate_filtered_ann` | none | The current default indexed LanceDB path never beats the exact SQLite/NumPy path with acceptable recall in this sweep. |
 
 Thread-control example:
 
@@ -354,8 +372,12 @@ Graph findings:
 - The multi-label graph benchmark makes the routing boundary clearer than the earlier
   single-label version did.
 - The 100k-node table above still shows SQLite winning the current matrix, but the full
-  routing sweep now shows one real Cypher crossover: broad `KNOWS` traversal first
-  flips to DuckDB at `1M` total nodes.
+  routing sweep now shows limited raw-backend Cypher crossovers rather than none.
+- The earliest current Cypher crossover is `social_mixed_boolean`, which first flips to
+  DuckDB at `100k` total nodes.
+- Broader `KNOWS` traversal first flips to DuckDB at `1M` total nodes.
+- Reverse-edge traversal with a relationship-property anchor also flips, but only at
+  `1M` total nodes.
 - Most other current Cypher workloads still stay on SQLite even at `1M`, including
   anchored lookups, selective traversals, ordered traversals, topic fanout, and the
   added `Team`/`MEMBER_OF` graph family.

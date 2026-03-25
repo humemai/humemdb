@@ -279,17 +279,3 @@ class TestVectorAPI(unittest.TestCase):
             with HumemDB(str(sqlite_path), preload_vectors=True) as db:
                 self.assertFalse(db.vectors_cached())
 
-    def test_vector_queries_reject_duckdb_route(self) -> None:
-        HumemDB = humemdb_class()
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
-
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
-                with self.assertRaisesRegex(ValueError, "route='sqlite'"):
-                    db.query(
-                        "SELECT id FROM docs ORDER BY embedding <=> $query LIMIT 1",
-                        route="duckdb",
-                        params={"query": [1.0, 0.0]},
-                    )

@@ -528,7 +528,7 @@ def _seed_sqlite_vectors(
     matrix = matrix / np.linalg.norm(matrix, axis=1, keepdims=True)
 
     ensure_vector_schema(db.sqlite)
-    with db.transaction(route="sqlite"):
+    with db.transaction():
         insert_vectors(
             db.sqlite,
             [(index + 1, matrix[index]) for index in range(rows)],

@@ -11,10 +11,9 @@ The current public surface is intentionally conservative:
     vector ordering or Neo4j-like Cypher `SEARCH ... VECTOR INDEX ...` text
 - SQLite is the canonical public write target, including vectors
 - DuckDB is read-only through the public API
-- omitted-route SQL can auto-route conservatively, while explicit routes still
-    override that recommendation
+- query routing is internal and conservative; callers do not choose engines
 - PostgreSQL-like SQL is translated into backend SQL before execution
-- transaction control is explicit and route-bound
+- transaction control is explicit on the canonical SQLite store
 
 As the project grows, this module is where routing, query validation, and the portable
 frontend surfaces will expand.
@@ -23,7 +22,10 @@ frontend surfaces will expand.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
+import json
 import logging
+import os
 import re
 from numbers import Integral
 from pathlib import Path
@@ -51,8 +53,8 @@ from .cypher import (
     analyze_cypher_plan,
     ensure_graph_schema,
     execute_cypher,
-    parse_cypher,
 )
+from .cypher_frontend import lower_cypher_text as _lower_generated_cypher_text
 from .engines import DuckDBEngine, SQLiteEngine
 from .sql import (
     SQLTranslationPlan as _SQLTranslationPlan,
@@ -80,8 +82,16 @@ from .vector import (
 
 logger = logging.getLogger(__name__)
 
+_SQL_OLAP_THRESHOLDS_PATH_ENV = "HUMEMDB_SQL_OLAP_THRESHOLDS_PATH"
+
 _CYPHER_MATCH_PREFIX = re.compile(r"^MATCH\b")
+_CYPHER_OPTIONAL_MATCH_PREFIX = re.compile(r"^OPTIONAL\s+MATCH\b")
 _CYPHER_CREATE_PATTERN = re.compile(r"^CREATE\s*\(")
+_CYPHER_MERGE_PATTERN = re.compile(r"^MERGE\s*\(")
+_CYPHER_UNWIND_PREFIX = re.compile(r"^UNWIND\b")
+_CYPHER_CALL_PREFIX = re.compile(r"^CALL\b")
+_CYPHER_RETURN_PREFIX = re.compile(r"^RETURN\b")
+_CYPHER_REMOVE_PREFIX = re.compile(r"^REMOVE\b")
 
 DirectVectorMetadata: TypeAlias = Mapping[str, str | int | float | bool | None]
 DirectVectorRow: TypeAlias = (
@@ -110,6 +120,29 @@ class _WorkloadProfile:
 
 
 @dataclass(frozen=True, slots=True)
+class _RouteDecision:
+    """Internal record of how one query route was selected."""
+
+    selected_route: Route
+    source: Literal["automatic", "explicit"]
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class _OlapRoutingRule:
+    """One benchmark-calibrated SQL shape family that should route to DuckDB."""
+
+    min_join_count: int = 0
+    min_aggregate_count: int = 0
+    min_cte_count: int = 0
+    min_window_count: int = 0
+    min_exists_count: int = 0
+    require_group_by: bool = False
+    require_distinct: bool = False
+    require_order_by_or_limit: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class _OlapRoutingThresholds:
     """Benchmark-calibrated thresholds for admitting SQL OLAP reads to DuckDB."""
 
@@ -119,6 +152,7 @@ class _OlapRoutingThresholds:
     min_cte_count: int = 0
     min_window_count: int = 0
     require_order_by_or_limit: bool = False
+    rules: tuple[_OlapRoutingRule, ...] = ()
 
 
 _DEFAULT_OLAP_ROUTING_THRESHOLDS = _OlapRoutingThresholds(
@@ -132,6 +166,7 @@ class _QueryExecutionPlan:
 
     text: str
     route: Route
+    route_decision: _RouteDecision
     query_type: InternalQueryType
     params: QueryParameters
     workload: _WorkloadProfile
@@ -149,7 +184,6 @@ class _BatchExecutionPlan:
 
     text: str
     route: Route
-    query_type: QueryType
     params_seq: BatchParameters
     translated_text: str
 
@@ -255,16 +289,12 @@ class HumemDB:
         self,
         text: str,
         *,
-        route: Route | None = None,
         params: QueryParameters = None,
     ) -> QueryResult:
-        """Execute a query against an explicit or inferred engine route.
+        """Execute a query against the internally selected engine route.
 
         Args:
             text: Query text to execute.
-            route: Optional engine route. When omitted, HumemDB uses the current
-                internal workload classifier to choose a conservative route. Use
-                `sqlite` or `duckdb` explicitly to override that recommendation.
             params: Optional named parameters. Public SQL, Cypher, and language-level
                 vector queries use mapping-style params such as
                 `{ "name": "Alice" }`.
@@ -279,12 +309,13 @@ class HumemDB:
 
         Raises:
             NotImplementedError: If an unsupported query type is requested.
-            ValueError: If the route is unsupported or a public write is sent to DuckDB.
+            ValueError: If execution reaches an unsupported internal route or a write
+                is planned for DuckDB.
         """
 
         plan = _plan_query(
             text,
-            route=route,
+            route=None,
             params=params,
         )
         return self._execute_query_plan(plan)
@@ -484,11 +515,15 @@ class HumemDB:
         """Dispatch one normalized query plan onto the correct execution path."""
 
         logger.debug(
-            "Dispatching query_type=%s workload=%s preferred_route=%s actual_route=%s",
+            (
+                "Dispatching query_type=%s workload=%s preferred_route=%s "
+                "actual_route=%s route_source=%s"
+            ),
             plan.query_type,
             plan.workload.kind,
             plan.workload.preferred_route,
             plan.route,
+            plan.route_decision.source,
         )
 
         if plan.vector_plan is not None:
@@ -529,7 +564,7 @@ class HumemDB:
             plan.route,
             plan.workload.kind,
         )
-        return execute_cypher(
+        result = execute_cypher(
             plan.text,
             route=plan.route,
             params=plan.params,
@@ -537,6 +572,9 @@ class HumemDB:
             duckdb=self.duckdb,
             plan=plan.cypher_plan,
         )
+        if not plan.workload.is_read_only:
+            self._invalidate_vector_cache()
+        return result
 
     def _execute_sql_query_plan(self, plan: _QueryExecutionPlan) -> QueryResult:
         """Execute one normalized SQL query plan."""
@@ -619,7 +657,7 @@ class HumemDB:
                     result = self.sqlite.execute(
                         plan.translated_text,
                         normalized_params,
-                        query_type=plan.query_type,
+                        query_type="sql",
                     )
                     total_rowcount += result.rowcount
                     resolved_vector_rows.extend(
@@ -640,13 +678,13 @@ class HumemDB:
                     rows=(),
                     columns=(),
                     route="sqlite",
-                    query_type=plan.query_type,
+                    query_type="sql",
                     rowcount=total_rowcount,
                 )
             result = self.sqlite.executemany(
                 plan.translated_text,
                 batch_plan.normalized_params_seq,
-                query_type=plan.query_type,
+                query_type="sql",
             )
             if batch_plan.vector_rows:
                 self._ensure_vector_schema()
@@ -958,61 +996,40 @@ class HumemDB:
         logger.debug("Invalidating all vector cache entries after SQL write")
         self._invalidate_vector_cache()
 
-    def begin(self, *, route: Route = "sqlite") -> None:
-        """Begin an explicit transaction on the selected route.
+    def begin(self) -> None:
+        """Begin an explicit transaction on the canonical SQLite store."""
 
-        Args:
-            route: Backend route whose transaction should begin. Defaults to
-                `sqlite`.
-        """
+        logger.debug("Beginning transaction on route=sqlite")
+        self.sqlite.begin()
 
-        logger.debug("Beginning transaction on route=%s", route)
-        self._engine_for_route(route).begin()
+    def commit(self) -> None:
+        """Commit the active transaction on the canonical SQLite store."""
 
-    def commit(self, *, route: Route = "sqlite") -> None:
-        """Commit the active transaction on the selected route.
+        logger.debug("Committing transaction on route=sqlite")
+        self.sqlite.commit()
 
-        Args:
-            route: Backend route whose transaction should commit. Defaults to
-                `sqlite`.
-        """
+    def rollback(self) -> None:
+        """Roll back the active transaction on the canonical SQLite store."""
 
-        logger.debug("Committing transaction on route=%s", route)
-        self._engine_for_route(route).commit()
+        logger.debug("Rolling back transaction on route=sqlite")
+        self.sqlite.rollback()
 
-    def rollback(self, *, route: Route = "sqlite") -> None:
-        """Roll back the active transaction on the selected route.
-
-        Args:
-            route: Backend route whose transaction should roll back. Defaults to
-                `sqlite`.
-        """
-
-        logger.debug("Rolling back transaction on route=%s", route)
-        self._engine_for_route(route).rollback()
-
-    def transaction(self, *, route: Route = "sqlite") -> _TransactionContext:
-        """Return a transaction context manager for the selected route.
+    def transaction(self) -> _TransactionContext:
+        """Return a transaction context manager for the canonical SQLite store.
 
         A successful context commits on exit. An exception inside the context triggers a
         rollback before the exception continues to propagate.
-        Args:
-            route: Backend route whose transaction lifecycle should be managed.
-                Defaults to `sqlite`.
 
         Returns:
-            A `_TransactionContext` bound to the selected route.
+            A `_TransactionContext` bound to SQLite.
         """
 
-        return _TransactionContext(self, route)
+        return _TransactionContext(self)
 
     def executemany(
         self,
         text: str,
         params_seq: BatchParameters,
-        *,
-        route: Route = "sqlite",
-        query_type: QueryType = "sql",
     ) -> QueryResult:
         """Execute the same statement repeatedly for a batch of parameters.
 
@@ -1022,24 +1039,18 @@ class HumemDB:
         Args:
             text: SQL statement to execute repeatedly.
             params_seq: Sequence of mapping-style parameter sets.
-            route: Execution route. Defaults to `sqlite` and batch execution still
-                supports only the SQLite path.
-            query_type: Logical query type. Batch execution currently supports only
-                `sql` / `HumemSQL v0`.
 
         Returns:
             A normalized `QueryResult`.
 
         Raises:
-            NotImplementedError: If a non-SQL query type is requested.
-            ValueError: If the route is unsupported or batch writes are directed
-                to DuckDB.
+            ValueError: If batch execution is directed to an unsupported internal
+                route.
         """
 
         plan = _plan_batch_query(
             text,
-            route=route,
-            query_type=query_type,
+            route="sqlite",
             params_seq=params_seq,
         )
         return self._execute_batch_query_plan(plan)
@@ -1088,26 +1099,23 @@ class HumemDB:
 
 
 class _TransactionContext:
-    """Route-bound transaction context manager used by `HumemDB`.
+    """SQLite transaction context manager used by `HumemDB`.
 
     This helper keeps the public transaction API ergonomic while making the
     commit-or-rollback behavior explicit and testable.
 
     Attributes:
         db: Owning `HumemDB` instance.
-        route: Backend route whose transaction lifecycle is being managed.
     """
 
-    def __init__(self, db: HumemDB, route: Route) -> None:
-        """Bind the context manager to one database instance and route.
+    def __init__(self, db: HumemDB) -> None:
+        """Bind the context manager to one database instance.
 
         Args:
             db: Owning database instance.
-            route: Backend route whose transaction should be managed.
         """
 
         self.db = db
-        self.route: Route = route
 
     def __enter__(self) -> HumemDB:
         """Begin the transaction and return the owning `HumemDB` instance.
@@ -1116,7 +1124,7 @@ class _TransactionContext:
             The owning `HumemDB` instance for use inside the context.
         """
 
-        self.db.begin(route=self.route)
+        self.db.begin()
         return self.db
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -1129,10 +1137,10 @@ class _TransactionContext:
         """
 
         if exc_type is None:
-            self.db.commit(route=self.route)
+            self.db.commit()
             return
 
-        self.db.rollback(route=self.route)
+        self.db.rollback()
 
 
 def _infer_query_type(text: str) -> InternalQueryType:
@@ -1150,9 +1158,16 @@ def _infer_query_type(text: str) -> InternalQueryType:
     if _is_vector_query_text(stripped):
         return "vector"
 
-    if _CYPHER_MATCH_PREFIX.match(stripped):
-        return "cypher"
-    if _CYPHER_CREATE_PATTERN.match(stripped):
+    if (
+        _CYPHER_MATCH_PREFIX.match(stripped)
+        or _CYPHER_OPTIONAL_MATCH_PREFIX.match(stripped)
+        or _CYPHER_CREATE_PATTERN.match(stripped)
+        or _CYPHER_MERGE_PATTERN.match(stripped)
+        or _CYPHER_UNWIND_PREFIX.match(stripped)
+        or _CYPHER_CALL_PREFIX.match(stripped)
+        or _CYPHER_RETURN_PREFIX.match(stripped)
+        or _CYPHER_REMOVE_PREFIX.match(stripped)
+    ):
         return "cypher"
     return "sql"
 
@@ -1175,6 +1190,7 @@ def _plan_query(
     cypher_shape = None
     vector_plan = None
     sql_is_read_only = None
+    olap_thresholds = _resolve_sql_olap_thresholds()
     planning_route: Route = route or "sqlite"
     if resolved_query_type == "sql":
         sql_plan = translate_sql_plan(text, target=planning_route)
@@ -1182,14 +1198,15 @@ def _plan_query(
     elif resolved_query_type == "vector":
         vector_plan = _plan_candidate_vector_query(text, params)
     elif resolved_query_type == "cypher":
-        cypher_plan = parse_cypher(text)
-        cypher_shape = analyze_cypher_plan(cypher_plan)
+        cypher_plan, cypher_shape = _plan_cypher_query(text)
     workload = _classify_workload(
         resolved_query_type,
         sql_plan=sql_plan,
         cypher_shape=cypher_shape,
+        olap_thresholds=olap_thresholds,
     )
-    resolved_route = route or workload.preferred_route
+    route_decision = _resolve_route_decision(route, workload)
+    resolved_route = route_decision.selected_route
     if resolved_query_type == "sql":
         sql_plan = translate_sql_plan(text, target=resolved_route)
         translated_text = sql_plan.translated_text
@@ -1198,6 +1215,7 @@ def _plan_query(
     return _QueryExecutionPlan(
         text=text,
         route=resolved_route,
+        route_decision=route_decision,
         query_type=resolved_query_type,
         params=params,
         workload=workload,
@@ -1208,6 +1226,142 @@ def _plan_query(
         vector_plan=vector_plan,
         sql_is_read_only=sql_is_read_only,
     )
+
+
+@lru_cache(maxsize=256)
+def _plan_cypher_query(text: str) -> tuple[_GraphPlan, _CypherPlanShape]:
+    """Plan non-vector Cypher through the generated frontend boundary.
+
+    Ordinary Cypher planning is now owned by the in-repo generated frontend.
+    Unsupported or out-of-subset statements should fail at that boundary instead of
+    silently falling back to the older handwritten parser.
+    """
+
+    plan = _lower_generated_cypher_text(text)
+    return plan, analyze_cypher_plan(plan)
+
+
+def _resolve_route_decision(
+    requested_route: Route | None,
+    workload: _WorkloadProfile,
+) -> _RouteDecision:
+    """Resolve the selected route and record why that route won."""
+
+    if requested_route is None:
+        return _RouteDecision(
+            selected_route=workload.preferred_route,
+            source="automatic",
+            reason=(
+                f"Auto-selected {workload.preferred_route!r} from workload "
+                f"classification: {workload.reason}"
+            ),
+        )
+
+    if requested_route == workload.preferred_route:
+        return _RouteDecision(
+            selected_route=requested_route,
+            source="explicit",
+            reason=(
+                f"Explicit route {requested_route!r} matches the workload "
+                f"preference: {workload.reason}"
+            ),
+        )
+
+    return _RouteDecision(
+        selected_route=requested_route,
+        source="explicit",
+        reason=(
+            f"Explicit route {requested_route!r} overrides the workload "
+            f"preference {workload.preferred_route!r}: {workload.reason}"
+        ),
+    )
+
+
+def _resolve_sql_olap_thresholds() -> _OlapRoutingThresholds:
+    """Resolve SQL OLAP routing thresholds from env-backed benchmark output."""
+
+    thresholds_path = os.environ.get(_SQL_OLAP_THRESHOLDS_PATH_ENV)
+    if thresholds_path is None:
+        return _DEFAULT_OLAP_ROUTING_THRESHOLDS
+    return _load_sql_olap_thresholds_from_path(thresholds_path)
+
+
+@lru_cache(maxsize=8)
+def _load_sql_olap_thresholds_from_path(path_text: str) -> _OlapRoutingThresholds:
+    """Load benchmark-calibrated SQL OLAP thresholds from one JSON file path."""
+
+    path = Path(path_text)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(
+            "HumemDB SQL OLAP threshold file must contain a JSON object."
+        )
+
+    if "recommended_runtime" in payload:
+        recommended_runtime = payload.get("recommended_runtime")
+        if not isinstance(recommended_runtime, dict):
+            raise ValueError(
+                "HumemDB routing threshold report must expose object-valued "
+                "recommended_runtime data."
+            )
+        threshold_payload = recommended_runtime.get("sql_olap_thresholds")
+    else:
+        threshold_payload = payload
+
+    if not isinstance(threshold_payload, dict):
+        raise ValueError(
+            "HumemDB SQL OLAP thresholds must be a JSON object or appear under "
+            "recommended_runtime.sql_olap_thresholds."
+        )
+
+    try:
+        return _OlapRoutingThresholds(
+            benchmark_calibrated=bool(threshold_payload["benchmark_calibrated"]),
+            min_join_count=int(threshold_payload.get("min_join_count", 0)),
+            min_aggregate_count=int(threshold_payload.get("min_aggregate_count", 0)),
+            min_cte_count=int(threshold_payload.get("min_cte_count", 0)),
+            min_window_count=int(threshold_payload.get("min_window_count", 0)),
+            require_order_by_or_limit=bool(
+                threshold_payload.get("require_order_by_or_limit", False)
+            ),
+            rules=tuple(
+                _load_sql_olap_rule(rule_payload)
+                for rule_payload in threshold_payload.get("rules", ())
+            ),
+        )
+    except KeyError as exc:
+        raise ValueError(
+            "HumemDB SQL OLAP thresholds must define benchmark_calibrated."
+        ) from exc
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "HumemDB SQL OLAP thresholds contain invalid scalar values."
+        ) from exc
+
+
+def _load_sql_olap_rule(rule_payload: object) -> _OlapRoutingRule:
+    """Load one benchmark-calibrated SQL routing rule from JSON data."""
+
+    if not isinstance(rule_payload, dict):
+        raise ValueError("HumemDB SQL OLAP rules must be object-valued.")
+
+    try:
+        return _OlapRoutingRule(
+            min_join_count=int(rule_payload.get("min_join_count", 0)),
+            min_aggregate_count=int(rule_payload.get("min_aggregate_count", 0)),
+            min_cte_count=int(rule_payload.get("min_cte_count", 0)),
+            min_window_count=int(rule_payload.get("min_window_count", 0)),
+            min_exists_count=int(rule_payload.get("min_exists_count", 0)),
+            require_group_by=bool(rule_payload.get("require_group_by", False)),
+            require_distinct=bool(rule_payload.get("require_distinct", False)),
+            require_order_by_or_limit=bool(
+                rule_payload.get("require_order_by_or_limit", False)
+            ),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "HumemDB SQL OLAP rules contain invalid scalar values."
+        ) from exc
 
 
 def _classify_workload(
@@ -1259,14 +1413,7 @@ def _classify_workload(
             reason="SQL writes target the canonical SQLite store.",
         )
 
-    if (
-        sql_plan.cte_count > 0
-        or sql_plan.join_count > 0
-        or sql_plan.aggregate_count > 0
-        or sql_plan.window_count > 0
-        or sql_plan.has_group_by
-        or sql_plan.has_distinct
-    ):
+    if _has_broad_sql_analytical_shape(sql_plan):
         if _matches_sql_olap_thresholds(sql_plan, olap_thresholds):
             return _WorkloadProfile(
                 kind="analytical_read",
@@ -1316,6 +1463,12 @@ def _matches_sql_olap_thresholds(
     if not _has_broad_sql_analytical_shape(sql_plan):
         return False
 
+    if thresholds.rules:
+        return any(
+            _matches_sql_olap_rule(sql_plan, rule)
+            for rule in thresholds.rules
+        )
+
     if sql_plan.join_count < thresholds.min_join_count:
         return False
     if sql_plan.aggregate_count < thresholds.min_aggregate_count:
@@ -1331,47 +1484,82 @@ def _matches_sql_olap_thresholds(
     return True
 
 
+def _matches_sql_olap_rule(
+    sql_plan: _SQLTranslationPlan,
+    rule: _OlapRoutingRule,
+) -> bool:
+    """Return whether one SQL read matches a calibrated DuckDB routing rule."""
+
+    if sql_plan.join_count < rule.min_join_count:
+        return False
+    if sql_plan.aggregate_count < rule.min_aggregate_count:
+        return False
+    if sql_plan.cte_count < rule.min_cte_count:
+        return False
+    if sql_plan.window_count < rule.min_window_count:
+        return False
+    if sql_plan.exists_count < rule.min_exists_count:
+        return False
+    if rule.require_group_by and not sql_plan.has_group_by:
+        return False
+    if rule.require_distinct and not sql_plan.has_distinct:
+        return False
+    if rule.require_order_by_or_limit and not (
+        sql_plan.has_order_by or sql_plan.has_limit
+    ):
+        return False
+    return True
+
+
 def _has_broad_sql_analytical_shape(sql_plan: _SQLTranslationPlan) -> bool:
     """Return whether one SQL read matches the current conservative DuckDB shape."""
 
     if sql_plan.window_count > 0:
         return True
 
-    if sql_plan.aggregate_count <= 0:
-        return False
+    if sql_plan.exists_count > 0:
+        return True
 
-    return (
-        sql_plan.has_group_by
-        or sql_plan.has_distinct
-        or sql_plan.join_count > 0
-        or sql_plan.cte_count > 0
-        or sql_plan.has_order_by
-        or sql_plan.has_limit
-    )
+    if sql_plan.aggregate_count > 0:
+        return (
+            sql_plan.has_group_by
+            or sql_plan.has_distinct
+            or sql_plan.join_count > 0
+            or sql_plan.cte_count > 0
+            or sql_plan.has_order_by
+            or sql_plan.has_limit
+        )
+
+    if sql_plan.has_distinct and sql_plan.join_count > 0:
+        return True
+
+    if sql_plan.cte_count > 0:
+        return (
+            sql_plan.join_count > 0
+            or sql_plan.has_distinct
+            or sql_plan.has_order_by
+            or sql_plan.has_limit
+        )
+
+    if sql_plan.join_count > 1:
+        return sql_plan.has_distinct or sql_plan.has_order_by or sql_plan.has_limit
+
+    return False
 
 
 def _plan_batch_query(
     text: str,
     *,
     route: Route,
-    query_type: QueryType,
     params_seq: BatchParameters,
 ) -> _BatchExecutionPlan:
     """Build the thin internal dispatch plan for one `executemany(...)` call."""
-
-    if query_type != "sql":
-        logger.debug("Rejected unsupported batch query_type=%s", query_type)
-        raise NotImplementedError(
-            "HumemDB batch execution currently supports only query_type='sql' "
-            f"for HumemSQL v0; got {query_type!r}."
-        )
 
     _validate_public_batch_params(params_seq)
 
     return _BatchExecutionPlan(
         text=text,
         route=route,
-        query_type=query_type,
         params_seq=params_seq,
         translated_text=translate_sql(text, target=route),
     )

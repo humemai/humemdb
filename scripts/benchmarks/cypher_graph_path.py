@@ -136,6 +136,17 @@ def _workloads(dataset: GraphDataset) -> dict[str, QueryWorkload]:
             ),
             params={"title": f"document_{midpoint_document}"},
         ),
+        "user_distinct_region_offset": QueryWorkload(
+            family="node",
+            shape="distinct_paginated_projection",
+            selectivity="medium",
+            query=(
+                "MATCH (u:User) "
+                "RETURN DISTINCT u.region "
+                "ORDER BY u.region OFFSET 5 LIMIT 10"
+            ),
+            params={},
+        ),
         "topic_lookup": QueryWorkload(
             family="node",
             shape="anchored_node_lookup",
@@ -171,6 +182,18 @@ def _workloads(dataset: GraphDataset) -> dict[str, QueryWorkload]:
             ),
             params={"region": "region_11"},
         ),
+        "social_expand_offset": QueryWorkload(
+            family="edge",
+            shape="offset_relationship_expand",
+            selectivity="low",
+            query=(
+                "MATCH (a:User)-[r:KNOWS]->(b:User) "
+                "WHERE a.region = $region "
+                "RETURN a.name, b.name, r.since "
+                "ORDER BY r.since DESC OFFSET 50 LIMIT 250"
+            ),
+            params={"region": "region_11"},
+        ),
         "social_expand_unfiltered": QueryWorkload(
             family="edge",
             shape="full_relationship_expand",
@@ -182,6 +205,53 @@ def _workloads(dataset: GraphDataset) -> dict[str, QueryWorkload]:
             ),
             params={},
         ),
+        "social_expand_untyped": QueryWorkload(
+            family="edge",
+            shape="untyped_relationship_expand",
+            selectivity="low",
+            query=(
+                "MATCH (a:User)-[r]->(b:User) "
+                "WHERE a.region = $region AND b.active = $active "
+                "RETURN a.name, r.type, b.name "
+                "LIMIT 500"
+            ),
+            params={"region": "region_11", "active": True},
+        ),
+        "social_expand_type_alternation": QueryWorkload(
+            family="edge",
+            shape="relationship_type_alternation",
+            selectivity="low",
+            query=(
+                "MATCH (a:User)-[r:KNOWS|FOLLOWS]->(b:User) "
+                "WHERE a.region = $region "
+                "RETURN a.name, r.type, b.name "
+                "ORDER BY a.name, b.name LIMIT 500"
+            ),
+            params={"region": "region_11"},
+        ),
+        "social_expand_anonymous_endpoints": QueryWorkload(
+            family="edge",
+            shape="anonymous_endpoint_expand",
+            selectivity="low",
+            query=(
+                "MATCH (:User {region: $region})-[r:KNOWS]->(:User {active: $active}) "
+                "RETURN r.type, r.since "
+                "ORDER BY r.since DESC LIMIT 500"
+            ),
+            params={"region": "region_11", "active": True},
+        ),
+        "social_reverse_expand_ordered": QueryWorkload(
+            family="edge",
+            shape="reverse_relationship_expand",
+            selectivity="low",
+            query=(
+                "MATCH (b:User)<-[r:KNOWS]-(a:User) "
+                "WHERE a.region = $region "
+                "RETURN a.name, b.name, r.since "
+                "ORDER BY r.since DESC LIMIT 500"
+            ),
+            params={"region": "region_11"},
+        ),
         "social_reverse_since_anchor": QueryWorkload(
             family="edge",
             shape="relationship_property_anchor",
@@ -192,6 +262,18 @@ def _workloads(dataset: GraphDataset) -> dict[str, QueryWorkload]:
                 "RETURN a.name, b.name"
             ),
             params={"since": 2021, "active": True},
+        ),
+        "social_mixed_boolean": QueryWorkload(
+            family="edge",
+            shape="mixed_boolean_expand",
+            selectivity="medium",
+            query=(
+                "MATCH (a:User)-[r:KNOWS]->(b:User) "
+                "WHERE r.since = $since AND b.active = $active OR a.name = $name "
+                "RETURN a.name, b.name "
+                "ORDER BY a.name, b.name LIMIT 250"
+            ),
+            params={"since": 2021, "active": True, "name": f"user_{midpoint_user}"},
         ),
         "author_expand": QueryWorkload(
             family="edge",
@@ -331,7 +413,7 @@ def _seed_graph(
     dataset = _dataset_counts(nodes, fanout, tag_fanout)
 
     started = time.perf_counter()
-    with db.transaction(route="sqlite"):
+    with db.transaction():
         _seed_user_nodes(db, count=dataset.user_count, batch_size=batch_size)
         _seed_document_nodes(
             db,
@@ -821,19 +903,9 @@ def main() -> None:
                     warmup=args.warmup,
                     repetitions=args.repetitions,
                 )
-                sqlite_cypher_summary = _time_callable(
+                public_cypher_summary = _time_callable(
                     lambda workload=workload: db.query(
                         workload.query,
-                        route="sqlite",
-                        params=workload.params,
-                    ),
-                    warmup=args.warmup,
-                    repetitions=args.repetitions,
-                )
-                duckdb_cypher_summary = _time_callable(
-                    lambda workload=workload: db.query(
-                        workload.query,
-                        route="duckdb",
                         params=workload.params,
                     ),
                     warmup=args.warmup,
@@ -848,8 +920,7 @@ def main() -> None:
                 _print_summary("Cypher bind+compile", compile_summary)
                 _print_summary("SQLite raw SQL", sqlite_sql_summary)
                 _print_summary("DuckDB raw SQL", duckdb_sql_summary)
-                _print_summary("SQLite Cypher end-to-end", sqlite_cypher_summary)
-                _print_summary("DuckDB Cypher end-to-end", duckdb_cypher_summary)
+                _print_summary("Public Cypher end-to-end", public_cypher_summary)
                 print()
                 cast_workloads = json_results["workloads"]
                 assert isinstance(cast_workloads, dict)
@@ -863,8 +934,7 @@ def main() -> None:
                     "cypher_compile": _summary_dict(compile_summary),
                     "sqlite_raw_sql": _summary_dict(sqlite_sql_summary),
                     "duckdb_raw_sql": _summary_dict(duckdb_sql_summary),
-                    "sqlite_cypher": _summary_dict(sqlite_cypher_summary),
-                    "duckdb_cypher": _summary_dict(duckdb_cypher_summary),
+                    "public_cypher": _summary_dict(public_cypher_summary),
                 }
 
     if args.output_json is not None:

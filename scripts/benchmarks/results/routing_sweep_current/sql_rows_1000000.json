@@ -1,0 +1,530 @@
+{
+  "batch_size": 20000,
+  "benchmark": "duckdb_direct_read",
+  "dataset": {
+    "document_tags": 150000,
+    "documents": 50000,
+    "events": 1000000,
+    "memory_chunks": 100000,
+    "seed_seconds": 4.459603799972683,
+    "tags": 1024,
+    "users": 50000
+  },
+  "repetitions": 3,
+  "thread_limit": "8",
+  "warmup": 1,
+  "workloads": {
+    "document_distinct_owner_regions": {
+      "duckdb": {
+        "max_ms": 15.475322026759386,
+        "mean_ms": 15.310497799267372,
+        "min_ms": 15.217010397464037,
+        "stdev_ms": 0.1168986212687652
+      },
+      "family": "document",
+      "query": "SELECT DISTINCT users.region, documents.language FROM documents JOIN users ON users.id = documents.owner_user_id WHERE documents.status = 'published'",
+      "selectivity": "medium",
+      "shape": "distinct_join_projection",
+      "sql_features": {
+        "aggregate_count": 0,
+        "cte_count": 0,
+        "exists_count": 0,
+        "has_distinct": true,
+        "has_group_by": false,
+        "has_limit": false,
+        "has_order_by": false,
+        "is_read_only": true,
+        "join_count": 1,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "sqlite": {
+        "max_ms": 21.094906143844128,
+        "mean_ms": 20.924299489706755,
+        "min_ms": 20.762626081705093,
+        "stdev_ms": 0.13579975966761018
+      },
+      "sqlite_duckdb_ratio": 1.366663564048715
+    },
+    "document_owner_region_rollup": {
+      "duckdb": {
+        "max_ms": 18.4757299721241,
+        "mean_ms": 17.885111272335052,
+        "min_ms": 16.941275913268328,
+        "stdev_ms": 0.6743929719771208
+      },
+      "family": "document",
+      "query": "SELECT users.region, documents.status, AVG(documents.score) AS avg_score FROM documents JOIN users ON users.id = documents.owner_user_id WHERE users.is_active = 1 GROUP BY users.region, documents.status ORDER BY avg_score DESC",
+      "selectivity": "medium",
+      "shape": "broad_multi_join_group",
+      "sql_features": {
+        "aggregate_count": 1,
+        "cte_count": 0,
+        "exists_count": 0,
+        "has_distinct": false,
+        "has_group_by": true,
+        "has_limit": false,
+        "has_order_by": true,
+        "is_read_only": true,
+        "join_count": 1,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "sqlite": {
+        "max_ms": 36.42466710880399,
+        "mean_ms": 36.34708747267723,
+        "min_ms": 36.29409708082676,
+        "stdev_ms": 0.05606904227261632
+      },
+      "sqlite_duckdb_ratio": 2.032253918872701
+    },
+    "document_tag_rollup": {
+      "duckdb": {
+        "max_ms": 24.2292950861156,
+        "mean_ms": 23.69463009138902,
+        "min_ms": 23.34114210680127,
+        "stdev_ms": 0.3845540797845067
+      },
+      "family": "document",
+      "query": "SELECT documents.category, COUNT(*) AS tagged_docs FROM documents JOIN document_tags ON document_tags.document_id = documents.id JOIN tags ON tags.id = document_tags.tag_id WHERE documents.status = 'published' AND tags.name = 'tag_42' GROUP BY documents.category ORDER BY tagged_docs DESC",
+      "selectivity": "high",
+      "shape": "selective_multi_join_group",
+      "sql_features": {
+        "aggregate_count": 1,
+        "cte_count": 0,
+        "exists_count": 0,
+        "has_distinct": false,
+        "has_group_by": true,
+        "has_limit": false,
+        "has_order_by": true,
+        "is_read_only": true,
+        "join_count": 2,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "sqlite": {
+        "max_ms": 0.16152067109942436,
+        "mean_ms": 0.1399169365564982,
+        "min_ms": 0.12684008106589317,
+        "stdev_ms": 0.015388666414998413
+      },
+      "sqlite_duckdb_ratio": 0.005905006156114085
+    },
+    "event_active_user_join_lookup": {
+      "duckdb": {
+        "max_ms": 65.97684603184462,
+        "mean_ms": 65.09080405036609,
+        "min_ms": 64.31288179010153,
+        "stdev_ms": 0.6835991296251789
+      },
+      "family": "oltp_join",
+      "query": "SELECT events.id, events.amount, users.tier FROM events JOIN users ON users.id = events.user_id WHERE users.is_active = 1 AND users.region = 'region_7' AND events.created_day = 42 ORDER BY events.id LIMIT 50",
+      "selectivity": "high",
+      "shape": "selective_join_lookup",
+      "sql_features": {
+        "aggregate_count": 0,
+        "cte_count": 0,
+        "exists_count": 0,
+        "has_distinct": false,
+        "has_group_by": false,
+        "has_limit": true,
+        "has_order_by": true,
+        "is_read_only": true,
+        "join_count": 1,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "sqlite": {
+        "max_ms": 4.949839785695076,
+        "mean_ms": 4.876446599761645,
+        "min_ms": 4.815449938178062,
+        "stdev_ms": 0.05556025642416725
+      },
+      "sqlite_duckdb_ratio": 0.07491759659303546
+    },
+    "event_active_user_rollup": {
+      "duckdb": {
+        "max_ms": 64.7808532230556,
+        "mean_ms": 63.56068762640159,
+        "min_ms": 61.183436308056116,
+        "stdev_ms": 1.6811677767924236
+      },
+      "family": "analytics",
+      "query": "SELECT users.tier, events.event_type, COUNT(*) AS matched_events FROM events JOIN users ON users.id = events.user_id WHERE users.is_active = 1 GROUP BY users.tier, events.event_type ORDER BY matched_events DESC",
+      "selectivity": "medium",
+      "shape": "filtered_join_group",
+      "sql_features": {
+        "aggregate_count": 1,
+        "cte_count": 0,
+        "exists_count": 0,
+        "has_distinct": false,
+        "has_group_by": true,
+        "has_limit": false,
+        "has_order_by": true,
+        "is_read_only": true,
+        "join_count": 1,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "sqlite": {
+        "max_ms": 673.8562751561403,
+        "mean_ms": 669.8142373934388,
+        "min_ms": 664.6160669624805,
+        "stdev_ms": 3.8598656216248615
+      },
+      "sqlite_duckdb_ratio": 10.538184252040942
+    },
+    "event_aggregate_topk": {
+      "duckdb": {
+        "max_ms": 62.38187802955508,
+        "mean_ms": 61.93760735914111,
+        "min_ms": 61.704196967184544,
+        "stdev_ms": 0.3142816659699445
+      },
+      "family": "analytics",
+      "query": "SELECT user_id, SUM(amount) AS total_amount FROM events GROUP BY user_id ORDER BY total_amount DESC LIMIT 10",
+      "selectivity": "low",
+      "shape": "scan_group_limit",
+      "sql_features": {
+        "aggregate_count": 1,
+        "cte_count": 0,
+        "exists_count": 0,
+        "has_distinct": false,
+        "has_group_by": true,
+        "has_limit": true,
+        "has_order_by": true,
+        "is_read_only": true,
+        "join_count": 0,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "sqlite": {
+        "max_ms": 438.96966334432364,
+        "mean_ms": 435.841115967681,
+        "min_ms": 431.06148578226566,
+        "stdev_ms": 3.4331107292879355
+      },
+      "sqlite_duckdb_ratio": 7.036776758916197
+    },
+    "event_cte_daily_rollup": {
+      "duckdb": {
+        "max_ms": 77.18299888074398,
+        "mean_ms": 74.1273023498555,
+        "min_ms": 72.2367879934609,
+        "stdev_ms": 2.1809000680434876
+      },
+      "family": "analytics",
+      "query": "WITH daily AS (SELECT created_day, user_id, SUM(amount) AS day_total FROM events GROUP BY created_day, user_id) SELECT created_day, AVG(day_total) AS avg_total FROM daily GROUP BY created_day ORDER BY avg_total DESC LIMIT 15",
+      "selectivity": "low",
+      "shape": "cte_group_order",
+      "sql_features": {
+        "aggregate_count": 2,
+        "cte_count": 1,
+        "exists_count": 0,
+        "has_distinct": false,
+        "has_group_by": true,
+        "has_limit": true,
+        "has_order_by": true,
+        "is_read_only": true,
+        "join_count": 0,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "sqlite": {
+        "max_ms": 1895.2523367479444,
+        "mean_ms": 1875.435066409409,
+        "min_ms": 1853.1333412975073,
+        "stdev_ms": 17.28451775586391
+      },
+      "sqlite_duckdb_ratio": 25.3001931401469
+    },
+    "event_exists_region_filter": {
+      "duckdb": {
+        "max_ms": 58.577246963977814,
+        "mean_ms": 57.9719883389771,
+        "min_ms": 57.099961675703526,
+        "stdev_ms": 0.6319107771517924
+      },
+      "family": "mixed",
+      "query": "SELECT COUNT(*) AS matched FROM events e WHERE EXISTS (SELECT 1 FROM users u WHERE u.id = e.user_id AND u.region = 'region_3' AND u.is_active = 1)",
+      "selectivity": "medium",
+      "shape": "exists_filter",
+      "sql_features": {
+        "aggregate_count": 1,
+        "cte_count": 0,
+        "exists_count": 1,
+        "has_distinct": false,
+        "has_group_by": false,
+        "has_limit": false,
+        "has_order_by": false,
+        "is_read_only": true,
+        "join_count": 0,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "sqlite": {
+        "max_ms": 340.736027341336,
+        "mean_ms": 340.58343262101215,
+        "min_ms": 340.4894703999162,
+        "stdev_ms": 0.10886048813308626
+      },
+      "sqlite_duckdb_ratio": 5.874965520063473
+    },
+    "event_filtered_range": {
+      "duckdb": {
+        "max_ms": 45.642894227057695,
+        "mean_ms": 44.426027995844684,
+        "min_ms": 43.25185902416706,
+        "stdev_ms": 0.9766028286341856
+      },
+      "family": "oltp",
+      "query": "SELECT COUNT(*) AS matched FROM events WHERE user_id BETWEEN 1000 AND 5000",
+      "selectivity": "medium",
+      "shape": "filtered_range",
+      "sql_features": {
+        "aggregate_count": 1,
+        "cte_count": 0,
+        "exists_count": 0,
+        "has_distinct": false,
+        "has_group_by": false,
+        "has_limit": false,
+        "has_order_by": false,
+        "is_read_only": true,
+        "join_count": 0,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "sqlite": {
+        "max_ms": 3.385897260159254,
+        "mean_ms": 3.2664434984326363,
+        "min_ms": 3.138985950499773,
+        "stdev_ms": 0.10095987372768944
+      },
+      "sqlite_duckdb_ratio": 0.073525445460444
+    },
+    "event_point_lookup": {
+      "duckdb": {
+        "max_ms": 101.09315812587738,
+        "mean_ms": 100.51694667587678,
+        "min_ms": 99.88348511978984,
+        "stdev_ms": 0.4955033645357615
+      },
+      "family": "oltp",
+      "query": "SELECT amount FROM events WHERE id = 424242",
+      "selectivity": "high",
+      "shape": "point_lookup",
+      "sql_features": {
+        "aggregate_count": 0,
+        "cte_count": 0,
+        "exists_count": 0,
+        "has_distinct": false,
+        "has_group_by": false,
+        "has_limit": false,
+        "has_order_by": false,
+        "is_read_only": true,
+        "join_count": 0,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "sqlite": {
+        "max_ms": 0.011039897799491882,
+        "mean_ms": 0.00909327839811643,
+        "min_ms": 0.007539987564086914,
+        "stdev_ms": 0.0014556495538397788
+      },
+      "sqlite_duckdb_ratio": 9.046512751166505e-05
+    },
+    "event_region_join": {
+      "duckdb": {
+        "max_ms": 66.2676957435906,
+        "mean_ms": 62.397644855082035,
+        "min_ms": 59.830262791365385,
+        "stdev_ms": 2.7848213951002663
+      },
+      "family": "analytics",
+      "query": "SELECT users.region, AVG(events.amount) AS avg_amount FROM events JOIN users ON users.id = events.user_id GROUP BY users.region ORDER BY avg_amount DESC",
+      "selectivity": "low",
+      "shape": "join_group_order",
+      "sql_features": {
+        "aggregate_count": 1,
+        "cte_count": 0,
+        "exists_count": 0,
+        "has_distinct": false,
+        "has_group_by": true,
+        "has_limit": false,
+        "has_order_by": true,
+        "is_read_only": true,
+        "join_count": 1,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "sqlite": {
+        "max_ms": 694.3145180121064,
+        "mean_ms": 694.0939074071745,
+        "min_ms": 693.7487362883985,
+        "stdev_ms": 0.24720265765467678
+      },
+      "sqlite_duckdb_ratio": 11.123719637483134
+    },
+    "event_type_hot_window": {
+      "duckdb": {
+        "max_ms": 58.80287103354931,
+        "mean_ms": 55.447484056154885,
+        "min_ms": 50.153973046690226,
+        "stdev_ms": 3.787532413022136
+      },
+      "family": "oltp",
+      "query": "SELECT id, amount, created_day FROM events WHERE event_type = 'purchase' AND created_day BETWEEN 10 AND 40 ORDER BY amount DESC LIMIT 25",
+      "selectivity": "high",
+      "shape": "filtered_ordered_limit",
+      "sql_features": {
+        "aggregate_count": 0,
+        "cte_count": 0,
+        "exists_count": 0,
+        "has_distinct": false,
+        "has_group_by": false,
+        "has_limit": true,
+        "has_order_by": true,
+        "is_read_only": true,
+        "join_count": 0,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "sqlite": {
+        "max_ms": 2.2662938572466373,
+        "mean_ms": 2.2060812140504518,
+        "min_ms": 2.166254911571741,
+        "stdev_ms": 0.043310120671139006
+      },
+      "sqlite_duckdb_ratio": 0.039786858711501234
+    },
+    "event_window_rank": {
+      "duckdb": {
+        "max_ms": 94.66520417481661,
+        "mean_ms": 94.22631375491619,
+        "min_ms": 93.36857218295336,
+        "stdev_ms": 0.6065700543596622
+      },
+      "family": "analytics",
+      "query": "SELECT user_id, amount, amount_rank FROM (SELECT user_id, amount, ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY amount DESC) AS amount_rank FROM events) ranked WHERE amount_rank <= 3",
+      "selectivity": "medium",
+      "shape": "window_partition_order",
+      "sql_features": {
+        "aggregate_count": 0,
+        "cte_count": 0,
+        "exists_count": 0,
+        "has_distinct": false,
+        "has_group_by": false,
+        "has_limit": false,
+        "has_order_by": false,
+        "is_read_only": true,
+        "join_count": 0,
+        "statement_name": "Select",
+        "window_count": 1
+      },
+      "sqlite": {
+        "max_ms": 1305.2130439318717,
+        "mean_ms": 1294.8601827956736,
+        "min_ms": 1287.8539082594216,
+        "stdev_ms": 7.471484869236092
+      },
+      "sqlite_duckdb_ratio": 13.742023127038811
+    },
+    "memory_hot_rollup": {
+      "duckdb": {
+        "max_ms": 17.11948635056615,
+        "mean_ms": 16.901631684352953,
+        "min_ms": 16.590213868767023,
+        "stdev_ms": 0.22597623354069815
+      },
+      "family": "memory",
+      "query": "SELECT topic, AVG(token_count) AS avg_tokens, SUM(importance) AS total_importance FROM memory_chunks WHERE is_hot = 1 GROUP BY topic ORDER BY total_importance DESC LIMIT 10",
+      "selectivity": "medium",
+      "shape": "filtered_group_limit",
+      "sql_features": {
+        "aggregate_count": 2,
+        "cte_count": 0,
+        "exists_count": 0,
+        "has_distinct": false,
+        "has_group_by": true,
+        "has_limit": true,
+        "has_order_by": true,
+        "is_read_only": true,
+        "join_count": 0,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "sqlite": {
+        "max_ms": 21.779008209705353,
+        "mean_ms": 21.477140641460817,
+        "min_ms": 21.183826960623264,
+        "stdev_ms": 0.24305699819460358
+      },
+      "sqlite_duckdb_ratio": 1.2707140377070067
+    },
+    "memory_owner_exists_projection": {
+      "duckdb": {
+        "max_ms": 27.272282633930445,
+        "mean_ms": 25.715138607968886,
+        "min_ms": 24.81574611738324,
+        "stdev_ms": 1.1054774914034493
+      },
+      "family": "memory",
+      "query": "SELECT topic, token_count, summary_length FROM memory_chunks m WHERE EXISTS (SELECT 1 FROM users u WHERE u.id = m.owner_user_id AND u.tier = 'pro') ORDER BY importance DESC LIMIT 100",
+      "selectivity": "medium",
+      "shape": "exists_projection",
+      "sql_features": {
+        "aggregate_count": 0,
+        "cte_count": 0,
+        "exists_count": 1,
+        "has_distinct": false,
+        "has_group_by": false,
+        "has_limit": true,
+        "has_order_by": true,
+        "is_read_only": true,
+        "join_count": 0,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "sqlite": {
+        "max_ms": 41.88995203003287,
+        "mean_ms": 41.80263836557666,
+        "min_ms": 41.743331123143435,
+        "stdev_ms": 0.06304861796088919
+      },
+      "sqlite_duckdb_ratio": 1.6256042404773354
+    },
+    "memory_owner_join_lookup": {
+      "duckdb": {
+        "max_ms": 26.089579798281193,
+        "mean_ms": 25.98090594013532,
+        "min_ms": 25.87617887184024,
+        "stdev_ms": 0.08716525192246093
+      },
+      "family": "memory",
+      "query": "SELECT memory_chunks.id, memory_chunks.topic, users.region FROM memory_chunks JOIN users ON users.id = memory_chunks.owner_user_id WHERE memory_chunks.is_hot = 1 AND users.tier = 'enterprise' ORDER BY memory_chunks.importance DESC LIMIT 30",
+      "selectivity": "high",
+      "shape": "selective_join_lookup",
+      "sql_features": {
+        "aggregate_count": 0,
+        "cte_count": 0,
+        "exists_count": 0,
+        "has_distinct": false,
+        "has_group_by": false,
+        "has_limit": true,
+        "has_order_by": true,
+        "is_read_only": true,
+        "join_count": 1,
+        "statement_name": "Select",
+        "window_count": 0
+      },
+      "sqlite": {
+        "max_ms": 35.33637477084994,
+        "mean_ms": 34.872816720356546,
+        "min_ms": 34.33300228789449,
+        "stdev_ms": 0.4131588570443266
+      },
+      "sqlite_duckdb_ratio": 1.3422479108584509
+    }
+  }
+}

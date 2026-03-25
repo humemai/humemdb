@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import os
 import tempfile
 import unittest
@@ -10,31 +11,23 @@ from tests.support import humemdb_class, runtime_module
 
 
 class TestRoutingRuntime(unittest.TestCase):
-    def test_explicit_sqlite_and_duckdb_routing(self) -> None:
+    def test_public_api_no_longer_exposes_route_selection(self) -> None:
         HumemDB = humemdb_class()
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+        query_signature = inspect.signature(HumemDB.query)
+        executemany_signature = inspect.signature(HumemDB.executemany)
+        transaction_signature = inspect.signature(HumemDB.transaction)
+        begin_signature = inspect.signature(HumemDB.begin)
+        commit_signature = inspect.signature(HumemDB.commit)
+        rollback_signature = inspect.signature(HumemDB.rollback)
 
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
-                db.query(
-                    "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
-                    route="sqlite",
-                )
-                db.query(
-                    "INSERT INTO users (name) VALUES ($name)",
-                    route="sqlite",
-                    params={"name": "Alice"},
-                )
-
-                sqlite_result = db.query("SELECT id, name FROM users", route="sqlite")
-                self.assertEqual(sqlite_result.columns, ("id", "name"))
-                self.assertEqual(sqlite_result.rows, ((1, "Alice"),))
-
-                duckdb_result = db.query("SELECT id, name FROM users", route="duckdb")
-                self.assertEqual(duckdb_result.columns, ("id", "name"))
-                self.assertEqual(duckdb_result.rows, ((1, "Alice"),))
+        self.assertNotIn("route", query_signature.parameters)
+        self.assertNotIn("query_type", executemany_signature.parameters)
+        self.assertNotIn("route", executemany_signature.parameters)
+        self.assertNotIn("route", transaction_signature.parameters)
+        self.assertNotIn("route", begin_signature.parameters)
+        self.assertNotIn("route", commit_signature.parameters)
+        self.assertNotIn("route", rollback_signature.parameters)
 
     def test_duckdb_reads_sqlite_source_of_truth_directly(self) -> None:
         HumemDB = humemdb_class()
@@ -45,17 +38,21 @@ class TestRoutingRuntime(unittest.TestCase):
 
             with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
                 db.query(
-                    "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
-                    route="sqlite",
+                    "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
                 )
                 db.executemany(
                     "INSERT INTO users (name) VALUES ($name)",
-                    [{"name": "Alice"}, {"name": "Bob"}],
-                    route="sqlite",
+                    [{"name": "Alice"}, {"name": "Alice"}, {"name": "Bob"}],
                 )
 
-                result = db.query("SELECT name FROM users ORDER BY id", route="duckdb")
-                self.assertEqual(result.rows, (("Alice",), ("Bob",)))
+                result = db.query(
+                    (
+                        "SELECT name, COUNT(*) AS total "
+                        "FROM users GROUP BY name ORDER BY total DESC, name"
+                    )
+                )
+                self.assertEqual(result.route, "duckdb")
+                self.assertEqual(result.rows, (("Alice", 2), ("Bob", 1)))
 
     def test_duckdb_threads_can_be_overridden_from_humemdb_env(self) -> None:
         HumemDB = humemdb_class()
@@ -159,30 +156,6 @@ class TestRoutingRuntime(unittest.TestCase):
         self.assertEqual(source_env, runtime.LANCEDB_THREADS_ENV)
         self.assertEqual(thread_count, 5)
 
-    def test_public_api_rejects_direct_duckdb_writes(self) -> None:
-        HumemDB = humemdb_class()
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
-
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
-                with self.assertRaises(ValueError):
-                    db.query(
-                        "CREATE TABLE metrics (name VARCHAR, value INTEGER)",
-                        route="duckdb",
-                    )
-
-    def test_invalid_route_raises_value_error(self) -> None:
-        HumemDB = humemdb_class()
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-
-            with HumemDB(str(sqlite_path)) as db:
-                with self.assertRaises(ValueError):
-                    db.query("SELECT 1", route="postgres")
-
     def test_query_defaults_to_sqlite_route(self) -> None:
         HumemDB = humemdb_class()
 
@@ -238,7 +211,7 @@ class TestRoutingRuntime(unittest.TestCase):
                 self.assertEqual(result.route, "duckdb")
                 self.assertEqual(result.rows, (("click", 2), ("view", 1)))
 
-    def test_query_explicit_sqlite_route_overrides_sql_auto_routing(self) -> None:
+    def test_query_keeps_selective_sql_read_on_sqlite(self) -> None:
         HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -264,15 +237,12 @@ class TestRoutingRuntime(unittest.TestCase):
                 )
 
                 result = db.query(
-                    (
-                        "SELECT kind, COUNT(*) AS total "
-                        "FROM events GROUP BY kind ORDER BY total DESC"
-                    ),
-                    route="sqlite",
+                    "SELECT value FROM events WHERE id = $id",
+                    params={"id": 1},
                 )
 
                 self.assertEqual(result.route, "sqlite")
-                self.assertEqual(result.rows, (("click", 2), ("view", 1)))
+                self.assertEqual(result.rows, ((10,),))
 
     def test_query_auto_routes_read_only_cypher_to_sqlite(self) -> None:
         HumemDB = humemdb_class()
@@ -373,32 +343,3 @@ class TestRoutingRuntime(unittest.TestCase):
                 result = db.query("SELECT COUNT(*) FROM users")
                 self.assertEqual(result.rows, ((0,),))
 
-    def test_public_api_rejects_batched_duckdb_writes(self) -> None:
-        HumemDB = humemdb_class()
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
-
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
-                with self.assertRaises(ValueError):
-                    db.executemany(
-                        "INSERT INTO metrics VALUES ($name, $value)",
-                        [{"name": "queries", "value": 1}],
-                        route="duckdb",
-                    )
-
-    def test_duckdb_transaction_context_commits_on_success(self) -> None:
-        HumemDB = humemdb_class()
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
-
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
-                with self.assertRaises(ValueError):
-                    with db.transaction(route="duckdb"):
-                        db.query(
-                            "CREATE TABLE metrics (name VARCHAR, value INTEGER)",
-                            route="duckdb",
-                        )

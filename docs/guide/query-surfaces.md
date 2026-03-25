@@ -11,9 +11,10 @@ For the exact supported PostgreSQL-like SQL and Neo4j-like Cypher subset, see
 - PostgreSQL-like source syntax.
 - Translated with `sqlglot` into backend SQL.
 - `db.query(...)` is the public entry point for explicit SQL text.
-- Users write `HumemSQL v0` regardless of route; omitted `route` lets HumemDB choose a
-  conservative execution backend, while explicit `route` overrides that choice and
-  still does not expose a backend-specific SQL dialect.
+- Users write `HumemSQL v0` regardless of backend; the public API no longer accepts a
+  `route` override.
+- HumemDB applies a conservative automatic classifier internally: broad analytical SQL
+  may route to DuckDB, while writes and selective SQL stay on SQLite.
 - Backend-specific SQLite or DuckDB SQL is not part of the supported public SQL
   contract.
 - Public writes go to SQLite.
@@ -24,8 +25,7 @@ For the exact supported PostgreSQL-like SQL and Neo4j-like Cypher subset, see
 - Separate frontend, not a SQL dialect.
 - `db.query(...)` is the public entry point for explicit Cypher text.
 - Graph data is stored in SQL tables.
-- Omitted `route` currently keeps Cypher reads on SQLite by default.
-- Explicit `route="duckdb"` still exists for controlled graph-read use.
+- Current public Cypher execution stays on SQLite.
 - Cypher writes still go to SQLite.
 
 ## `HumemVector v0`
@@ -42,16 +42,16 @@ For the exact supported PostgreSQL-like SQL and Neo4j-like Cypher subset, see
   forms.
 - SQL vector queries define row-oriented vector candidate sets.
 - Cypher vector queries define node-oriented vector candidate sets.
-- Routed vector execution is currently fixed to `route="sqlite"`.
+- Vector execution is currently fixed to SQLite under the public API.
 
 ## Implementation notes
 
-- `route` is now optional on `db.query(...)`.
 - `db.query(...)` now infers SQL, the current narrow Cypher subset, and the current
   language-level vector forms directly from the query text.
-- When `route` is omitted, HumemDB uses the current conservative workload classifier:
-  broad analytical SQL may route to DuckDB, while writes, ambiguous SQL, and current
-  Cypher reads stay on SQLite.
+- The public query API does not expose a backend override.
+- HumemDB uses the current conservative workload classifier internally: broad
+  analytical SQL may route to DuckDB, while writes, ambiguous SQL, current Cypher
+  reads, and vector execution stay on SQLite.
 - Internally the vector path still lowers to a candidate query plus exact vector
   ranking, but that split is no longer part of the public query API.
 

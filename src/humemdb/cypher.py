@@ -22,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import logging
 import re
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 from typing import Literal, TypeGuard, cast
 
 import numpy as np
@@ -30,6 +30,7 @@ import numpy as np
 from .engines import DuckDBEngine, SQLiteEngine
 from .types import QueryParameters, QueryResult, Route
 from .vector import (
+    _GRAPH_NODE_VECTOR_DELETE_TRIGGER_SQL,
     ensure_vector_schema,
     insert_vectors as insert_vector_rows,
     upsert_vectors,
@@ -93,17 +94,32 @@ class CypherVectorSearchClause:
 
 @dataclass(frozen=True, slots=True)
 class Predicate:
-    """Simple equality predicate used by the initial Cypher `WHERE` subset.
+    """Simple predicate used by the current Cypher `WHERE` subset.
 
     Attributes:
         alias: Bound node or relationship alias the predicate targets.
         field: Property name being compared.
+        operator: Comparison operator applied to the field.
+        disjunct_index: Zero-based OR-clause index for this predicate.
         value: Literal or parameter-backed Cypher value to compare against.
     """
 
     alias: str
     field: str
+    operator: Literal[
+        "=",
+        "<",
+        "<=",
+        ">",
+        ">=",
+        "STARTS WITH",
+        "ENDS WITH",
+        "CONTAINS",
+        "IS NULL",
+        "IS NOT NULL",
+    ]
     value: CypherValue
+    disjunct_index: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,13 +158,14 @@ class RelationshipPattern:
 
     Attributes:
         alias: Optional relationship alias bound by the query.
-        type_name: Relationship type name.
+        type_name: Optional relationship type token, optionally containing narrow
+            `|` alternation for MATCH patterns.
         direction: Relationship direction relative to the left node.
         properties: Inline property items attached to the relationship pattern.
     """
 
     alias: str | None
-    type_name: str
+    type_name: str | None
     direction: Literal["out", "in"]
     properties: PropertyItems = ()
 
@@ -218,6 +235,40 @@ class CreateRelationshipPlan:
 
 
 @dataclass(frozen=True, slots=True)
+class CreateRelationshipFromSeparatePatternsPlan:
+    """Plan for a narrow multi-pattern CREATE with two nodes and one edge."""
+
+    first_node: NodePattern
+    second_node: NodePattern
+    left: NodePattern
+    relationship: RelationshipPattern
+    right: NodePattern
+
+
+@dataclass(frozen=True, slots=True)
+class MatchCreateRelationshipPlan:
+    """Plan for matching one node binding and creating one relationship pattern."""
+
+    match_node: NodePattern
+    predicates: tuple[Predicate, ...]
+    left: NodePattern
+    relationship: RelationshipPattern
+    right: NodePattern
+
+
+@dataclass(frozen=True, slots=True)
+class MatchCreateRelationshipBetweenNodesPlan:
+    """Plan for matching two existing nodes and creating one relationship."""
+
+    left_match: NodePattern
+    right_match: NodePattern
+    predicates: tuple[Predicate, ...]
+    left: NodePattern
+    relationship: RelationshipPattern
+    right: NodePattern
+
+
+@dataclass(frozen=True, slots=True)
 class MatchNodePlan:
     """Plan for matching labeled nodes and projecting bound values.
 
@@ -234,6 +285,8 @@ class MatchNodePlan:
     returns: tuple[ReturnItem, ...]
     order_by: tuple[OrderItem, ...] = ()
     limit: int | None = None
+    distinct: bool = False
+    skip: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,6 +310,8 @@ class MatchRelationshipPlan:
     returns: tuple[ReturnItem, ...]
     order_by: tuple[OrderItem, ...] = ()
     limit: int | None = None
+    distinct: bool = False
+    skip: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -290,6 +345,44 @@ class SetNodePlan:
 
 
 @dataclass(frozen=True, slots=True)
+class SetRelationshipPlan:
+    """Plan for matching one relationship and updating relationship properties.
+
+    Attributes:
+        left: Left node pattern.
+        relationship: Relationship pattern that anchors the update.
+        right: Right node pattern.
+        predicates: Equality predicates that select target relationships.
+        assignments: Property assignments to apply.
+    """
+
+    left: NodePattern
+    relationship: RelationshipPattern
+    right: NodePattern
+    predicates: tuple[Predicate, ...]
+    assignments: tuple[SetItem, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class DeleteNodePlan:
+    """Plan for matching labeled nodes and deleting them with detach semantics."""
+
+    node: NodePattern
+    predicates: tuple[Predicate, ...]
+    detach: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class DeleteRelationshipPlan:
+    """Plan for matching one relationship and deleting it."""
+
+    left: NodePattern
+    relationship: RelationshipPattern
+    right: NodePattern
+    predicates: tuple[Predicate, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class CypherPlanShape:
     """Lightweight metadata derived from one parsed Cypher plan."""
 
@@ -305,9 +398,15 @@ class CypherPlanShape:
 GraphPlan = (
     CreateNodePlan
     | CreateRelationshipPlan
+    | CreateRelationshipFromSeparatePatternsPlan
+    | MatchCreateRelationshipPlan
+    | MatchCreateRelationshipBetweenNodesPlan
     | MatchNodePlan
     | MatchRelationshipPlan
     | SetNodePlan
+    | SetRelationshipPlan
+    | DeleteNodePlan
+    | DeleteRelationshipPlan
 )
 
 
@@ -341,22 +440,21 @@ class _CompiledMatchQuery:
 
 _IDENTIFIER = r"[A-Za-z_][A-Za-z0-9_]*"
 _NODE_PATTERN_RE = re.compile(
-    rf"^(?P<alias>{_IDENTIFIER})(?::(?P<label>{_IDENTIFIER}))?"
+    rf"^(?:(?P<alias>{_IDENTIFIER}))?(?::(?P<label>{_IDENTIFIER}))?"
     r"(?:\s*\{\s*(?P<properties>.*)\s*\})?$"
 )
 _REL_PATTERN_RE = re.compile(
-    rf"^(?:(?P<alias>{_IDENTIFIER})\s*)?:(?P<type>{_IDENTIFIER})"
+    rf"^(?:(?P<alias>{_IDENTIFIER})\s*)?"
+    rf"(?::(?P<type>{_IDENTIFIER}(?:\|{_IDENTIFIER})*))?"
     r"(?:\s*\{\s*(?P<properties>.*)\s*\})?$"
 )
 _RETURN_ITEM_RE = re.compile(rf"^(?P<alias>{_IDENTIFIER})\.(?P<field>{_IDENTIFIER})$")
 
-_UNSUPPORTED_KEYWORDS = {
-    "with",
-    "optional",
-    "merge",
-    "delete",
-    "skip",
-    "unwind",
+_UNSUPPORTED_KEYWORD_PATTERNS = {
+    "with": re.compile(r"(?<!starts )(?<!ends )\bwith\b"),
+    "optional": re.compile(r"\boptional\b"),
+    "merge": re.compile(r"\bmerge\b"),
+    "unwind": re.compile(r"\bunwind\b"),
 }
 
 _GRAPH_SCHEMA_SQL = (
@@ -368,17 +466,21 @@ _GRAPH_SCHEMA_SQL = (
     "key TEXT NOT NULL, "
     "value TEXT, "
     "value_type TEXT NOT NULL, "
+    "FOREIGN KEY (node_id) REFERENCES graph_nodes(id) ON DELETE CASCADE, "
     "PRIMARY KEY (node_id, key))",
     "CREATE TABLE IF NOT EXISTS graph_edges ("
     "id INTEGER PRIMARY KEY AUTOINCREMENT, "
     "type TEXT NOT NULL, "
     "from_node_id INTEGER NOT NULL, "
-    "to_node_id INTEGER NOT NULL)",
+    "to_node_id INTEGER NOT NULL, "
+    "FOREIGN KEY (from_node_id) REFERENCES graph_nodes(id) ON DELETE CASCADE, "
+    "FOREIGN KEY (to_node_id) REFERENCES graph_nodes(id) ON DELETE CASCADE)",
     "CREATE TABLE IF NOT EXISTS graph_edge_properties ("
     "edge_id INTEGER NOT NULL, "
     "key TEXT NOT NULL, "
     "value TEXT, "
     "value_type TEXT NOT NULL, "
+    "FOREIGN KEY (edge_id) REFERENCES graph_edges(id) ON DELETE CASCADE, "
     "PRIMARY KEY (edge_id, key))",
     "CREATE INDEX IF NOT EXISTS idx_graph_nodes_label_id "
     "ON graph_nodes(label, id)",
@@ -388,6 +490,8 @@ _GRAPH_SCHEMA_SQL = (
     "ON graph_edges(to_node_id, type, from_node_id)",
     "CREATE INDEX IF NOT EXISTS idx_graph_node_props_lookup "
     "ON graph_node_properties(key, value_type, value, node_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_graph_node_single_vector_prop "
+    "ON graph_node_properties(node_id) WHERE value_type = 'vector'",
     "CREATE INDEX IF NOT EXISTS idx_graph_edge_props_lookup "
     "ON graph_edge_properties(key, value_type, value, edge_id)",
 )
@@ -403,6 +507,13 @@ def ensure_graph_schema(sqlite: SQLiteEngine) -> None:
     logger.debug("Ensuring SQLite-backed graph schema exists")
     for statement in _GRAPH_SCHEMA_SQL:
         sqlite.execute(statement)
+
+    if sqlite.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        ("vector_entries",),
+        query_type="cypher",
+    ).first() is not None:
+        sqlite.execute(_GRAPH_NODE_VECTOR_DELETE_TRIGGER_SQL, query_type="cypher")
 
 
 def execute_cypher(
@@ -440,21 +551,80 @@ def execute_cypher(
         route,
     )
 
-    if isinstance(plan, (CreateNodePlan, CreateRelationshipPlan)):
+    if isinstance(
+        plan,
+        (
+            CreateNodePlan,
+            CreateRelationshipPlan,
+            CreateRelationshipFromSeparatePatternsPlan,
+        ),
+    ):
         if route != "sqlite":
             raise ValueError(
                 "HumemDB does not allow direct Cypher writes to DuckDB; SQLite is "
                 "the source of truth."
             )
-        return _execute_create_plan(plan, sqlite)
+        return _execute_cypher_write_atomically(
+            sqlite,
+            lambda: _execute_create_plan(plan, sqlite),
+        )
 
-    if isinstance(plan, SetNodePlan):
+    if isinstance(plan, MatchCreateRelationshipPlan):
         if route != "sqlite":
             raise ValueError(
                 "HumemDB does not allow direct Cypher writes to DuckDB; SQLite is "
                 "the source of truth."
             )
-        return _execute_set_node_plan(plan, sqlite)
+        return _execute_cypher_write_atomically(
+            sqlite,
+            lambda: _execute_match_create_relationship_plan(plan, sqlite),
+        )
+
+    if isinstance(plan, MatchCreateRelationshipBetweenNodesPlan):
+        if route != "sqlite":
+            raise ValueError(
+                "HumemDB does not allow direct Cypher writes to DuckDB; SQLite is "
+                "the source of truth."
+            )
+        return _execute_cypher_write_atomically(
+            sqlite,
+            lambda: _execute_match_create_relationship_between_nodes_plan(
+                plan,
+                sqlite,
+            ),
+        )
+
+    if isinstance(plan, (SetNodePlan, SetRelationshipPlan)):
+        if route != "sqlite":
+            raise ValueError(
+                "HumemDB does not allow direct Cypher writes to DuckDB; SQLite is "
+                "the source of truth."
+            )
+        if isinstance(plan, SetNodePlan):
+            return _execute_cypher_write_atomically(
+                sqlite,
+                lambda: _execute_set_node_plan(plan, sqlite),
+            )
+        return _execute_cypher_write_atomically(
+            sqlite,
+            lambda: _execute_set_relationship_plan(plan, sqlite),
+        )
+
+    if isinstance(plan, (DeleteNodePlan, DeleteRelationshipPlan)):
+        if route != "sqlite":
+            raise ValueError(
+                "HumemDB does not allow direct Cypher writes to DuckDB; SQLite is "
+                "the source of truth."
+            )
+        if isinstance(plan, DeleteNodePlan):
+            return _execute_cypher_write_atomically(
+                sqlite,
+                lambda: _execute_delete_node_plan(plan, sqlite),
+            )
+        return _execute_cypher_write_atomically(
+            sqlite,
+            lambda: _execute_delete_relationship_plan(plan, sqlite),
+        )
 
     compiled = _compile_match_plan(plan)
     logger.debug(
@@ -475,6 +645,28 @@ def execute_cypher(
     raise ValueError(f"Unsupported route: {route!r}")
 
 
+def _execute_cypher_write_atomically(
+    sqlite: SQLiteEngine,
+    execute_write: Callable[[], QueryResult],
+) -> QueryResult:
+    """Execute one logical Cypher write in a single SQLite transaction."""
+
+    owns_transaction = not sqlite.in_transaction
+    if owns_transaction:
+        sqlite.begin()
+
+    try:
+        result = execute_write()
+    except Exception:
+        if owns_transaction:
+            sqlite.rollback()
+        raise
+
+    if owns_transaction:
+        sqlite.commit()
+    return result
+
+
 def parse_cypher(text: str) -> GraphPlan:
     """Parse a `HumemCypher v0` statement into a small internal graph plan.
 
@@ -493,8 +685,8 @@ def parse_cypher(text: str) -> GraphPlan:
         raise ValueError("HumemCypher v0 requires a non-empty statement.")
 
     lowered_statement = statement.lower()
-    for keyword in _UNSUPPORTED_KEYWORDS:
-        if re.search(rf"\b{keyword}\b", lowered_statement):
+    for keyword, pattern in _UNSUPPORTED_KEYWORD_PATTERNS.items():
+        if pattern.search(lowered_statement):
             raise ValueError(
                 "HumemCypher v0 only supports CREATE and MATCH with simple RETURN "
                 f"clauses; found unsupported keyword {keyword!r}."
@@ -661,6 +853,54 @@ def analyze_cypher_plan(plan: GraphPlan) -> CypherPlanShape:
             has_limit=False,
         )
 
+    if isinstance(plan, CreateRelationshipFromSeparatePatternsPlan):
+        return CypherPlanShape(
+            plan_name=type(plan).__name__,
+            is_read_only=False,
+            pattern_kind="relationship",
+            predicate_count=0,
+            has_inline_properties=bool(
+                plan.first_node.properties
+                or plan.second_node.properties
+                or plan.relationship.properties
+            ),
+            has_order_by=False,
+            has_limit=False,
+        )
+
+    if isinstance(plan, MatchCreateRelationshipPlan):
+        return CypherPlanShape(
+            plan_name=type(plan).__name__,
+            is_read_only=False,
+            pattern_kind="relationship",
+            predicate_count=len(plan.predicates),
+            has_inline_properties=bool(
+                plan.match_node.properties
+                or plan.left.properties
+                or plan.relationship.properties
+                or plan.right.properties
+            ),
+            has_order_by=False,
+            has_limit=False,
+        )
+
+    if isinstance(plan, MatchCreateRelationshipBetweenNodesPlan):
+        return CypherPlanShape(
+            plan_name=type(plan).__name__,
+            is_read_only=False,
+            pattern_kind="relationship",
+            predicate_count=len(plan.predicates),
+            has_inline_properties=bool(
+                plan.left_match.properties
+                or plan.right_match.properties
+                or plan.left.properties
+                or plan.relationship.properties
+                or plan.right.properties
+            ),
+            has_order_by=False,
+            has_limit=False,
+        )
+
     if isinstance(plan, MatchNodePlan):
         return CypherPlanShape(
             plan_name=type(plan).__name__,
@@ -687,6 +927,47 @@ def analyze_cypher_plan(plan: GraphPlan) -> CypherPlanShape:
             has_limit=plan.limit is not None,
         )
 
+    if isinstance(plan, SetRelationshipPlan):
+        return CypherPlanShape(
+            plan_name=type(plan).__name__,
+            is_read_only=False,
+            pattern_kind="relationship",
+            predicate_count=len(plan.predicates),
+            has_inline_properties=bool(
+                plan.left.properties
+                or plan.relationship.properties
+                or plan.right.properties
+            ),
+            has_order_by=False,
+            has_limit=False,
+        )
+
+    if isinstance(plan, DeleteRelationshipPlan):
+        return CypherPlanShape(
+            plan_name=type(plan).__name__,
+            is_read_only=False,
+            pattern_kind="relationship",
+            predicate_count=len(plan.predicates),
+            has_inline_properties=bool(
+                plan.left.properties
+                or plan.relationship.properties
+                or plan.right.properties
+            ),
+            has_order_by=False,
+            has_limit=False,
+        )
+
+    if isinstance(plan, DeleteNodePlan):
+        return CypherPlanShape(
+            plan_name=type(plan).__name__,
+            is_read_only=False,
+            pattern_kind="node",
+            predicate_count=len(plan.predicates),
+            has_inline_properties=bool(plan.node.properties),
+            has_order_by=False,
+            has_limit=False,
+        )
+
     return CypherPlanShape(
         plan_name=type(plan).__name__,
         is_read_only=False,
@@ -701,16 +982,83 @@ def analyze_cypher_plan(plan: GraphPlan) -> CypherPlanShape:
 def _parse_create(body: str) -> GraphPlan:
     """Parse one CREATE body into a node or single-edge creation plan."""
 
+    create_patterns = _split_comma_separated(body)
+    if len(create_patterns) == 3:
+        if any(
+            _looks_like_relationship_pattern(pattern)
+            for pattern in create_patterns[:2]
+        ) or not _looks_like_relationship_pattern(create_patterns[2]):
+            raise ValueError(
+                "HumemCypher v0 CREATE currently supports either one node pattern, "
+                "one directed relationship pattern, or the narrow three-pattern "
+                "form with two node patterns followed by one relationship pattern."
+            )
+
+        first_node = _parse_node_pattern(
+            _unwrap_node_pattern(create_patterns[0]),
+            require_label=True,
+            default_alias="__humem_create_first_node",
+        )
+        second_node = _parse_node_pattern(
+            _unwrap_node_pattern(create_patterns[1]),
+            require_label=True,
+            default_alias="__humem_create_second_node",
+        )
+        left_text, relationship_text, right_text, direction = (
+            _split_relationship_pattern(create_patterns[2])
+        )
+        left = _parse_node_pattern(
+            left_text,
+            default_alias="__humem_create_left_node",
+        )
+        relationship = _parse_relationship_pattern(relationship_text, direction)
+        right = _parse_node_pattern(
+            right_text,
+            default_alias="__humem_create_right_node",
+        )
+        _validate_create_relationship_separate_patterns(
+            first_node,
+            second_node,
+            left,
+            right,
+        )
+        return CreateRelationshipFromSeparatePatternsPlan(
+            first_node=first_node,
+            second_node=second_node,
+            left=left,
+            relationship=relationship,
+            right=right,
+        )
+
+    if len(create_patterns) != 1:
+        raise ValueError(
+            "HumemCypher v0 CREATE currently supports either one node pattern, "
+            "one directed relationship pattern, or the narrow three-pattern form "
+            "with two node patterns followed by one relationship pattern."
+        )
+
     if _looks_like_relationship_pattern(body):
         left_text, relationship_text, right_text, direction = (
             _split_relationship_pattern(body)
         )
-        left = _parse_node_pattern(left_text, require_label=True)
+        left = _parse_node_pattern(
+            left_text,
+            require_label=True,
+            default_alias="__humem_create_left_node",
+        )
         relationship = _parse_relationship_pattern(relationship_text, direction)
-        right = _parse_node_pattern(right_text, require_label=True)
+        right = _parse_node_pattern(
+            right_text,
+            require_label=True,
+            default_alias="__humem_create_right_node",
+        )
         return CreateRelationshipPlan(left, relationship, right)
 
-    node = _parse_node_pattern(_unwrap_node_pattern(body), require_label=True)
+    node = _parse_node_pattern(
+        _unwrap_node_pattern(body),
+        require_label=True,
+        default_alias="__humem_create_node",
+    )
     return CreateNodePlan(node)
 
 
@@ -719,16 +1067,36 @@ def _parse_match(body: str) -> GraphPlan:
 
     The supported shape is intentionally small: one node pattern or one directed
     relationship pattern, an optional simple WHERE clause, a required RETURN clause,
-    and optional ORDER BY and LIMIT clauses.
+    and optional DISTINCT, ORDER BY, SKIP, and LIMIT clauses.
     """
 
     set_index = _find_keyword(body, "set")
+    create_index = _find_keyword(body, "create")
+    delete_index = _find_keyword(body, "delete")
     return_index = _find_keyword(body, "return")
 
     if set_index is not None and return_index is None:
         return _parse_match_set(body)
     if set_index is not None and return_index is not None and set_index < return_index:
         return _parse_match_set(body)
+
+    if create_index is not None and return_index is None:
+        return _parse_match_create(body)
+    if (
+        create_index is not None
+        and return_index is not None
+        and create_index < return_index
+    ):
+        return _parse_match_create(body)
+
+    if delete_index is not None and return_index is None:
+        return _parse_match_delete(body)
+    if (
+        delete_index is not None
+        and return_index is not None
+        and delete_index < return_index
+    ):
+        return _parse_match_delete(body)
 
     if return_index is None:
         raise ValueError("HumemCypher v0 MATCH statements require a RETURN clause.")
@@ -749,29 +1117,64 @@ def _parse_match(body: str) -> GraphPlan:
             raise ValueError("HumemCypher v0 WHERE clauses cannot be empty.")
         predicates = _parse_predicates(where_text)
 
-    return_text, order_by, limit = _split_return_clause(return_clause)
+    return_text, order_by, limit, distinct, skip = _split_return_clause(
+        return_clause
+    )
     returns = _parse_return_items(return_text)
 
     if _looks_like_relationship_pattern(pattern_text):
         left_text, relationship_text, right_text, direction = (
             _split_relationship_pattern(pattern_text)
         )
-        return MatchRelationshipPlan(
-            _parse_node_pattern(left_text),
-            _parse_relationship_pattern(relationship_text, direction),
-            _parse_node_pattern(right_text),
+        left = _parse_node_pattern(
+            left_text,
+            default_alias="__humem_match_left_node",
+        )
+        relationship = _parse_relationship_pattern(relationship_text, direction)
+        right = _parse_node_pattern(
+            right_text,
+            default_alias="__humem_match_right_node",
+        )
+        _validate_match_predicates(
             predicates,
-            returns,
-            order_by,
-            limit,
+            alias_kinds={
+                left.alias: "node",
+                right.alias: "node",
+                **(
+                    {relationship.alias: "relationship"}
+                    if relationship.alias is not None
+                    else {}
+                ),
+            },
+        )
+        return MatchRelationshipPlan(
+            left=left,
+            relationship=relationship,
+            right=right,
+            predicates=predicates,
+            returns=returns,
+            order_by=order_by,
+            limit=limit,
+            distinct=distinct,
+            skip=skip,
         )
 
-    return MatchNodePlan(
-        _parse_node_pattern(_unwrap_node_pattern(pattern_text)),
+    node = _parse_node_pattern(
+        _unwrap_node_pattern(pattern_text),
+        default_alias="__humem_match_node",
+    )
+    _validate_match_predicates(
         predicates,
-        returns,
-        order_by,
-        limit,
+        alias_kinds={node.alias: "node"},
+    )
+    return MatchNodePlan(
+        node=node,
+        predicates=predicates,
+        returns=returns,
+        order_by=order_by,
+        limit=limit,
+        distinct=distinct,
+        skip=skip,
     )
 
 
@@ -787,8 +1190,8 @@ def _match_plan_node_aliases(
     return ()
 
 
-def _parse_match_set(body: str) -> SetNodePlan:
-    """Parse a narrow MATCH ... SET node-property update statement."""
+def _parse_match_set(body: str) -> SetNodePlan | SetRelationshipPlan:
+    """Parse a narrow MATCH ... SET property update statement."""
 
     set_index = _find_keyword(body, "set")
     if set_index is None:
@@ -810,16 +1213,293 @@ def _parse_match_set(body: str) -> SetNodePlan:
             raise ValueError("HumemCypher v0 WHERE clauses cannot be empty.")
         predicates = _parse_predicates(where_text)
 
-    if _looks_like_relationship_pattern(pattern_text):
-        raise ValueError("HumemCypher v0 MATCH ... SET currently supports only nodes.")
-
-    node = _parse_node_pattern(_unwrap_node_pattern(pattern_text))
     assignments = _parse_set_items(set_text)
+    if _looks_like_relationship_pattern(pattern_text):
+        left_text, relationship_text, right_text, direction = (
+            _split_relationship_pattern(pattern_text)
+        )
+        left = _parse_node_pattern(
+            left_text,
+            default_alias="__humem_set_left_node",
+        )
+        relationship = _parse_relationship_pattern(relationship_text, direction)
+        right = _parse_node_pattern(
+            right_text,
+            default_alias="__humem_set_right_node",
+        )
+        _validate_match_predicates(
+            predicates,
+            alias_kinds={
+                left.alias: "node",
+                right.alias: "node",
+                **(
+                    {relationship.alias: "relationship"}
+                    if relationship.alias is not None
+                    else {}
+                ),
+            },
+        )
+        _validate_match_set_assignments(
+            assignments,
+            target_alias=relationship.alias,
+            target_kind="relationship",
+        )
+        return SetRelationshipPlan(
+            left,
+            relationship,
+            right,
+            predicates,
+            assignments,
+        )
+
+    node = _parse_node_pattern(
+        _unwrap_node_pattern(pattern_text),
+        default_alias="__humem_set_node",
+    )
+    _validate_match_predicates(
+        predicates,
+        alias_kinds={node.alias: "node"},
+    )
+    _validate_match_set_assignments(
+        assignments,
+        target_alias=node.alias,
+        target_kind="node",
+    )
     return SetNodePlan(node, predicates, assignments)
 
 
+def _parse_match_create(
+    body: str,
+) -> MatchCreateRelationshipPlan | MatchCreateRelationshipBetweenNodesPlan:
+    """Parse a narrow MATCH ... CREATE relationship statement."""
+
+    create_index = _find_keyword(body, "create")
+    if create_index is None:
+        raise ValueError("HumemCypher v0 MATCH ... CREATE statements require CREATE.")
+
+    match_body = body[:create_index].strip()
+    create_text = body[create_index + len("create"):].strip()
+    if not create_text:
+        raise ValueError("HumemCypher v0 CREATE clauses cannot be empty.")
+
+    where_index = _find_keyword(match_body, "where")
+    predicates: tuple[Predicate, ...] = ()
+    if where_index is None:
+        pattern_text = match_body
+    else:
+        pattern_text = match_body[:where_index].strip()
+        where_text = match_body[where_index + len("where"):].strip()
+        if not where_text:
+            raise ValueError("HumemCypher v0 WHERE clauses cannot be empty.")
+        predicates = _parse_predicates(where_text)
+
+    if not _looks_like_relationship_pattern(create_text):
+        raise ValueError(
+            "HumemCypher v0 MATCH ... CREATE currently supports only one directed "
+            "relationship pattern in the CREATE clause."
+        )
+
+    match_patterns = _split_comma_separated(pattern_text)
+    if len(match_patterns) == 1:
+        if _looks_like_relationship_pattern(match_patterns[0]):
+            raise ValueError(
+                "HumemCypher v0 MATCH ... CREATE currently supports only matched "
+                "node patterns before CREATE."
+            )
+
+        match_node = _parse_node_pattern(
+            _unwrap_node_pattern(match_patterns[0]),
+            default_alias="__humem_match_create_node",
+        )
+        _validate_match_predicates(
+            predicates,
+            alias_kinds={match_node.alias: "node"},
+        )
+
+        left_text, relationship_text, right_text, direction = (
+            _split_relationship_pattern(create_text)
+        )
+        left = _parse_node_pattern(
+            left_text,
+            default_alias="__humem_match_create_left_node",
+        )
+        relationship = _parse_relationship_pattern(relationship_text, direction)
+        right = _parse_node_pattern(
+            right_text,
+            default_alias="__humem_match_create_right_node",
+        )
+        _validate_match_create_relationship_endpoints(match_node, left, right)
+        return MatchCreateRelationshipPlan(
+            match_node=match_node,
+            predicates=predicates,
+            left=left,
+            relationship=relationship,
+            right=right,
+        )
+
+    if len(match_patterns) != 2:
+        raise ValueError(
+            "HumemCypher v0 MATCH ... CREATE currently supports one matched node "
+            "pattern, or two disconnected matched node patterns, before CREATE."
+        )
+
+    if any(_looks_like_relationship_pattern(pattern) for pattern in match_patterns):
+        raise ValueError(
+            "HumemCypher v0 MATCH ... CREATE currently supports only matched node "
+            "patterns before CREATE."
+        )
+
+    left_match = _parse_node_pattern(
+        _unwrap_node_pattern(match_patterns[0]),
+        default_alias="__humem_match_create_left_match_node",
+    )
+    right_match = _parse_node_pattern(
+        _unwrap_node_pattern(match_patterns[1]),
+        default_alias="__humem_match_create_right_match_node",
+    )
+    _validate_match_predicates(
+        predicates,
+        alias_kinds={
+            left_match.alias: "node",
+            right_match.alias: "node",
+        },
+    )
+
+    left_text, relationship_text, right_text, direction = _split_relationship_pattern(
+        create_text
+    )
+    left = _parse_node_pattern(
+        left_text,
+        default_alias="__humem_match_create_left_node",
+    )
+    relationship = _parse_relationship_pattern(relationship_text, direction)
+    right = _parse_node_pattern(
+        right_text,
+        default_alias="__humem_match_create_right_node",
+    )
+    _validate_match_create_relationship_between_nodes_endpoints(
+        left_match,
+        right_match,
+        left,
+        right,
+    )
+    return MatchCreateRelationshipBetweenNodesPlan(
+        left_match=left_match,
+        right_match=right_match,
+        predicates=predicates,
+        left=left,
+        relationship=relationship,
+        right=right,
+    )
+
+
+def _parse_match_delete(body: str) -> DeleteNodePlan | DeleteRelationshipPlan:
+    """Parse a narrow MATCH ... DELETE statement."""
+
+    delete_index = _find_keyword(body, "delete")
+    if delete_index is None:
+        raise ValueError(
+            "HumemCypher v0 MATCH ... DELETE statements require DELETE."
+        )
+
+    match_body = body[:delete_index].strip()
+    delete_text = body[delete_index + len("delete"):].strip()
+    if not delete_text:
+        raise ValueError("HumemCypher v0 DELETE clauses cannot be empty.")
+
+    detach = False
+    detach_index = _find_keyword(match_body, "detach")
+    if detach_index is not None:
+        if match_body[detach_index + len("detach"):].strip():
+            raise ValueError(
+                "HumemCypher v0 DETACH DELETE must place DETACH immediately "
+                "before DELETE."
+            )
+        match_body = match_body[:detach_index].strip()
+        detach = True
+
+    where_index = _find_keyword(match_body, "where")
+    predicates: tuple[Predicate, ...] = ()
+    if where_index is None:
+        pattern_text = match_body
+    else:
+        pattern_text = match_body[:where_index].strip()
+        where_text = match_body[where_index + len("where"):].strip()
+        if not where_text:
+            raise ValueError("HumemCypher v0 WHERE clauses cannot be empty.")
+        predicates = _parse_predicates(where_text)
+
+    target_alias = _parse_cypher_identifier_token(delete_text, "DELETE target")
+
+    if _looks_like_relationship_pattern(pattern_text):
+        if detach:
+            raise ValueError(
+                "HumemCypher v0 currently supports DETACH DELETE only for "
+                "matched node aliases."
+            )
+        left_text, relationship_text, right_text, direction = (
+            _split_relationship_pattern(pattern_text)
+        )
+        left = _parse_node_pattern(
+            left_text,
+            default_alias="__humem_delete_left_node",
+        )
+        relationship = _parse_relationship_pattern(relationship_text, direction)
+        right = _parse_node_pattern(
+            right_text,
+            default_alias="__humem_delete_right_node",
+        )
+        _validate_match_predicates(
+            predicates,
+            alias_kinds={
+                left.alias: "node",
+                right.alias: "node",
+                **(
+                    {relationship.alias: "relationship"}
+                    if relationship.alias is not None
+                    else {}
+                ),
+            },
+        )
+        if relationship.alias is None or target_alias != relationship.alias:
+            raise ValueError(
+                "HumemCypher v0 MATCH ... DELETE relationship statements must "
+                "delete the matched relationship alias."
+            )
+        return DeleteRelationshipPlan(
+            left=left,
+            relationship=relationship,
+            right=right,
+            predicates=predicates,
+        )
+
+    node = _parse_node_pattern(
+        _unwrap_node_pattern(pattern_text),
+        default_alias="__humem_delete_node",
+    )
+    _validate_match_predicates(
+        predicates,
+        alias_kinds={node.alias: "node"},
+    )
+    if target_alias != node.alias:
+        raise ValueError(
+            "HumemCypher v0 MATCH ... DELETE node statements must delete the "
+            "matched node alias."
+        )
+    if not detach:
+        raise ValueError(
+            "HumemCypher v0 currently supports node deletion only through "
+            "DETACH DELETE."
+        )
+    return DeleteNodePlan(node=node, predicates=predicates, detach=True)
+
+
 def _execute_create_plan(
-    plan: CreateNodePlan | CreateRelationshipPlan,
+    plan: (
+        CreateNodePlan
+        | CreateRelationshipPlan
+        | CreateRelationshipFromSeparatePatternsPlan
+    ),
     sqlite: SQLiteEngine,
 ) -> QueryResult:
     """Execute one CREATE plan against the SQLite-backed graph tables."""
@@ -834,16 +1514,67 @@ def _execute_create_plan(
             rowcount=1,
         )
 
+    if isinstance(plan, CreateRelationshipFromSeparatePatternsPlan):
+        first_node_id = _insert_node(sqlite, plan.first_node)
+        second_node_id = _insert_node(sqlite, plan.second_node)
+        node_ids = {
+            plan.first_node.alias: first_node_id,
+            plan.second_node.alias: second_node_id,
+        }
+        left_id = node_ids[plan.left.alias]
+        right_id = node_ids[plan.right.alias]
+        edge_id = _insert_edge(sqlite, plan.relationship, left_id, right_id)
+        from_id = left_id
+        to_id = right_id
+        if plan.relationship.direction == "in":
+            from_id = right_id
+            to_id = left_id
+        return QueryResult(
+            rows=((from_id, edge_id, to_id),),
+            columns=("from_id", "edge_id", "to_id"),
+            route="sqlite",
+            query_type="cypher",
+            rowcount=1,
+        )
+
     left_id = _insert_node(sqlite, plan.left)
-    right_id = _insert_node(sqlite, plan.right)
+    right_id = left_id
+    if _create_relationship_uses_distinct_nodes(plan):
+        right_id = _insert_node(sqlite, plan.right)
     edge_id = _insert_edge(sqlite, plan.relationship, left_id, right_id)
+    from_id = left_id
+    to_id = right_id
+    if plan.relationship.direction == "in":
+        from_id = right_id
+        to_id = left_id
     return QueryResult(
-        rows=((left_id, edge_id, right_id),),
+        rows=((from_id, edge_id, to_id),),
         columns=("from_id", "edge_id", "to_id"),
         route="sqlite",
         query_type="cypher",
         rowcount=1,
     )
+
+
+def _create_relationship_uses_distinct_nodes(plan: CreateRelationshipPlan) -> bool:
+    """Return whether a CREATE relationship plan needs two inserted nodes."""
+
+    if plan.left.alias != plan.right.alias:
+        return True
+
+    if plan.left.label != plan.right.label:
+        raise ValueError(
+            "HumemCypher v0 CREATE self-loop patterns require the repeated node "
+            "alias to use the same label on both sides."
+        )
+
+    if plan.left.properties != plan.right.properties:
+        raise ValueError(
+            "HumemCypher v0 CREATE self-loop patterns require the repeated node "
+            "alias to use the same inline properties on both sides."
+        )
+
+    return False
 
 
 def _execute_set_node_plan(
@@ -852,17 +1583,12 @@ def _execute_set_node_plan(
 ) -> QueryResult:
     """Execute a narrow MATCH ... SET node-property update."""
 
-    if len(plan.assignments) != 1:
-        raise ValueError(
-            "HumemCypher v0 MATCH ... SET currently supports one property assignment."
-        )
-
-    assignment = plan.assignments[0]
-    if assignment.alias != plan.node.alias:
-        raise ValueError(
-            "HumemCypher v0 MATCH ... SET assignments must target the "
-            "matched node alias."
-        )
+    for assignment in plan.assignments:
+        if assignment.alias != plan.node.alias:
+            raise ValueError(
+                "HumemCypher v0 MATCH ... SET assignments must target the "
+                "matched node alias."
+            )
 
     match_plan = MatchNodePlan(
         node=plan.node,
@@ -872,10 +1598,20 @@ def _execute_set_node_plan(
     compiled = _compile_match_node_plan(match_plan)
     matched = sqlite.execute(compiled.sql, compiled.params, query_type="cypher")
     node_ids = tuple(int(row[0]) for row in matched.rows)
+    property_writes = _plan_node_property_writes(
+        tuple(
+            (assignment.field, _require_property_value(assignment.value))
+            for assignment in plan.assignments
+        )
+    )
 
-    assignment_value = _require_property_value(assignment.value)
     for node_id in node_ids:
-        _upsert_node_property(sqlite, node_id, assignment.field, assignment_value)
+        _persist_node_property_writes(
+            sqlite,
+            node_id,
+            property_writes,
+            mode="upsert",
+        )
 
     return QueryResult(
         rows=(),
@@ -884,6 +1620,270 @@ def _execute_set_node_plan(
         query_type="cypher",
         rowcount=len(node_ids),
     )
+
+
+def _execute_set_relationship_plan(
+    plan: SetRelationshipPlan,
+    sqlite: SQLiteEngine,
+) -> QueryResult:
+    """Execute a narrow MATCH ... SET relationship-property update."""
+
+    relationship_alias = plan.relationship.alias
+    if relationship_alias is None:
+        raise ValueError(
+            "HumemCypher v0 MATCH ... SET relationship updates require a "
+            "relationship alias."
+        )
+
+    for assignment in plan.assignments:
+        if assignment.alias != relationship_alias:
+            raise ValueError(
+                "HumemCypher v0 MATCH ... SET assignments must target the "
+                "matched relationship alias."
+            )
+
+    match_plan = MatchRelationshipPlan(
+        left=plan.left,
+        relationship=plan.relationship,
+        right=plan.right,
+        predicates=plan.predicates,
+        returns=(ReturnItem(relationship_alias, "id"),),
+    )
+    compiled = _compile_match_relationship_plan(match_plan)
+    matched = sqlite.execute(compiled.sql, compiled.params, query_type="cypher")
+    edge_ids = tuple(int(row[0]) for row in matched.rows)
+
+    for edge_id in edge_ids:
+        for assignment in plan.assignments:
+            property_value = _require_property_value(assignment.value)
+            encoded_value, value_type = _encode_property_value(property_value)
+            sqlite.execute(
+                "INSERT INTO graph_edge_properties (edge_id, key, value, value_type) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(edge_id, key) DO UPDATE SET "
+                "value = excluded.value, value_type = excluded.value_type",
+                (edge_id, assignment.field, encoded_value, value_type),
+                query_type="cypher",
+            )
+
+    return QueryResult(
+        rows=(),
+        columns=(),
+        route="sqlite",
+        query_type="cypher",
+        rowcount=len(edge_ids),
+    )
+
+
+def _execute_delete_node_plan(
+    plan: DeleteNodePlan,
+    sqlite: SQLiteEngine,
+) -> QueryResult:
+    """Execute a narrow MATCH ... DETACH DELETE node statement."""
+
+    match_plan = MatchNodePlan(
+        node=plan.node,
+        predicates=plan.predicates,
+        returns=(ReturnItem(plan.node.alias, "id"),),
+        distinct=True,
+    )
+    compiled = _compile_match_node_plan(match_plan)
+    matched = sqlite.execute(compiled.sql, compiled.params, query_type="cypher")
+    node_ids = tuple(dict.fromkeys(int(row[0]) for row in matched.rows))
+
+    if node_ids:
+        sqlite.executemany(
+            "DELETE FROM graph_nodes WHERE id = ?",
+            tuple((node_id,) for node_id in node_ids),
+            query_type="cypher",
+        )
+
+    return QueryResult(
+        rows=(),
+        columns=(),
+        route="sqlite",
+        query_type="cypher",
+        rowcount=len(node_ids),
+    )
+
+
+def _execute_delete_relationship_plan(
+    plan: DeleteRelationshipPlan,
+    sqlite: SQLiteEngine,
+) -> QueryResult:
+    """Execute a narrow MATCH ... DELETE relationship statement."""
+
+    relationship_alias = plan.relationship.alias
+    if relationship_alias is None:
+        raise ValueError(
+            "HumemCypher v0 MATCH ... DELETE relationship statements require a "
+            "relationship alias."
+        )
+
+    match_plan = MatchRelationshipPlan(
+        left=plan.left,
+        relationship=plan.relationship,
+        right=plan.right,
+        predicates=plan.predicates,
+        returns=(ReturnItem(relationship_alias, "id"),),
+        distinct=True,
+    )
+    compiled = _compile_match_relationship_plan(match_plan)
+    matched = sqlite.execute(compiled.sql, compiled.params, query_type="cypher")
+    edge_ids = tuple(dict.fromkeys(int(row[0]) for row in matched.rows))
+
+    if edge_ids:
+        sqlite.executemany(
+            "DELETE FROM graph_edges WHERE id = ?",
+            tuple((edge_id,) for edge_id in edge_ids),
+            query_type="cypher",
+        )
+
+    return QueryResult(
+        rows=(),
+        columns=(),
+        route="sqlite",
+        query_type="cypher",
+        rowcount=len(edge_ids),
+    )
+
+
+def _execute_match_create_relationship_plan(
+    plan: MatchCreateRelationshipPlan,
+    sqlite: SQLiteEngine,
+) -> QueryResult:
+    """Execute a narrow MATCH single-node ... CREATE relationship statement."""
+
+    match_plan = MatchNodePlan(
+        node=plan.match_node,
+        predicates=plan.predicates,
+        returns=(ReturnItem(plan.match_node.alias, "id"),),
+    )
+    compiled = _compile_match_node_plan(match_plan)
+    matched = sqlite.execute(compiled.sql, compiled.params, query_type="cypher")
+    matched_node_ids = tuple(int(row[0]) for row in matched.rows)
+
+    for matched_node_id in matched_node_ids:
+        left_id = _resolve_match_create_endpoint_node_id(
+            sqlite,
+            endpoint=plan.left,
+            match_node=plan.match_node,
+            matched_node_id=matched_node_id,
+        )
+        right_id = _resolve_match_create_endpoint_node_id(
+            sqlite,
+            endpoint=plan.right,
+            match_node=plan.match_node,
+            matched_node_id=matched_node_id,
+        )
+        _insert_edge(sqlite, plan.relationship, left_id, right_id)
+
+    return QueryResult(
+        rows=(),
+        columns=(),
+        route="sqlite",
+        query_type="cypher",
+        rowcount=len(matched_node_ids),
+    )
+
+
+def _execute_match_create_relationship_between_nodes_plan(
+    plan: MatchCreateRelationshipBetweenNodesPlan,
+    sqlite: SQLiteEngine,
+) -> QueryResult:
+    """Execute a narrow MATCH two-node ... CREATE relationship statement."""
+
+    left_alias = plan.left_match.alias
+    right_alias = plan.right_match.alias
+    select_parts = [f"{left_alias}.id", f"{right_alias}.id"]
+    joins: list[str] = [f"CROSS JOIN graph_nodes AS {right_alias}"]
+    where_parts: list[str] = []
+    from_params: list[object] = []
+    join_params: list[object] = []
+    where_params: list[object] = []
+
+    left_constraints = _node_property_constraints(plan.left_match, plan.predicates)
+    left_anchor_constraint = _pick_anchor_constraint(left_constraints)
+    from_clause = _compile_node_from_clause(
+        left_alias,
+        left_anchor_constraint,
+        from_params,
+    )
+    joins.extend(
+        _compile_property_constraints(
+            left_alias,
+            _without_anchor_constraint(left_constraints, left_anchor_constraint),
+            join_params,
+        )
+    )
+    joins.extend(
+        _compile_property_constraints(
+            right_alias,
+            _node_property_constraints(plan.right_match, plan.predicates),
+            join_params,
+        )
+    )
+
+    if plan.left_match.label is not None:
+        where_parts.append(f"{left_alias}.label = ?")
+        where_params.append(plan.left_match.label)
+    if plan.right_match.label is not None:
+        where_parts.append(f"{right_alias}.label = ?")
+        where_params.append(plan.right_match.label)
+
+    _compile_predicates(
+        alias_map={
+            plan.left_match.alias: left_alias,
+            plan.right_match.alias: right_alias,
+        },
+        alias_kinds={
+            plan.left_match.alias: "node",
+            plan.right_match.alias: "node",
+        },
+        predicates=plan.predicates,
+        where_parts=where_parts,
+        where_params=where_params,
+    )
+
+    sql = [f"SELECT {', '.join(select_parts)}", from_clause]
+    sql.extend(joins)
+    if where_parts:
+        sql.append(f"WHERE {' AND '.join(where_parts)}")
+
+    matched = sqlite.execute(
+        " ".join(sql),
+        tuple(from_params + join_params + where_params),
+        query_type="cypher",
+    )
+
+    rowcount = 0
+    for row in matched.rows:
+        left_id = int(row[0])
+        right_id = int(row[1])
+        _insert_edge(sqlite, plan.relationship, left_id, right_id)
+        rowcount += 1
+
+    return QueryResult(
+        rows=(),
+        columns=(),
+        route="sqlite",
+        query_type="cypher",
+        rowcount=rowcount,
+    )
+
+
+def _resolve_match_create_endpoint_node_id(
+    sqlite: SQLiteEngine,
+    *,
+    endpoint: NodePattern,
+    match_node: NodePattern,
+    matched_node_id: int,
+) -> int:
+    """Return the node id to use for one MATCH ... CREATE endpoint."""
+
+    if endpoint.alias == match_node.alias:
+        return matched_node_id
+    return _insert_node(sqlite, endpoint)
 
 
 def _compile_match_plan(
@@ -958,17 +1958,27 @@ def _compile_match_node_plan(plan: MatchNodePlan) -> _CompiledMatchQuery:
         order_parts=order_parts,
     )
 
-    sql = [f"SELECT {', '.join(select_parts)}", from_clause]
+    select_keyword = "SELECT DISTINCT" if plan.distinct else "SELECT"
+    sql = [f"{select_keyword} {', '.join(select_parts)}", from_clause]
     sql.extend(joins)
     sql.extend(order_joins)
     if where_parts:
         sql.append(f"WHERE {' AND '.join(where_parts)}")
     if order_parts:
         sql.append(f"ORDER BY {', '.join(order_parts)}")
+    elif plan.distinct:
+        order_by_projection = ", ".join(
+            str(index) for index in range(1, len(select_parts) + 1)
+        )
+        sql.append(f"ORDER BY {order_by_projection}")
     else:
         sql.append(f"ORDER BY {alias}.id")
     if plan.limit is not None:
         sql.append(f"LIMIT {plan.limit}")
+    if plan.skip is not None:
+        if plan.limit is None:
+            sql.append("LIMIT -1")
+        sql.append(f"OFFSET {plan.skip}")
 
     return _CompiledMatchQuery(
         sql=" ".join(sql),
@@ -990,15 +2000,16 @@ def _compile_match_relationship_plan(
     left_alias = plan.left.alias
     edge_alias = plan.relationship.alias or "edge_rel"
     right_alias = plan.right.alias
+    relationship_type_names = _relationship_type_names(plan.relationship)
     select_parts: list[str] = []
     joins: list[str] = []
     order_joins: list[str] = []
-    where_parts: list[str] = [f"{edge_alias}.type = ?"]
+    where_parts: list[str] = []
     order_parts: list[str] = []
     from_params: list[object] = []
     join_params: list[object] = []
     order_params: list[object] = []
-    where_params: list[object] = [plan.relationship.type_name]
+    where_params: list[object] = []
     returns: list[_CompiledReturnItem] = []
 
     left_constraints = _node_property_constraints(plan.left, plan.predicates)
@@ -1062,6 +2073,11 @@ def _compile_match_relationship_plan(
     if plan.right.label is not None:
         where_parts.append(f"{right_alias}.label = ?")
         where_params.append(plan.right.label)
+    if relationship_type_names:
+        where_parts.append(
+            _compile_relationship_type_filter(edge_alias, relationship_type_names)
+        )
+        where_params.extend(relationship_type_names)
 
     _compile_predicates(
         alias_map={
@@ -1160,16 +2176,26 @@ def _compile_match_relationship_plan(
         order_parts=order_parts,
     )
 
-    sql = [f"SELECT {', '.join(select_parts)}", from_clause]
+    select_keyword = "SELECT DISTINCT" if plan.distinct else "SELECT"
+    sql = [f"{select_keyword} {', '.join(select_parts)}", from_clause]
     sql.extend(joins)
     sql.extend(order_joins)
     sql.append(f"WHERE {' AND '.join(where_parts)}")
     if order_parts:
         sql.append(f"ORDER BY {', '.join(order_parts)}")
+    elif plan.distinct:
+        order_by_projection = ", ".join(
+            str(index) for index in range(1, len(select_parts) + 1)
+        )
+        sql.append(f"ORDER BY {order_by_projection}")
     else:
         sql.append(f"ORDER BY {left_alias}.id, {edge_alias}.id, {right_alias}.id")
     if plan.limit is not None:
         sql.append(f"LIMIT {plan.limit}")
+    if plan.skip is not None:
+        if plan.limit is None:
+            sql.append("LIMIT -1")
+        sql.append(f"OFFSET {plan.skip}")
 
     return _CompiledMatchQuery(
         sql=" ".join(sql),
@@ -1259,9 +2285,15 @@ def _node_property_constraints(
     """Collect one node pattern's property-equality constraints."""
 
     constraints: list[PropertyConstraint] = []
+    use_predicate_constraints = _predicates_are_simple_conjunction(predicates)
 
     for predicate in predicates:
-        if predicate.alias != node.alias or predicate.field in {"id", "label"}:
+        if (
+            predicate.alias != node.alias
+            or not use_predicate_constraints
+            or predicate.operator != "="
+            or predicate.field in {"id", "label"}
+        ):
             continue
         constraints.append(
             PropertyConstraint(
@@ -1297,8 +2329,15 @@ def _relationship_property_constraints(
     if relationship.alias is None:
         return constraints
 
+    use_predicate_constraints = _predicates_are_simple_conjunction(predicates)
+
     for predicate in predicates:
-        if predicate.alias != relationship.alias or predicate.field in {"id", "type"}:
+        if (
+            predicate.alias != relationship.alias
+            or not use_predicate_constraints
+            or predicate.operator != "="
+            or predicate.field in {"id", "type"}
+        ):
             continue
         constraints.append(
             PropertyConstraint(
@@ -1447,29 +2486,315 @@ def _compile_predicates(
 ) -> None:
     """Compile supported WHERE predicates into SQL fragments and params."""
 
-    for predicate in predicates:
-        if predicate.alias not in alias_map:
-            raise ValueError(
-                f"HumemCypher v0 cannot filter on unknown alias {predicate.alias!r}."
+    if not predicates:
+        return
+
+    if not _predicates_are_simple_conjunction(predicates):
+        grouped_parts: dict[int, list[str]] = {}
+        grouped_params: dict[int, list[object]] = {}
+        disjunct_order: list[int] = []
+
+        for predicate in predicates:
+            if predicate.disjunct_index not in grouped_parts:
+                grouped_parts[predicate.disjunct_index] = []
+                grouped_params[predicate.disjunct_index] = []
+                disjunct_order.append(predicate.disjunct_index)
+
+            sql, params = _compile_single_predicate(
+                predicate=predicate,
+                alias_map=alias_map,
+                alias_kinds=alias_kinds,
+                filter_index=(
+                    len(grouped_parts[predicate.disjunct_index])
+                    + predicate.disjunct_index * 100
+                ),
             )
+            grouped_parts[predicate.disjunct_index].append(sql)
+            grouped_params[predicate.disjunct_index].extend(params)
 
-        table_alias = alias_map[predicate.alias]
-        alias_kind = alias_kinds[predicate.alias]
-        predicate_value = _require_scalar_query_param(predicate.value)
-        if predicate.field == "id":
-            where_parts.append(f"{table_alias}.id = ?")
-            where_params.append(predicate_value)
-            continue
+        disjunct_sql: list[str] = []
+        disjunct_params: list[object] = []
+        for disjunct_index in disjunct_order:
+            disjunct_sql.append(
+                "(" + " AND ".join(grouped_parts[disjunct_index]) + ")"
+            )
+            disjunct_params.extend(grouped_params[disjunct_index])
 
-        if alias_kind == "node" and predicate.field == "label":
-            where_parts.append(f"{table_alias}.label = ?")
-            where_params.append(predicate_value)
-            continue
+        where_parts.append("(" + " OR ".join(disjunct_sql) + ")")
+        where_params.extend(disjunct_params)
+        return
 
-        if alias_kind == "relationship" and predicate.field == "type":
-            where_parts.append(f"{table_alias}.type = ?")
-            where_params.append(predicate_value)
+    for predicate in predicates:
+        sql, params = _compile_single_predicate(
+            predicate=predicate,
+            alias_map=alias_map,
+            alias_kinds=alias_kinds,
+            filter_index=len(where_parts),
+        )
+        if predicate.operator == "=" and _is_property_predicate(predicate, alias_kinds):
             continue
+        where_parts.append(sql)
+        where_params.extend(params)
+
+
+def _compile_single_predicate(
+    *,
+    predicate: Predicate,
+    alias_map: dict[str, str],
+    alias_kinds: dict[str, Literal["node", "relationship"]],
+    filter_index: int,
+) -> tuple[str, tuple[object, ...]]:
+    """Compile one predicate into SQL plus positional params."""
+
+    if predicate.alias not in alias_map:
+        raise ValueError(
+            f"HumemCypher v0 cannot filter on unknown alias {predicate.alias!r}."
+        )
+
+    table_alias = alias_map[predicate.alias]
+    alias_kind = alias_kinds[predicate.alias]
+    predicate_value = _require_scalar_query_param(predicate.value)
+
+    if predicate.field == "id":
+        _validate_direct_predicate_operator(
+            predicate.operator,
+            field="id",
+            alias_kind=alias_kind,
+        )
+        return f"{table_alias}.id {predicate.operator} ?", (predicate_value,)
+
+    if alias_kind == "node" and predicate.field == "label":
+        _validate_direct_predicate_operator(
+            predicate.operator,
+            field="label",
+            alias_kind=alias_kind,
+        )
+        return f"{table_alias}.label {predicate.operator} ?", (predicate_value,)
+
+    if alias_kind == "relationship" and predicate.field == "type":
+        _validate_direct_predicate_operator(
+            predicate.operator,
+            field="type",
+            alias_kind=alias_kind,
+        )
+        return f"{table_alias}.type {predicate.operator} ?", (predicate_value,)
+
+    return _compile_property_predicate_filter(
+        table_alias=table_alias,
+        alias_kind=alias_kind,
+        field=predicate.field,
+        operator=predicate.operator,
+        value=predicate_value,
+        filter_index=filter_index,
+    )
+
+
+def _is_property_predicate(
+    predicate: Predicate,
+    alias_kinds: dict[str, Literal["node", "relationship"]],
+) -> bool:
+    """Return whether one predicate targets a stored property table."""
+
+    alias_kind = alias_kinds[predicate.alias]
+    if predicate.field == "id":
+        return False
+    if alias_kind == "node" and predicate.field == "label":
+        return False
+    if alias_kind == "relationship" and predicate.field == "type":
+        return False
+    return True
+
+
+def _predicates_are_simple_conjunction(predicates: tuple[Predicate, ...]) -> bool:
+    """Return whether all predicates belong to the single default AND clause."""
+
+    return all(predicate.disjunct_index == 0 for predicate in predicates)
+
+
+def _validate_direct_predicate_operator(
+    operator: Literal[
+        "=",
+        "<",
+        "<=",
+        ">",
+        ">=",
+        "STARTS WITH",
+        "ENDS WITH",
+        "CONTAINS",
+        "IS NULL",
+        "IS NOT NULL",
+    ],
+    *,
+    field: str,
+    alias_kind: Literal["node", "relationship"],
+) -> None:
+    """Reject unsupported comparison operators for direct graph fields."""
+
+    if field == "id":
+        if operator in {"IS NULL", "IS NOT NULL"}:
+            raise ValueError(
+                "HumemCypher v0 currently does not support null predicates for "
+                f"{alias_kind} field {field!r}."
+            )
+        return
+    if operator != "=":
+        raise ValueError(
+            "HumemCypher v0 currently supports only equality predicates for "
+            f"{alias_kind} field {field!r}."
+        )
+
+
+def _compile_property_predicate_filter(
+    *,
+    table_alias: str,
+    alias_kind: Literal["node", "relationship"],
+    field: str,
+    operator: Literal[
+        "=",
+        "<",
+        "<=",
+        ">",
+        ">=",
+        "STARTS WITH",
+        "ENDS WITH",
+        "CONTAINS",
+        "IS NULL",
+        "IS NOT NULL",
+    ],
+    value: ScalarQueryParam,
+    filter_index: int,
+) -> tuple[str, tuple[object, ...]]:
+    """Compile one property predicate into a typed EXISTS filter."""
+
+    property_table = (
+        "graph_node_properties" if alias_kind == "node" else "graph_edge_properties"
+    )
+    property_alias = f"pf{filter_index}"
+    id_column = "node_id" if alias_kind == "node" else "edge_id"
+
+    if operator == "IS NULL":
+        return (
+            "NOT EXISTS ("
+            f"SELECT 1 FROM {property_table} AS {property_alias} "
+            f"WHERE {property_alias}.{id_column} = {table_alias}.id "
+            f"AND {property_alias}.key = ? "
+            f"AND {property_alias}.value_type != 'null'"
+            ")",
+            (field,),
+        )
+
+    if operator == "IS NOT NULL":
+        return (
+            "EXISTS ("
+            f"SELECT 1 FROM {property_table} AS {property_alias} "
+            f"WHERE {property_alias}.{id_column} = {table_alias}.id "
+            f"AND {property_alias}.key = ? "
+            f"AND {property_alias}.value_type != 'null'"
+            ")",
+            (field,),
+        )
+
+    if value is None:
+        if operator != "=":
+            raise ValueError(
+                "HumemCypher v0 currently supports only equality and null "
+                "predicates for null values."
+            )
+        return (
+            "EXISTS ("
+            f"SELECT 1 FROM {property_table} AS {property_alias} "
+            f"WHERE {property_alias}.{id_column} = {table_alias}.id "
+            f"AND {property_alias}.key = ? "
+            f"AND {property_alias}.value IS NULL "
+            f"AND {property_alias}.value_type = 'null'"
+            ")",
+            (field,),
+        )
+
+    if isinstance(value, str):
+        if operator == "=":
+            return (
+                "EXISTS ("
+                f"SELECT 1 FROM {property_table} AS {property_alias} "
+                f"WHERE {property_alias}.{id_column} = {table_alias}.id "
+                f"AND {property_alias}.key = ? "
+                f"AND {property_alias}.value_type = 'string' "
+                f"AND {property_alias}.value = ?"
+                ")",
+                (field, value),
+            )
+        if operator == "STARTS WITH":
+            return (
+                "EXISTS ("
+                f"SELECT 1 FROM {property_table} AS {property_alias} "
+                f"WHERE {property_alias}.{id_column} = {table_alias}.id "
+                f"AND {property_alias}.key = ? "
+                f"AND {property_alias}.value_type = 'string' "
+                f"AND substr({property_alias}.value, 1, length(?)) = ?"
+                ")",
+                (field, value, value),
+            )
+        if operator == "ENDS WITH":
+            return (
+                "EXISTS ("
+                f"SELECT 1 FROM {property_table} AS {property_alias} "
+                f"WHERE {property_alias}.{id_column} = {table_alias}.id "
+                f"AND {property_alias}.key = ? "
+                f"AND {property_alias}.value_type = 'string' "
+                f"AND length({property_alias}.value) >= length(?) "
+                f"AND substr({property_alias}.value, "
+                f"length({property_alias}.value) - length(?) + 1"
+                f") = ?"
+                ")",
+                (field, value, value, value),
+            )
+        if operator == "CONTAINS":
+            return (
+                "EXISTS ("
+                f"SELECT 1 FROM {property_table} AS {property_alias} "
+                f"WHERE {property_alias}.{id_column} = {table_alias}.id "
+                f"AND {property_alias}.key = ? "
+                f"AND {property_alias}.value_type = 'string' "
+                f"AND instr({property_alias}.value, ?) > 0"
+                ")",
+                (field, value),
+            )
+        raise ValueError(
+            "HumemCypher v0 currently supports only equality, STARTS WITH, "
+            "ENDS WITH, and CONTAINS for string non-property-system predicates."
+        )
+
+    numeric_value = _coerce_numeric_predicate_value(value)
+    return (
+        "EXISTS ("
+        f"SELECT 1 FROM {property_table} AS {property_alias} "
+        f"WHERE {property_alias}.{id_column} = {table_alias}.id "
+        f"AND {property_alias}.key = ? "
+        f"AND {property_alias}.value_type IN ('integer', 'real', 'boolean') "
+        "AND CASE "
+        f"WHEN {property_alias}.value_type = 'integer' "
+        f"THEN CAST({property_alias}.value AS INTEGER) "
+        f"WHEN {property_alias}.value_type = 'real' "
+        f"THEN CAST({property_alias}.value AS REAL) "
+        f"WHEN {property_alias}.value_type = 'boolean' "
+        f"THEN CASE WHEN {property_alias}.value = 'true' THEN 1 ELSE 0 END "
+        f"END {operator} ?"
+        ")",
+        (field, numeric_value),
+    )
+
+
+def _coerce_numeric_predicate_value(value: ScalarQueryParam) -> int | float:
+    """Convert one scalar predicate value into a numeric comparison literal."""
+
+    if isinstance(value, bool):
+        return 1 if value else 0
+    if isinstance(value, (int, float)):
+        return value
+    raise ValueError(
+        "HumemCypher v0 currently supports only numeric, boolean, or string values "
+        "for non-equality predicates."
+    )
 
 
 def _compile_order_items(
@@ -1628,9 +2953,22 @@ def _insert_edge(
 ) -> int:
     """Insert one directed edge plus its properties into the graph store."""
 
+    relationship_type_names = _relationship_type_names(relationship)
+    if len(relationship_type_names) != 1:
+        raise ValueError(
+            "HumemCypher v0 CREATE relationship patterns require exactly one "
+            "relationship type."
+        )
+
+    from_node_id = left_id
+    to_node_id = right_id
+    if relationship.direction == "in":
+        from_node_id = right_id
+        to_node_id = left_id
+
     sqlite.execute(
         "INSERT INTO graph_edges (type, from_node_id, to_node_id) VALUES (?, ?, ?)",
-        (relationship.type_name, left_id, right_id),
+        (relationship_type_names[0], from_node_id, to_node_id),
         query_type="cypher",
     )
     edge_id_row = sqlite.execute(
@@ -1706,6 +3044,13 @@ def _persist_node_property_writes(
 ) -> None:
     """Persist encoded node-property writes and sync graph-node vectors."""
 
+    _validate_node_vector_property_writes(
+        sqlite,
+        node_id,
+        property_writes,
+        mode=mode,
+    )
+
     vector_rows: list[tuple[int, Sequence[float]]] = []
     for property_write in property_writes:
         if mode == "insert":
@@ -1741,10 +3086,55 @@ def _persist_node_property_writes(
     if len(vector_rows) > 1:
         raise ValueError(
             "HumemCypher v0 currently supports at most one vector-valued property "
-            "per created node."
+            "per node write batch."
         )
     if vector_rows:
         _sync_graph_node_vectors(sqlite, vector_rows, mode=mode)
+
+
+def _validate_node_vector_property_writes(
+    sqlite: SQLiteEngine,
+    node_id: int,
+    property_writes: tuple[_EncodedNodePropertyWrite, ...],
+    *,
+    mode: Literal["insert", "upsert"],
+) -> None:
+    """Reject node-property writes that would store multiple vectors per node."""
+
+    vector_keys = tuple(
+        property_write.key
+        for property_write in property_writes
+        if property_write.vector_value is not None
+    )
+    if not vector_keys:
+        return
+
+    if len(vector_keys) > 1:
+        raise ValueError(
+            "HumemCypher v0 currently supports at most one vector-valued property "
+            "per node write batch."
+        )
+
+    sql = (
+        "SELECT key FROM graph_node_properties "
+        "WHERE node_id = ? AND value_type = 'vector'"
+    )
+    params: list[object] = [node_id]
+    if mode == "upsert":
+        assert vector_keys
+        sql += " AND key <> ?"
+        params.append(vector_keys[0])
+
+    existing_row = sqlite.execute(
+        sql,
+        tuple(params),
+        query_type="cypher",
+    ).first()
+    if existing_row is not None:
+        raise ValueError(
+            "HumemCypher v0 currently supports only one vector-valued property "
+            "per node."
+        )
 
 
 def _sync_graph_node_vectors(
@@ -1768,7 +3158,12 @@ def _sync_graph_node_vectors(
     )
 
 
-def _parse_node_pattern(text: str, *, require_label: bool = False) -> NodePattern:
+def _parse_node_pattern(
+    text: str,
+    *,
+    require_label: bool = False,
+    default_alias: str | None = None,
+) -> NodePattern:
     """Parse one node-pattern body into the narrow NodePattern structure."""
 
     match = _NODE_PATTERN_RE.fullmatch(text.strip())
@@ -1779,8 +3174,15 @@ def _parse_node_pattern(text: str, *, require_label: bool = False) -> NodePatter
     if require_label and label is None:
         raise ValueError("HumemCypher v0 CREATE patterns require labeled nodes.")
 
+    alias = match.group("alias") or default_alias
+    if alias is None:
+        raise ValueError(
+            "HumemCypher v0 currently requires a node alias unless the pattern "
+            "position admits an anonymous node."
+        )
+
     return NodePattern(
-        alias=match.group("alias"),
+        alias=alias,
         label=label,
         properties=_parse_properties(match.group("properties")),
     )
@@ -1804,6 +3206,28 @@ def _parse_relationship_pattern(
         direction=direction,
         properties=_parse_properties(match.group("properties")),
     )
+
+
+def _relationship_type_names(relationship: RelationshipPattern) -> tuple[str, ...]:
+    """Return the admitted relationship type names for one relationship pattern."""
+
+    if relationship.type_name is None:
+        return ()
+
+    return tuple(part.strip() for part in relationship.type_name.split("|"))
+
+
+def _compile_relationship_type_filter(
+    edge_alias: str,
+    relationship_type_names: tuple[str, ...],
+) -> str:
+    """Compile one admitted relationship type token into SQL filter text."""
+
+    if len(relationship_type_names) == 1:
+        return f"{edge_alias}.type = ?"
+
+    placeholders = ", ".join("?" for _ in relationship_type_names)
+    return f"{edge_alias}.type IN ({placeholders})"
 
 
 def _parse_return_items(text: str) -> tuple[ReturnItem, ...]:
@@ -1863,32 +3287,94 @@ def _parse_order_items(text: str) -> tuple[OrderItem, ...]:
 
 def _split_return_clause(
     text: str,
-) -> tuple[str, tuple[OrderItem, ...], int | None]:
-    """Split a RETURN clause into projection, ordering, and limit components."""
+) -> tuple[str, tuple[OrderItem, ...], int | None, bool, int | None]:
+    """Split a RETURN clause into projection, ordering, limit, distinct, and skip."""
 
     order_by_match = re.search(r"\border\s+by\b", text, flags=re.IGNORECASE)
+    skip_match = re.search(r"\b(skip|offset)\b", text, flags=re.IGNORECASE)
     limit_match = re.search(r"\blimit\b", text, flags=re.IGNORECASE)
 
-    if order_by_match is None and limit_match is None:
-        return text.strip(), (), None
+    if order_by_match is None and skip_match is None and limit_match is None:
+        return_text, distinct = _parse_return_projection(text)
+        return return_text, (), None, distinct, None
 
-    if order_by_match is None:
-        assert limit_match is not None
-        returns_text = text[:limit_match.start()].strip()
+    clause_positions = [
+        match.start()
+        for match in (order_by_match, skip_match, limit_match)
+        if match is not None
+    ]
+    returns_text = text[: min(clause_positions)].strip()
+
+    if order_by_match is not None and (
+        (skip_match is not None and skip_match.start() < order_by_match.start())
+        or (limit_match is not None and limit_match.start() < order_by_match.start())
+    ):
+        raise ValueError(
+            "HumemCypher v0 requires ORDER BY to appear before SKIP/OFFSET and LIMIT."
+        )
+    if (
+        skip_match is not None
+        and limit_match is not None
+        and limit_match.start() < skip_match.start()
+    ):
+        raise ValueError(
+            "HumemCypher v0 requires SKIP/OFFSET to appear before LIMIT."
+        )
+
+    order_by: tuple[OrderItem, ...] = ()
+    if order_by_match is not None:
+        order_end = len(text)
+        if skip_match is not None:
+            order_end = skip_match.start()
+        elif limit_match is not None:
+            order_end = limit_match.start()
+        order_text = text[order_by_match.end():order_end].strip()
+        order_by = _parse_order_items(order_text)
+
+    skip: int | None = None
+    if skip_match is not None:
+        skip_end = limit_match.start() if limit_match is not None else len(text)
+        skip = _parse_skip_clause(
+            text[skip_match.end():skip_end].strip(),
+            clause_name=skip_match.group(1).upper(),
+        )
+
+    limit: int | None = None
+    if limit_match is not None:
         limit = _parse_limit_clause(text[limit_match.end():].strip())
-        return returns_text, (), limit
 
-    if limit_match is not None and limit_match.start() < order_by_match.start():
-        raise ValueError("HumemCypher v0 requires ORDER BY to appear before LIMIT.")
+    return_text, distinct = _parse_return_projection(returns_text)
+    return return_text, order_by, limit, distinct, skip
 
-    returns_text = text[:order_by_match.start()].strip()
-    if limit_match is None:
-        order_text = text[order_by_match.end():].strip()
-        return returns_text, _parse_order_items(order_text), None
 
-    order_text = text[order_by_match.end():limit_match.start()].strip()
-    limit_text = text[limit_match.end():].strip()
-    return returns_text, _parse_order_items(order_text), _parse_limit_clause(limit_text)
+def _parse_return_projection(text: str) -> tuple[str, bool]:
+    """Parse a RETURN projection and whether it is DISTINCT."""
+
+    projection_text = text.strip()
+    distinct_match = re.match(r"distinct\b", projection_text, flags=re.IGNORECASE)
+    if distinct_match is None:
+        return projection_text, False
+
+    projection_text = projection_text[distinct_match.end():].strip()
+    if not projection_text:
+        raise ValueError("HumemCypher v0 RETURN DISTINCT clauses cannot be empty.")
+    return projection_text, True
+
+
+def _parse_skip_clause(text: str, *, clause_name: str = "SKIP") -> int:
+    """Parse the small SKIP/OFFSET subset accepted by HumemCypher v0."""
+
+    if not text:
+        raise ValueError(f"HumemCypher v0 {clause_name} clauses cannot be empty.")
+    if not re.fullmatch(r"\d+", text):
+        raise ValueError(
+            f"HumemCypher v0 {clause_name} currently requires an integer literal."
+        )
+
+    skip = int(text)
+    if skip < 0:
+        raise ValueError(f"HumemCypher v0 {clause_name} must be at least 0.")
+    return skip
 
 
 def _parse_limit_clause(text: str) -> int:
@@ -1906,34 +3392,187 @@ def _parse_limit_clause(text: str) -> int:
 
 
 def _parse_predicates(text: str) -> tuple[Predicate, ...]:
-    """Parse one WHERE clause into simple equality predicates."""
+    """Parse one WHERE clause into `AND`/`OR` comparison predicates."""
 
     predicates: list[Predicate] = []
 
-    for item in _split_keyword_separated(text, "and"):
-        try:
-            left_text, value_text = _split_outside_string(item, "=")
-        except ValueError as exc:
-            raise ValueError(
-                "HumemCypher v0 WHERE items must look like alias.field = value."
-            ) from exc
-        match = _RETURN_ITEM_RE.fullmatch(left_text.strip())
-        if match is None:
-            raise ValueError(
-                "HumemCypher v0 WHERE items must look like alias.field = value."
+    for disjunct_index, disjunct in enumerate(
+        _parse_boolean_predicate_groups(text)
+    ):
+        for item in disjunct:
+            try:
+                left_text, operator, value_text = _split_predicate_comparison(item)
+            except ValueError as exc:
+                raise ValueError(
+                    "HumemCypher v0 WHERE items must look like alias.field OP value."
+                ) from exc
+            match = _RETURN_ITEM_RE.fullmatch(left_text.strip())
+            if match is None:
+                raise ValueError(
+                    "HumemCypher v0 WHERE items must look like alias.field OP value."
+                )
+            parsed_value: CypherValue
+            if operator in {"IS NULL", "IS NOT NULL"}:
+                if value_text.strip():
+                    raise ValueError(
+                        "HumemCypher v0 null predicates cannot include a trailing "
+                        "literal value."
+                    )
+                parsed_value = None
+            else:
+                parsed_value = _parse_literal(value_text.strip())
+            predicates.append(
+                Predicate(
+                    alias=match.group("alias"),
+                    field=match.group("field"),
+                    operator=operator,
+                    disjunct_index=disjunct_index,
+                    value=parsed_value,
+                )
             )
-        predicates.append(
-            Predicate(
-                alias=match.group("alias"),
-                field=match.group("field"),
-                value=_parse_literal(value_text.strip()),
-            )
-        )
 
     if not predicates:
         raise ValueError("HumemCypher v0 WHERE clauses cannot be empty.")
 
     return tuple(predicates)
+
+
+def _parse_boolean_predicate_groups(text: str) -> list[list[str]]:
+    """Parse a boolean predicate expression into disjunctive normal form."""
+
+    tokens = _tokenize_boolean_expression(text)
+    if not tokens:
+        raise ValueError("HumemCypher v0 WHERE clauses cannot be empty.")
+
+    parser = _BooleanPredicateParser(tokens)
+    groups = parser.parse_expression()
+    if parser.has_more_tokens():
+        raise ValueError("HumemCypher v0 could not parse the full WHERE clause.")
+    return groups
+
+
+class _BooleanPredicateParser:
+    """Small parser for parenthesized boolean predicate expressions."""
+
+    def __init__(self, tokens: list[str]) -> None:
+        self._tokens = tokens
+        self._index = 0
+
+    def has_more_tokens(self) -> bool:
+        return self._index < len(self._tokens)
+
+    def parse_expression(self) -> list[list[str]]:
+        groups = self._parse_or_expression()
+        if not groups:
+            raise ValueError("HumemCypher v0 WHERE clauses cannot be empty.")
+        return groups
+
+    def _parse_or_expression(self) -> list[list[str]]:
+        groups = self._parse_and_expression()
+        while self._matches_keyword("OR"):
+            self._index += 1
+            groups.extend(self._parse_and_expression())
+        return groups
+
+    def _parse_and_expression(self) -> list[list[str]]:
+        groups = self._parse_primary_expression()
+        while self._matches_keyword("AND"):
+            self._index += 1
+            right_groups = self._parse_primary_expression()
+            groups = [
+                left_group + right_group
+                for left_group in groups
+                for right_group in right_groups
+            ]
+        return groups
+
+    def _parse_primary_expression(self) -> list[list[str]]:
+        token = self._peek()
+        if token is None:
+            raise ValueError("HumemCypher v0 WHERE clauses cannot end abruptly.")
+
+        if token == "(":
+            self._index += 1
+            groups = self._parse_or_expression()
+            if self._peek() != ")":
+                raise ValueError(
+                    "HumemCypher v0 found an unmatched '(' in WHERE clause."
+                )
+            self._index += 1
+            return groups
+
+        comparison_tokens: list[str] = []
+        while self.has_more_tokens():
+            current = self._peek()
+            assert current is not None
+            if current in ("(", ")") or current.upper() in ("AND", "OR"):
+                break
+            comparison_tokens.append(current)
+            self._index += 1
+
+        if not comparison_tokens:
+            raise ValueError(
+                "HumemCypher v0 WHERE items must look like alias.field OP value."
+            )
+        return [[" ".join(comparison_tokens)]]
+
+    def _peek(self) -> str | None:
+        if not self.has_more_tokens():
+            return None
+        return self._tokens[self._index]
+
+    def _matches_keyword(self, keyword: str) -> bool:
+        token = self._peek()
+        return token is not None and token.upper() == keyword
+
+
+def _tokenize_boolean_expression(text: str) -> list[str]:
+    """Tokenize a WHERE boolean expression while respecting quoted strings."""
+
+    tokens: list[str] = []
+    current: list[str] = []
+    in_string = False
+    escape = False
+
+    for character in text:
+        if escape:
+            current.append(character)
+            escape = False
+            continue
+
+        if character == "\\":
+            current.append(character)
+            escape = True
+            continue
+
+        if character == "'":
+            current.append(character)
+            in_string = not in_string
+            continue
+
+        if not in_string and character in "()":
+            token = "".join(current).strip()
+            if token:
+                tokens.append(token)
+            tokens.append(character)
+            current = []
+            continue
+
+        if not in_string and character.isspace():
+            token = "".join(current).strip()
+            if token:
+                tokens.append(token)
+                current = []
+            continue
+
+        current.append(character)
+
+    final_token = "".join(current).strip()
+    if in_string:
+        raise ValueError("HumemCypher v0 found an unterminated string literal.")
+    if final_token:
+        tokens.append(final_token)
+    return tokens
 
 
 def _parse_set_items(text: str) -> tuple[SetItem, ...]:
@@ -2090,6 +3729,34 @@ def _bind_plan_values(
             _bind_node_pattern(plan.right, params),
         )
 
+    if isinstance(plan, CreateRelationshipFromSeparatePatternsPlan):
+        return CreateRelationshipFromSeparatePatternsPlan(
+            first_node=_bind_node_pattern(plan.first_node, params),
+            second_node=_bind_node_pattern(plan.second_node, params),
+            left=_bind_node_pattern(plan.left, params),
+            relationship=_bind_relationship_pattern(plan.relationship, params),
+            right=_bind_node_pattern(plan.right, params),
+        )
+
+    if isinstance(plan, MatchCreateRelationshipPlan):
+        return MatchCreateRelationshipPlan(
+            match_node=_bind_node_pattern(plan.match_node, params),
+            predicates=_bind_predicates(plan.predicates, params),
+            left=_bind_node_pattern(plan.left, params),
+            relationship=_bind_relationship_pattern(plan.relationship, params),
+            right=_bind_node_pattern(plan.right, params),
+        )
+
+    if isinstance(plan, MatchCreateRelationshipBetweenNodesPlan):
+        return MatchCreateRelationshipBetweenNodesPlan(
+            left_match=_bind_node_pattern(plan.left_match, params),
+            right_match=_bind_node_pattern(plan.right_match, params),
+            predicates=_bind_predicates(plan.predicates, params),
+            left=_bind_node_pattern(plan.left, params),
+            relationship=_bind_relationship_pattern(plan.relationship, params),
+            right=_bind_node_pattern(plan.right, params),
+        )
+
     if isinstance(plan, MatchNodePlan):
         return MatchNodePlan(
             _bind_node_pattern(plan.node, params),
@@ -2097,6 +3764,8 @@ def _bind_plan_values(
             plan.returns,
             plan.order_by,
             plan.limit,
+            plan.distinct,
+            plan.skip,
         )
 
     if isinstance(plan, SetNodePlan):
@@ -2104,6 +3773,30 @@ def _bind_plan_values(
             _bind_node_pattern(plan.node, params),
             _bind_predicates(plan.predicates, params),
             _bind_set_items(plan.assignments, params),
+        )
+
+    if isinstance(plan, SetRelationshipPlan):
+        return SetRelationshipPlan(
+            _bind_node_pattern(plan.left, params),
+            _bind_relationship_pattern(plan.relationship, params),
+            _bind_node_pattern(plan.right, params),
+            _bind_predicates(plan.predicates, params),
+            _bind_set_items(plan.assignments, params),
+        )
+
+    if isinstance(plan, DeleteNodePlan):
+        return DeleteNodePlan(
+            node=_bind_node_pattern(plan.node, params),
+            predicates=_bind_predicates(plan.predicates, params),
+            detach=plan.detach,
+        )
+
+    if isinstance(plan, DeleteRelationshipPlan):
+        return DeleteRelationshipPlan(
+            left=_bind_node_pattern(plan.left, params),
+            relationship=_bind_relationship_pattern(plan.relationship, params),
+            right=_bind_node_pattern(plan.right, params),
+            predicates=_bind_predicates(plan.predicates, params),
         )
 
     return MatchRelationshipPlan(
@@ -2114,6 +3807,8 @@ def _bind_plan_values(
         plan.returns,
         plan.order_by,
         plan.limit,
+        plan.distinct,
+        plan.skip,
     )
 
 
@@ -2154,6 +3849,8 @@ def _bind_predicates(
         Predicate(
             alias=predicate.alias,
             field=predicate.field,
+            operator=predicate.operator,
+            disjunct_index=predicate.disjunct_index,
             value=_resolve_cypher_value(predicate.value, params),
         )
         for predicate in predicates
@@ -2388,12 +4085,15 @@ def _parse_cypher_vector_limit_ref(text: str) -> CypherVectorLimitRef:
 
 
 def _split_comma_separated(text: str) -> list[str]:
-    """Split one comma-separated clause while respecting quoted strings."""
+    """Split one comma-separated clause at top level only."""
 
     items: list[str] = []
     current: list[str] = []
     in_string = False
     escape = False
+    paren_depth = 0
+    bracket_depth = 0
+    brace_depth = 0
 
     for character in text:
         if escape:
@@ -2411,7 +4111,30 @@ def _split_comma_separated(text: str) -> list[str]:
             current.append(character)
             continue
 
-        if character == "," and not in_string:
+        if not in_string:
+            if character == "(":
+                paren_depth += 1
+            elif character == ")":
+                paren_depth -= 1
+            elif character == "[":
+                bracket_depth += 1
+            elif character == "]":
+                bracket_depth -= 1
+            elif character == "{":
+                brace_depth += 1
+            elif character == "}":
+                brace_depth -= 1
+
+            if min(paren_depth, bracket_depth, brace_depth) < 0:
+                raise ValueError("HumemCypher v0 found an unbalanced pattern clause.")
+
+        if (
+            character == ","
+            and not in_string
+            and paren_depth == 0
+            and bracket_depth == 0
+            and brace_depth == 0
+        ):
             item = "".join(current).strip()
             if not item:
                 raise ValueError("HumemCypher v0 does not allow empty list items.")
@@ -2424,10 +4147,174 @@ def _split_comma_separated(text: str) -> list[str]:
     final_item = "".join(current).strip()
     if in_string:
         raise ValueError("HumemCypher v0 found an unterminated string literal.")
+    if paren_depth or bracket_depth or brace_depth:
+        raise ValueError("HumemCypher v0 found an unbalanced pattern clause.")
     if not final_item:
         raise ValueError("HumemCypher v0 does not allow empty list items.")
     items.append(final_item)
     return items
+
+
+def _validate_create_relationship_separate_patterns(
+    first_node: NodePattern,
+    second_node: NodePattern,
+    left: NodePattern,
+    right: NodePattern,
+) -> None:
+    """Reject unsupported narrow multi-pattern CREATE endpoint shapes."""
+
+    if first_node.alias == second_node.alias:
+        raise ValueError(
+            "HumemCypher v0 CREATE with separate node patterns currently requires "
+            "two distinct created node aliases."
+        )
+
+    created_nodes = {
+        first_node.alias: first_node,
+        second_node.alias: second_node,
+    }
+    if {left.alias, right.alias} != set(created_nodes):
+        raise ValueError(
+            "HumemCypher v0 CREATE with separate node patterns currently requires "
+            "the relationship pattern to reuse exactly those two created aliases."
+        )
+
+    for endpoint in (left, right):
+        created_node = created_nodes[endpoint.alias]
+        if endpoint.label is not None and endpoint.label != created_node.label:
+            raise ValueError(
+                "HumemCypher v0 CREATE reused-node endpoints must use the same "
+                "label as the created node alias."
+            )
+        if endpoint.properties:
+            raise ValueError(
+                "HumemCypher v0 CREATE reused-node endpoints in separate-pattern "
+                "creates cannot redeclare inline properties."
+            )
+
+
+def _validate_match_set_assignments(
+    assignments: tuple[SetItem, ...],
+    *,
+    target_alias: str | None,
+    target_kind: Literal["node", "relationship"],
+) -> None:
+    """Reject MATCH ... SET assignments that target a different bound alias."""
+
+    for assignment in assignments:
+        if assignment.alias != target_alias:
+            raise ValueError(
+                "HumemCypher v0 MATCH ... SET assignments must target the "
+                f"matched {target_kind} alias."
+            )
+
+
+def _validate_match_predicates(
+    predicates: tuple[Predicate, ...],
+    *,
+    alias_kinds: dict[str, Literal["node", "relationship"]],
+) -> None:
+    """Reject unsupported MATCH predicate aliases and direct-field operators."""
+
+    for predicate in predicates:
+        alias_kind = alias_kinds.get(predicate.alias)
+        if alias_kind is None:
+            raise ValueError(
+                f"HumemCypher v0 cannot filter on unknown alias {predicate.alias!r}."
+            )
+
+        if (
+            alias_kind == "node"
+            and predicate.field == "label"
+            and predicate.operator != "="
+        ):
+            raise ValueError(
+                "HumemCypher v0 currently supports only equality predicates for "
+                "node field 'label'."
+            )
+
+        if (
+            alias_kind == "relationship"
+            and predicate.field == "type"
+            and predicate.operator != "="
+        ):
+            raise ValueError(
+                "HumemCypher v0 currently supports only equality predicates for "
+                "relationship field 'type'."
+            )
+
+
+def _validate_match_create_relationship_endpoints(
+    match_node: NodePattern,
+    left: NodePattern,
+    right: NodePattern,
+) -> None:
+    """Reject unsupported endpoint shapes in narrow MATCH ... CREATE patterns."""
+
+    if left.alias != match_node.alias and right.alias != match_node.alias:
+        raise ValueError(
+            "HumemCypher v0 MATCH ... CREATE currently requires the CREATE "
+            "relationship pattern to reuse the matched node alias on at least one "
+            "endpoint."
+        )
+
+    for endpoint in (left, right):
+        if endpoint.alias == match_node.alias:
+            if endpoint.label is not None and endpoint.label != match_node.label:
+                raise ValueError(
+                    "HumemCypher v0 MATCH ... CREATE reused-node endpoints must use "
+                    "the same label as the matched node alias."
+                )
+            if endpoint.properties:
+                raise ValueError(
+                    "HumemCypher v0 MATCH ... CREATE reused-node endpoints cannot "
+                    "redeclare inline properties for the matched node alias."
+                )
+            continue
+
+        if endpoint.label is None:
+            raise ValueError(
+                "HumemCypher v0 MATCH ... CREATE new endpoint nodes currently "
+                "require a label unless they reuse the matched node alias."
+            )
+
+
+def _validate_match_create_relationship_between_nodes_endpoints(
+    left_match: NodePattern,
+    right_match: NodePattern,
+    left: NodePattern,
+    right: NodePattern,
+) -> None:
+    """Reject unsupported endpoints in two-node MATCH ... CREATE patterns."""
+
+    if left_match.alias == right_match.alias:
+        raise ValueError(
+            "HumemCypher v0 MATCH ... CREATE with two matched node patterns "
+            "currently requires two distinct matched aliases."
+        )
+
+    matched_aliases = {left_match.alias, right_match.alias}
+    endpoint_aliases = {left.alias, right.alias}
+    if endpoint_aliases != matched_aliases:
+        raise ValueError(
+            "HumemCypher v0 MATCH ... CREATE with two matched node patterns "
+            "currently requires the CREATE relationship endpoints to reuse those "
+            "two matched aliases exactly."
+        )
+
+    for matched_node, endpoint in ((left_match, left), (right_match, right)):
+        if endpoint.alias != matched_node.alias:
+            continue
+        if endpoint.label is not None and endpoint.label != matched_node.label:
+            raise ValueError(
+                "HumemCypher v0 MATCH ... CREATE reused-node endpoints must use "
+                "the same label as the matched node alias."
+            )
+        if endpoint.properties:
+            raise ValueError(
+                "HumemCypher v0 MATCH ... CREATE reused-node endpoints cannot "
+                "redeclare inline properties for matched node aliases."
+            )
 
 
 def _split_keyword_separated(text: str, keyword: str) -> list[str]:
@@ -2513,4 +4400,67 @@ def _split_outside_string(text: str, delimiter: str) -> tuple[str, str]:
 
     raise ValueError(
         f"HumemCypher v0 expected {delimiter!r} in {text!r}."
+    )
+
+
+def _split_predicate_comparison(
+    text: str,
+) -> tuple[
+    str,
+    Literal[
+        "=",
+        "<",
+        "<=",
+        ">",
+        ">=",
+        "STARTS WITH",
+        "ENDS WITH",
+        "CONTAINS",
+        "IS NULL",
+        "IS NOT NULL",
+    ],
+    str,
+]:
+    """Split one predicate item into left side, operator, and right side."""
+
+    in_string = False
+    escape = False
+
+    for index, character in enumerate(text):
+        if escape:
+            escape = False
+            continue
+
+        if character == "\\":
+            escape = True
+            continue
+
+        if character == "'":
+            in_string = not in_string
+            continue
+
+        if in_string:
+            continue
+
+        remaining = text[index:].upper()
+        if remaining.startswith(" IS NOT NULL"):
+            return text[:index], "IS NOT NULL", text[index + len(" IS NOT NULL"):]
+        if remaining.startswith(" IS NULL"):
+            return text[:index], "IS NULL", text[index + len(" IS NULL"):]
+        if remaining.startswith(" STARTS WITH "):
+            return text[:index], "STARTS WITH", text[index + len(" STARTS WITH "):]
+        if remaining.startswith(" ENDS WITH "):
+            return text[:index], "ENDS WITH", text[index + len(" ENDS WITH "):]
+        if remaining.startswith(" CONTAINS "):
+            return text[:index], "CONTAINS", text[index + len(" CONTAINS "):]
+
+        if text.startswith("<=", index) or text.startswith(">=", index):
+            operator = cast(Literal["<=", ">="], text[index:index + 2])
+            return text[:index], operator, text[index + 2:]
+        if character in "=<>":
+            operator = cast(Literal["=", "<", ">"], character)
+            return text[:index], operator, text[index + 1:]
+
+    raise ValueError(
+        f"HumemCypher v0 expected a comparison operator in {text!r}."
     )

@@ -8,9 +8,13 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Final, TYPE_CHECKING
 
-from humemdb import HumemDB
+from humemdb import HumemDB as _HumemDB
+from humemdb.sql import translate_sql, translate_sql_plan
+
+if TYPE_CHECKING:
+    from humemdb.db import HumemDB
 
 
 @dataclass(frozen=True, slots=True)
@@ -314,7 +318,7 @@ def _seed_rows(
     memory_chunks = _memory_chunk_count(rows, documents)
 
     started = time.perf_counter()
-    with db.transaction(route="sqlite"):
+    with db.transaction():
         _seed_users(db, users)
         _seed_events(db, rows=rows, batch_size=batch_size, users=users)
         _seed_documents(db, documents=documents, batch_size=batch_size, users=users)
@@ -357,7 +361,6 @@ def _seed_users(db: HumemDB, users: int) -> None:
             "signup_day INTEGER NOT NULL, "
             "is_active INTEGER NOT NULL)"
         ),
-        route="sqlite",
     )
     batch = [
         {
@@ -376,7 +379,6 @@ def _seed_users(db: HumemDB, users: int) -> None:
             "VALUES ($id, $region, $tier, $cohort, $signup_day, $is_active)"
         ),
         batch,
-        route="sqlite",
     )
 
 
@@ -392,7 +394,6 @@ def _seed_events(db: HumemDB, *, rows: int, batch_size: int, users: int) -> None
             "channel TEXT NOT NULL, "
             "created_day INTEGER NOT NULL)"
         ),
-        route="sqlite",
     )
 
     for start in range(0, rows, batch_size):
@@ -417,7 +418,6 @@ def _seed_events(db: HumemDB, *, rows: int, batch_size: int, users: int) -> None
                 ")"
             ),
             batch,
-            route="sqlite",
         )
 
 
@@ -439,7 +439,6 @@ def _seed_documents(
             "title TEXT NOT NULL, "
             "score INTEGER NOT NULL)"
         ),
-        route="sqlite",
     )
 
     for start in range(1, documents + 1, batch_size):
@@ -465,20 +464,17 @@ def _seed_documents(
                 ")"
             ),
             batch,
-            route="sqlite",
         )
 
 
 def _seed_tags(db: HumemDB, *, tags: int) -> None:
     db.query(
         "CREATE TABLE tags (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
-        route="sqlite",
     )
     batch = [{"id": tag_id, "name": f"tag_{tag_id}"} for tag_id in range(1, tags + 1)]
     db.executemany(
         "INSERT INTO tags (id, name) VALUES ($id, $name)",
         batch,
-        route="sqlite",
     )
 
 
@@ -495,7 +491,6 @@ def _seed_document_tags(
             "document_id INTEGER NOT NULL, "
             "tag_id INTEGER NOT NULL)"
         ),
-        route="sqlite",
     )
 
     batch: list[dict[str, int]] = []
@@ -514,7 +509,6 @@ def _seed_document_tags(
                     "VALUES ($document_id, $tag_id)"
                 ),
                 batch,
-                route="sqlite",
             )
             batch = []
 
@@ -525,7 +519,6 @@ def _seed_document_tags(
                 "VALUES ($document_id, $tag_id)"
             ),
             batch,
-            route="sqlite",
         )
 
 
@@ -549,7 +542,6 @@ def _seed_memory_chunks(
             "summary_length INTEGER NOT NULL, "
             "is_hot INTEGER NOT NULL)"
         ),
-        route="sqlite",
     )
 
     for start in range(1, chunks + 1, batch_size):
@@ -578,7 +570,6 @@ def _seed_memory_chunks(
                 ")"
             ),
             batch,
-            route="sqlite",
         )
 
 
@@ -617,12 +608,20 @@ def _time_query(
     query: str,
 ) -> TimingSummary:
     for _ in range(warmup):
-        db.query(query, route=route)
+        translated = translate_sql(query, target=route)
+        if route == "sqlite":
+            db.sqlite.execute(translated, query_type="sql")
+        else:
+            db.duckdb.execute(translated, query_type="sql")
 
     timings: list[float] = []
     for _ in range(repetitions):
         started = time.perf_counter()
-        db.query(query, route=route)
+        translated = translate_sql(query, target=route)
+        if route == "sqlite":
+            db.sqlite.execute(translated, query_type="sql")
+        else:
+            db.duckdb.execute(translated, query_type="sql")
         timings.append(time.perf_counter() - started)
 
     return _summarize(timings)
@@ -652,6 +651,25 @@ def _summary_dict(summary: TimingSummary) -> dict[str, float]:
     }
 
 
+def _sql_feature_dict(query: str) -> dict[str, int | bool | str]:
+    """Return the SQL planning features used by the runtime router."""
+
+    plan = translate_sql_plan(query, target="duckdb")
+    return {
+        "statement_name": plan.statement_name,
+        "is_read_only": plan.is_read_only,
+        "cte_count": plan.cte_count,
+        "join_count": plan.join_count,
+        "aggregate_count": plan.aggregate_count,
+        "window_count": plan.window_count,
+        "exists_count": plan.exists_count,
+        "has_order_by": plan.has_order_by,
+        "has_limit": plan.has_limit,
+        "has_group_by": plan.has_group_by,
+        "has_distinct": plan.has_distinct,
+    }
+
+
 def main() -> None:
     args = _parse_args()
     json_results: dict[str, object] = {
@@ -667,7 +685,7 @@ def main() -> None:
         sqlite_path = Path(tmpdir) / "bench.sqlite3"
         duckdb_path = Path(tmpdir) / "bench.duckdb"
 
-        with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+        with _HumemDB(str(sqlite_path), str(duckdb_path)) as db:
             dataset = _seed_rows(
                 db,
                 args.rows,
@@ -725,6 +743,7 @@ def main() -> None:
                     "shape": workload.shape,
                     "selectivity": workload.selectivity,
                     "query": workload.query,
+                    "sql_features": _sql_feature_dict(workload.query),
                     "sqlite": _summary_dict(sqlite_summary),
                     "duckdb": _summary_dict(duckdb_summary),
                     "sqlite_duckdb_ratio": (

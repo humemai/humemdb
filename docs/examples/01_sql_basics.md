@@ -4,44 +4,57 @@
 
 ## What the Python example does
 
-The script generates a moderately sized embedded workload instead of a tiny hand-made
-toy dataset.
+The script builds a larger commerce-style workload instead of a tiny two-table toy
+dataset.
 
-- 2,000 `users`
+- 5,000 `users`
+- 128 `products`
 - 50,000 `orders`
-- 2 SQLite tables
+- 150,000 `order_items`
+- 4 relational tables
 - transactional bulk inserts through the public API
-- SQLite filtered OLTP-style reads
-- SQLite joined reads
-- DuckDB grouped analytical reads over the SQLite-backed tables
+- SQLite filtered OLTP-style reads with correlated `EXISTS`
+- SQLite multi-join reads across users, orders, products, and order items
+- DuckDB analytical reads with non-recursive `WITH` and window functions
+- `UNION ALL` reporting over grouped product totals
+- step-by-step timing printed from the script itself
 
 ## Why this example exists
 
-HumemDB is supposed to route small transactional work and broader analytical work to
-different engines explicitly. This example demonstrates that split using the actual
-public Python API.
+HumemDB is supposed to handle transactional row work and broader analytical scans
+through one public Python API. This example demonstrates that split using a schema
+that is big enough to surface realistic join, ranking, and reporting shapes.
 
 ## Main operations covered
 
 - `CREATE TABLE` routed to SQLite
 - `executemany(...)` inside an explicit transaction
 - `ILIKE` translation on the SQLite route
+- correlated `EXISTS` subqueries
 - SQLite join queries for row-oriented reads
 - DuckDB grouped aggregate queries for broader scans
+- non-recursive CTEs
+- window functions through `ROW_NUMBER()`
+- `UNION ALL`
+- per-step elapsed timing output
 
 ## Representative flow
 
 ```python
 with HumemDB("app.sqlite3", "analytics.duckdb") as db:
-    db.query("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, segment TEXT NOT NULL, city TEXT NOT NULL)")
-    db.query("CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, status TEXT NOT NULL, total_cents INTEGER NOT NULL)")
+    db.query("CREATE TABLE users (...)")
+    db.query("CREATE TABLE products (...)")
+    db.query("CREATE TABLE orders (...)")
+    db.query("CREATE TABLE order_items (...)")
 
     with db.transaction():
         db.executemany(..., users)
+        db.executemany(..., products)
         db.executemany(..., orders)
+        db.executemany(..., order_items)
 
     sqlite_rows = db.query(...)
-    duckdb_rollup = db.query(..., route="duckdb")
+    duckdb_rollup = db.query(...)
 ```
 
 ## Supported statement kinds
@@ -56,4 +69,4 @@ with HumemDB("app.sqlite3", "analytics.duckdb") as db:
 
 - recursive CTEs
 - unsupported PostgreSQL syntax outside the current tested surface
-- direct public writes routed to DuckDB
+- direct DuckDB write execution through internal engine paths

@@ -12,6 +12,7 @@ authors = [
   { name = "HumemAI" },
 ]
 dependencies = [
+  "antlr4-python3-runtime>=4.13,<5",
   "duckdb>=1.4,<2",
   "lancedb>=0.27,<1",
   "numpy>=2,<3",

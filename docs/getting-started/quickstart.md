@@ -2,10 +2,11 @@
 
 ## SQL
 
-Write the PostgreSQL-like `HumemSQL v0` surface on both routes. The common path now
-defaults to SQLite. Use `route="duckdb"` explicitly when you want analytical reads.
-HumemDB prefers named `$name` SQL parameters publicly even though positional DB-API
-params still work underneath for compatibility.
+Write the PostgreSQL-like `HumemSQL v0` surface once. HumemDB now applies its current
+automatic routing policy internally, keeping writes on SQLite and sending only admitted
+analytical reads to DuckDB. HumemDB prefers named `$name` SQL parameters publicly.
+Positional DB-API params may still work in narrow cases underneath, but they are not the
+main public style to design around.
 
 ```python
 from humemdb import HumemDB

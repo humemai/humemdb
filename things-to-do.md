@@ -166,8 +166,10 @@ Status: complete for the exact baseline path.
 - Keep SQLite as the canonical vector store first.
 - Store vectors in SQLite and execute the default search path as exact NumPy over cached
   vector-set matrices.
-- Expose the first public vector surface through `query_type="vector"` on the SQLite
-  route and convenience methods on `HumemDB` for insert and search.
+- Expose the shipped direct-vector surface through explicit `HumemDB` methods for
+  insert and search. The earlier public `query_type="vector"` path has since been
+  retired in favor of language-level SQL/Cypher vector forms plus those explicit
+  direct vector methods.
 - Benchmark the exact NumPy path against vector-set size, dimensionality, and `top_k`
   so routing can be based on measured crossover points instead of guesswork.
 - Include quantization experiments as part of the Phase 5 benchmark work.
@@ -197,10 +199,10 @@ Status: done.
 - Let Cypher vector writes also live in Cypher itself: vector-bearing node creates and
   narrow `MATCH ... SET n.embedding = ...` flows should work through the Cypher
   surface instead of helper-only methods.
-- Keep a minimal direct vector runtime for internal testing, benchmarking, and narrow
-  experimental use, but do not treat it as a main public product surface.
-- Let the internal direct vector runtime use distinct object-style APIs and metadata
-  filters without forcing that model onto the main public `HumemDB` story.
+- Keep a minimal direct vector runtime for benchmarking and vector-only workflows, but
+  do not treat it as the main public product surface.
+- Let the explicit direct vector surface use distinct object-style APIs and metadata
+  filters without forcing that model onto the main public `HumemDB` text-query story.
 - Keep the first vector-only categorization step narrow: one canonical SQLite-backed
   vector table plus simple metadata/filter support.
 - Make the canonical vector identity explicit before release: vectors should be keyed by
@@ -233,10 +235,12 @@ Status: done.
   exact SQLite-plus-NumPy baseline rather than an indexed ANN runtime.
 - Make the vector wording explicit enough that users can tell what is supported now:
   row-oriented SQL vector search and node-oriented Cypher vector search, with direct
-  vector APIs treated as internal/experimental and edge vectors deferred.
+  vector APIs treated as a separate explicit path rather than the main query
+  narrative, and edge vectors deferred.
 - Make the public API direction explicit enough that early users can understand that
   `HumemDB` is heading toward `db.query(...)` and later `db.ask(...)`, while the
-  current low-level routing/query-type controls remain implementation details.
+  current query-type plumbing remains internal and `route` is a secondary override
+  rather than the main product story.
 - Make the benchmark scripts and benchmark README reproducible enough to justify the
   current routing story.
 - Ensure package metadata, docs entry points, and dependency notices are ready for a
@@ -320,16 +324,89 @@ Status: done.
 
 Broaden grammar coverage and harden parser/planner support.
 
-Status: in progress.
+Status: done.
 
-- [ ] Expand `HumemSQL v0` beyond the initial statement subset toward a broader
+Cypher Phase 9 is now explicitly on Path B: meaningful grammar expansion should move
+away from growing the current handwritten parser into a broad frontend. The chosen
+direction is to use openCypher grammar/TCK materials as reference input while building
+a HumemDB-owned parser pipeline in-repo.
+
+- [x] Expand `HumemSQL v0` beyond the initial statement subset toward a broader
   PostgreSQL-like portable grammar where the semantics are clear and testable.
 - [x] Move HumemSQL vector support from the current narrow text-shape lowering toward
   proper SQL AST inspection and lowering, so PostgreSQL-like vector syntax is a real
   language feature rather than a regex-shaped special case, while keeping a narrow
   fallback only where parser support is still missing.
-- [ ] Expand `HumemCypher v0` beyond the initial narrow `CREATE` and `MATCH` subset
+- [x] Expand `HumemCypher v0` beyond the initial narrow `CREATE` and `MATCH` subset
   toward a broader Cypher grammar where the relational lowering remains defensible.
+- [x] Use the cloned openCypher repository as spec/grammar/TCK reference material,
+  not as a runtime dependency or a separate maintained fork unless that later becomes
+  necessary.
+- [x] Decide the concrete Python-first parser-generation route for Cypher expansion:
+  generated parser artifacts in-repo, plus HumemDB-owned normalization, validation,
+  and lowering layers.
+- [x] Start with the openCypher 9 published ANTLR grammar artifact as the first parser-
+  ready input source for experimentation, while using the cloned openCypher main repo
+  for current BNF and TCK reference; do not block early frontend work on building a
+  full BNF-to-ANTLR conversion pipeline first.
+- [x] Treat the current openCypher clone as giving two immediate assets: ISO WG3 BNF
+  in `grammar/openCypher.bnf` and clause-organized Cucumber TCK scenarios in
+  `tck/features/**`; do not assume the main repository itself is the direct runtime
+  parser package.
+- [x] Resolve the grammar-generation gap explicitly before implementation: the cloned
+  repository workflow references generated `Cypher.g4` output and generator tooling,
+  but this checkout does not currently ship those tools or generated artifacts, so
+  HumemDB must either source ANTLR grammar artifacts separately or own a preprocessing
+  step that turns reference grammar material into parser-ready inputs.
+- [x] Create a clear in-repo Cypher frontend boundary for grammar files, generated
+  parser artifacts, parse-tree normalization, subset validation, and internal plan
+  lowering so the parser can evolve without spilling parser mechanics across `db.py`
+  and the current handwritten frontend.
+- [x] Use an initial in-repo layout roughly like `src/humemdb/cypher_frontend/`
+  with `grammar/`, `generated/`, `parser.py`, `normalize.py`, `validate.py`,
+  `lower.py`, and `tck/`, so parser generation, subset policy, and HumemDB-specific
+  lowering stay separated from each other.
+- [x] Make parser regeneration a documented, owned development workflow rather than an
+  implicit local setup requirement: use a Docker-first wrapper so contributors do not
+  need Java installed on the host.
+- [x] Keep generated parser artifacts verifiable in CI so the checked-in ANTLR output
+  cannot silently drift from the vendored grammar.
+- [x] Stop treating further broad handwritten Cypher parsing as the main Phase 9
+  strategy; keep the current parser only as the narrow shipped path until the new
+  frontend replaces or subsumes it.
+- [x] Prefer Python-first parser ownership over C or Rust for now; only revisit native
+  parser implementations if correctness, packaging, and measured performance work show
+  that Python-generated parsing is insufficient.
+- [x] Avoid making HumemDB depend on a low-trust small third-party parser package as
+  core runtime infrastructure; if external grammar or parser work helps, vendor or
+  generate owned artifacts rather than coupling the public runtime to an unstable
+  foreign AST/API shape.
+- [x] Keep the parser work in-repo first; only split it into a separate repository if
+  the parser boundary later stabilizes into a genuinely reusable standalone component.
+- [x] Land the first raw generated-parser entrypoint in `src/humemdb/cypher_frontend/`
+  and validate that it parses the current `CREATE` and `MATCH ... WHERE ... RETURN`
+  shapes while reporting syntax errors through a stable HumemDB-facing result.
+- [x] Land the first normalize and validate layers on top of the generated parser so
+  the current admitted `CREATE` and `MATCH ... RETURN` subset can be converted into
+  stable HumemDB-facing structures before lowering.
+- [x] Land the first lowering bridge from generated-parser normalized statements into
+  the existing handwritten `GraphPlan` types so admitted `CREATE` and
+  `MATCH ... RETURN` queries can be compared for plan equivalence before broader
+  runtime replacement.
+- [x] Route the admitted Cypher subset through the generated frontend in real runtime
+  planning first, while keeping a narrow handwritten fallback only for any
+  already-supported shapes that the generated subset policy does not yet admit.
+- [x] Keep syntax errors owned by the generated parser path instead of falling back
+  to the handwritten parser, so malformed Cypher is rejected by one clear frontend
+  boundary and fallback only covers admitted-subset policy gaps.
+- [x] Adopt the openCypher TCK incrementally by supported clause family instead of as
+  an all-or-nothing certification step; start by mapping HumemDB's current and near-
+  term surface against `clauses/create`, `clauses/match`, and `clauses/match-where`
+  scenarios before considering broader clause families such as `merge`, `call`, or
+  richer expression coverage.
+- [x] Use the TCK primarily as behavior validation after HumemDB subset selection,
+  not as permission to claim broad compatibility; scenarios outside the admitted
+  subset should remain rejected clearly.
 - [x] Use existing grammar references such as
   [openCypher](https://github.com/opencypher/openCypher) where they help clarify the
   supported subset, without claiming full compatibility.
@@ -340,7 +417,7 @@ Status: in progress.
   instead of one generic candidate-query blob: SQL-backed and Cypher-backed vector
   query plans now exist as separate internal plan shapes, and their candidate-query
   plans are also language-specific.
-- [ ] Keep rejecting unsupported constructs clearly instead of pretending to support
+- [x] Keep rejecting unsupported constructs clearly instead of pretending to support
   full PostgreSQL or full Cypher compatibility before the implementation is actually
   there.
 - [x] Expand the translation-overhead benchmark so parser, lowering, and planning cost
@@ -352,28 +429,88 @@ Status: in progress.
 - [x] Move SQL read-only classification and lightweight SQL/Cypher shape extraction
   onto parsed structure so later routing is driven by validated plan metadata rather
   than first-keyword heuristics.
-- [ ] Treat this as the phase where grammar breadth and internal language correctness
+- [x] Harden the SQLite-backed graph storage path as Cypher grammar breadth grows:
+  make one logical Cypher write atomic by default, tighten graph-table integrity
+  guarantees, and keep the SQL-backed graph representation defensible rather than
+  assuming the current write path is already robust enough.
+
+Current hardening landed so far:
+
+- broader HumemSQL runtime regression coverage now explicitly locks in read-only
+  `WITH ... UNION ALL`, `CASE WHEN EXISTS (...)`, multi-CTE join/aggregate, and
+  window-ranked CTE query shapes, so those already-working PostgreSQL-like forms
+  are defended in tests instead of living only as implicit runtime behavior
+- public syntax docs now reflect that broadened `HumemSQL v0` read surface instead
+  of underselling it as only the original statement-family list
+- logical Cypher writes now execute atomically by default on SQLite
+- SQLite-backed graph tables now enforce referential integrity between nodes, edges,
+  and graph property tables through foreign-key constraints on new databases
+- SQLite-backed graph node property storage now enforces at most one vector-valued
+  property row per node, keeping graph-property state aligned with the canonical
+  vector sidecar for graph-owned embeddings
+- the translation-overhead benchmark now measures handwritten parse cost, generated-
+  first runtime planning cost, and bind+compile cost separately for the admitted
+  Cypher subset
+- parser/planner benchmark coverage now includes parenthesized node boolean filters,
+  untyped relationship reads, relationship-type alternation, and anonymous-endpoint
+  relationship reads
+- the admitted non-vector Cypher `WHERE` subset now also supports string property
+  predicates with `STARTS WITH`, `ENDS WITH`, and `CONTAINS`, with generated-
+  frontend, runtime, and translation-overhead regression coverage instead of leaving
+  those grammar-admitted operators outside the executable subset
+- the admitted non-vector Cypher `WHERE` subset now also supports `IS NULL` and
+  `IS NOT NULL` over stored node and relationship properties, with the executable
+  subset treating absent properties as null for `IS NULL` checks and keeping that
+  behavior under generated-frontend, runtime, and translation-overhead regression
+  coverage
+- the admitted non-vector Cypher write subset now also supports narrow
+  `MATCH ... DETACH DELETE node_alias` and `MATCH ... DELETE relationship_alias`
+  statements, with generated-frontend and runtime regression coverage instead of
+  leaving graph deletion semantics outside the generated-first planner path
+- TCK-style subset regressions now also cover string predicates, null predicates,
+  `DISTINCT` plus `OFFSET`, and narrow delete flows so the documented generated
+  Cypher subset is defended as a language boundary rather than only by ad hoc
+  unit tests
+- generated-frontend regression coverage now locks in the remaining admitted
+  MATCH ... CREATE endpoint-reuse variants, including new-start-node creation from a
+  matched end node and reverse-direction connection between two matched nodes
+- generated and handwritten Cypher pagination now also accept `OFFSET` as the same
+  admitted integer-literal synonym as `SKIP`, keeping the vendored grammar and
+  runtime subset aligned with the openCypher pagination shape
+- ordinary non-vector Cypher planning now treats the generated frontend as the
+  authoritative runtime boundary instead of silently falling back to the handwritten
+  parser for `MATCH` and `CREATE` statements
+- SQLite-backed graph and vector cleanup now stay aligned when graph-owned nodes are
+  deleted: graph-node deletes remove graph-owned vector rows, vector-row deletes
+  remove vector metadata rows, and Cypher writes invalidate the exact-search cache
+  so graph-owned embedding updates and deletes stay visible immediately
+- [x] Treat this as the phase where grammar breadth and internal language correctness
   are reconsidered seriously, not as part of the initial public snapshot.
 
 ## Phase 10
 
 Add automatic routing and deeper query/workload classification.
 
-Status: in progress.
+Status: done.
 
 - [x] Keep `route` out of the main public mental model as `db.query(...)` becomes the
   main explicit surface.
 - [x] Do not require public `query_type`; `db.query(...)` now infers SQL, Cypher, and
   the current language-level vector forms from the query text.
+- [x] Keep public batch execution aligned with that cleanup: `executemany(...)` now
+  assumes SQL internally instead of exposing a separate public `query_type` switch.
+- [x] Keep the internal `"vector"` label off the public query-type surface: public
+  query typing now stays SQL-or-Cypher, while direct vector-method results report
+  `None` instead of exposing a third public query kind.
 - [x] Treat query-type inference as a convenience feature, not as part of the core
   vector model.
-- [ ] Keep `route` internal even after automatic routing is added.
+- [x] Keep `route` internal even after automatic routing is added.
 - [x] Build on the current text-surface inference and parser/planner work instead of
   reintroducing public query-type controls.
 - [x] Validate the supported portable SQL and Cypher subsets before routing a query.
-- [ ] Keep internal direct vector-object calls explicit instead of trying to infer
+- [x] Keep internal direct vector-object calls explicit instead of trying to infer
   vector intent from arbitrary free-form text.
-- [ ] Stop using `query_type == "vector"` as the main internal dispatcher switch once
+- [x] Stop using `query_type == "vector"` as the main internal dispatcher switch once
   the explicit SQL-vector and Cypher-vector plan variants are strong enough to drive
   execution directly from plan shape.
 - [x] Classify queries safely at first: read versus write, then simple OLTP-style
@@ -388,9 +525,9 @@ Status: in progress.
 - [x] Keep SQL OLAP-to-DuckDB recommendation conservative until the benchmark suite
   produces calibrated admission thresholds; do not treat every join or aggregate as
   enough evidence on its own.
-- [ ] Keep routing explainable and overridable internally, even if it is no longer a
+- [x] Keep routing explainable and overridable internally, even if it is no longer a
   main public knob.
-- [ ] Extend the benchmark suite so routing decisions are justified by measured
+- [x] Extend the benchmark suite so routing decisions are justified by measured
   workload results, not architecture preferences.
 - [x] Broaden the benchmark matrix beyond a few obvious DuckDB wins: keep expanding
   SQL and Cypher workload families so selective joins, anchored graph traversals,
@@ -405,12 +542,84 @@ Status: in progress.
   Cypher evidence is still not broad enough to harden automatic DuckDB routing beyond
   a narrow broad-fanout case, so graph reads should remain SQLite-preferred until the
   benchmark matrix gets stronger.
-- [ ] Re-run relational, graph, and candidate-filtered vector benchmarks when routing
+- [x] Re-run relational, graph, and candidate-filtered vector benchmarks when routing
   heuristics change so the multimodel story remains evidence-backed.
-- [ ] Define a small representative routing benchmark set that can catch
+- [x] Define a small representative routing benchmark set that can catch
   misclassification regressions before they become product behavior.
 
+Current regression guardrails:
+
+- representative SQL and Cypher routing-crossover expectations now have dedicated
+  tests around the routing sweep and threshold-report tooling, so scale-summary
+  output shape and first-DuckDB-win reporting are covered by regression tests.
+- SQL routing benchmark outputs now also carry the same lightweight plan-shape
+  metadata the runtime classifier uses, and threshold reports emit an env-consumable
+  SQL OLAP recommendation block so measured routing evidence can feed planner
+  calibration without adding a new public API knob.
+- SQL benchmark regression coverage now explicitly locks in `EXISTS`-filtered and
+  `DISTINCT` join-projection workload families, and planning tests now defend the
+  matching calibrated DuckDB-routing rules instead of leaving those classifier
+  branches justified only by checked-in benchmark JSON.
+- candidate-filtered vector routing evidence now also flows through the same sweep
+  and threshold-report tooling, with regression coverage around representative
+  vector crossover summaries instead of leaving ANN-versus-exact evidence in a
+  separate ad hoc reporting path.
+- the graph routing benchmark matrix now also covers anonymous-endpoint relationship
+  reads, so admitted anonymous-node graph patterns remain part of the measured
+  routing evidence instead of living only in unit tests.
+- the graph routing benchmark matrix now also covers broader reverse-direction
+  relationship traversal reads with ordering, so admitted reverse-edge traversal
+  families are not represented only by selective property-anchor cases.
+- the translation-overhead and graph-routing benchmark suites now also keep admitted
+  `DISTINCT` plus paginated `OFFSET` read shapes under regression coverage, so new
+  Cypher breadth does not land without parser, lowering, and compile evidence.
+- explicit route overrides now stay confined to internal planning and execution
+  tests rather than the public `HumemDB` surface, so omitted-route automatic
+  routing remains the only public path while route-selection coverage is preserved
+  at the internal seam where it belongs.
+- the representative `routing_sweep_current` SQL, graph, and candidate-filtered
+  vector artifacts have been regenerated from code and fed back through the
+  threshold-report helper, so the checked-in routing story remains tied to fresh
+  JSON evidence instead of stale benchmark outputs
+
 ## Phase 11
+
+Re-evaluate the graph-table representation as its own architecture phase.
+
+Status: planned.
+
+- [ ] Treat this as a distinct architecture decision after Phase 9 grammar growth and
+  Phase 10 routing evidence, not as overflow work inside either of those phases.
+- [ ] Revisit the current graph-to-table representation with dedicated benchmark
+  evidence when graph runtime behavior changes materially: measure whether the SQLite
+  graph tables plus DuckDB-over-SQLite analytics path are still solid enough before
+  changing routing claims or pursuing deeper graph-storage redesign.
+- [ ] Separate three questions clearly: whether the current write path is correct
+  enough, whether the current storage model is performant enough, and whether a real
+  structural redesign is justified.
+- [ ] Keep the default outcome conservative unless evidence says otherwise: prefer to
+  keep the current representation plus targeted hardening if benchmarks still support
+  it.
+- [ ] Measure the current graph-table path more directly on the access patterns that
+  are most likely to become product constraints: multi-edge traversals, endpoint-plus-
+  type filters, endpoint-plus-property filters, and broader ordered fanout reads.
+- [ ] Revisit whether the current default SQLite graph indexes are still the right
+  minimal set once the broader benchmark matrix is rerun, and add narrowly targeted
+  graph indexes before considering a larger storage redesign.
+- [ ] Check whether graph property-table joins, rather than the node/edge base tables
+  themselves, have become the main graph-read bottleneck before changing the storage
+  model.
+- [ ] Evaluate whether a more DuckDB-friendly graph-read shape or lightweight
+  analytical projection is justified for broader graph scans, but keep fresh
+  DuckDB-over-SQLite reads as the default analytical path unless measured evidence
+  says otherwise.
+- [ ] Only pursue graph-storage redesign in this phase if benchmark evidence shows the
+  current SQLite-backed graph tables have become a meaningful product constraint.
+- [ ] If redesign work is justified, compare it against the current graph-table path on
+  correctness cost, routing implications, migration cost, and benchmark deltas rather
+  than treating a new storage model as automatically better.
+
+## Phase 12
 
 Add larger ingestion strategies.
 
@@ -425,6 +634,8 @@ Status: planned.
 - [ ] Start with CSV-first bulk ingest for table data into SQLite tables.
 - [ ] Add graph CSV ingest into the SQLite-backed graph tables rather than treating the
   initial Cypher frontend as the bulk loader.
+- [ ] Prioritize graph CSV ingest ahead of broader Cypher write-surface growth when
+  the goal is operational scale rather than query-language completeness.
 - [ ] Add a real bulk Cypher ingest path later if usage justifies it; the current
   `HumemCypher v0` write surface is transactional but still statement-oriented rather
   than a true batched `CREATE` bulk loader.
@@ -446,7 +657,7 @@ Status: planned.
 - [ ] Measure ingest-to-query freshness and end-to-end load cost, not just raw rows per
   second.
 
-## Phase 12
+## Phase 13
 
 Evaluate broader graph property values.
 
@@ -461,7 +672,7 @@ Status: planned.
 - [ ] If broader graph property values are explored, benchmark their storage and query
   cost against the scalar baseline before widening the model.
 
-## Phase 13
+## Phase 14
 
 Add indexed vector runtime and vector index lifecycle once indexed search is real.
 
@@ -482,17 +693,32 @@ Status: planned.
 - [ ] Treat this as the phase where indexed ANN semantics and lifecycle are defined
   together, not separately.
 
-## Phase 14
+## Phase 15
 
 Harden the public surfaces for `v0.1.0`.
 
 Status: planned.
+
+This phase is about coherence, correctness, and documentation quality, not preserving
+backward compatibility with every earlier pre-`v0.1.0` API shape.
 
 - [ ] Review whether `HumemSQL v0`, `HumemCypher v0`, and `HumemVector v0` are
   stable, coherent, and documented enough to ship as one explicit `v0.1.0`
   snapshot.
 - [ ] Use surface maturity, benchmark evidence, and routing stability as the bar for
   release hardening, not raw feature count alone.
+- [ ] Decide explicitly whether HumemCypher should take one more narrow operational
+  clause-family expansion before `v0.1.0`, instead of letting that scope drift during
+  release hardening.
+- [ ] If one more graph-clause expansion lands before `v0.1.0`, prioritize a narrow
+  `MERGE` subset first because it improves real graph write workflows more directly
+  than broader path semantics.
+- [ ] Consider a narrow `OPTIONAL MATCH` subset only after the `MERGE` decision and
+  only if its null/return semantics can be documented and defended cleanly in tests.
+- [ ] Keep variable-length paths, named paths, richer multi-part Cypher flows, and
+  other broad graph-language features explicitly out of the `v0.1.0` admission bar
+  unless benchmark-backed product evidence shows they are more urgent than storage,
+  ingest, and release-coherence work.
 - [ ] Tighten unsupported-case behavior and error messages across SQL, Cypher, and
   vector paths.
 - [ ] Make result shapes and explicit query semantics stable and well documented.
@@ -509,11 +735,14 @@ Status: planned.
 - [ ] Use this phase to close the gap between a useful `v0` implementation and a
   release candidate that is stable enough to publish.
 
-## Phase 15
+## Phase 16
 
 Release `v0.1.0`.
 
 Status: planned.
+
+Pre-`v0.1.0` cleanup can still make clean breaking changes. The release bar is one
+coherent shipped surface, not continuity with every earlier experimental shape.
 
 - [ ] Cut the GitHub `v0.1.0` release once `db.query(...)`, the docs, and the
   explicit SQL/Cypher/vector baseline form one coherent public snapshot.
@@ -525,14 +754,14 @@ Status: planned.
   search is row-oriented and Cypher vector search is node-oriented; keep direct-vector
   runtime details out of the main public product narrative.
 - [ ] Require the direct vector-only story to be clear before release: it is an
-  internal/experimental runtime, not the main public abstraction.
+  explicit secondary surface, not the main public abstraction.
 - [ ] Require the public `v0` paths to be green in tests before release.
 - [ ] Require the benchmark suite to be green enough before release that the routing and
   multimodel claims remain defensible.
 - [ ] Do not block `v0.1.0` on `db.ask(...)`, later model work, or future planner
   refinement.
 
-## Phase 16
+## Phase 17
 
 Add `db.ask(...)` as the final major public surface.
 

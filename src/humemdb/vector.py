@@ -25,6 +25,14 @@ VectorMetric: TypeAlias = Literal["cosine", "dot", "l2"]
 VectorMetadataValue: TypeAlias = str | int | float | bool | None
 VectorNamespaceKey: TypeAlias = tuple[str, str, int]
 
+_GRAPH_NODE_VECTOR_DELETE_TRIGGER_SQL = (
+    "CREATE TRIGGER IF NOT EXISTS trg_graph_nodes_delete_graph_vectors "
+    "AFTER DELETE ON graph_nodes BEGIN "
+    "DELETE FROM vector_entries "
+    "WHERE target = 'graph_node' AND namespace = '' AND target_id = OLD.id; "
+    "END"
+)
+
 
 @dataclass(frozen=True, slots=True)
 class VectorSearchMatch:
@@ -78,8 +86,30 @@ def ensure_vector_schema(sqlite: SQLiteEngine) -> None:
             "CREATE INDEX IF NOT EXISTS idx_vector_entry_metadata_lookup "
             "ON vector_entry_metadata(key, value_type, value, vector_id)"
         ),
+        (
+            "CREATE TRIGGER IF NOT EXISTS trg_vector_entries_delete_metadata "
+            "AFTER DELETE ON vector_entries BEGIN "
+            "DELETE FROM vector_entry_metadata WHERE vector_id = OLD.vector_id; "
+            "END"
+        ),
     ):
         sqlite.execute(statement, query_type="vector")
+
+    if _table_exists(sqlite, "graph_nodes"):
+        sqlite.execute(_GRAPH_NODE_VECTOR_DELETE_TRIGGER_SQL, query_type="vector")
+
+
+def _table_exists(sqlite: SQLiteEngine, table_name: str) -> bool:
+    """Return whether one SQLite table already exists."""
+
+    return (
+        sqlite.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table_name,),
+            query_type="vector",
+        ).first()
+        is not None
+    )
 
 
 def insert_vectors(
@@ -162,7 +192,7 @@ def load_vector_matrix(
         query_type="vector",
     )
     if not result.rows:
-        raise ValueError("HumemVector v0 could not load vectors: no rows found.")
+        return np.empty(0, dtype=object), np.empty((0, 0), dtype=np.float32)
 
     dimensions = int(result.rows[0][3])
     item_ids = np.empty(len(result.rows), dtype=object)

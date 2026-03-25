@@ -46,8 +46,8 @@ Current behavior is intentionally explicit:
 - direct vector search lives on methods such as `search_vectors(...)`
 - candidate-filtered vector search is expressed in SQL/Cypher syntax when SQL rows or graph nodes
   define the candidate set first
-- `db.query(...)` can infer a conservative execution route when `route` is omitted,
-  while explicit `route="sqlite"` or `route="duckdb"` still overrides that choice
+- `db.query(...)` infers a conservative execution route internally; the public query
+  surface no longer exposes a backend override
 - `query_type` is no longer part of the public `db.query(...)` surface
 - Writes go to SQLite
 - broad analytical SQL can route to DuckDB; ambiguous SQL and current Cypher reads stay
@@ -113,23 +113,27 @@ them behind a fake "single engine" narrative.
 ### SQL
 
 - PostgreSQL-like portable subset translated with `sqlglot`
-- callers write `HumemSQL v0` regardless of route; omitted `route` lets HumemDB pick a
-  conservative backend, while `route="sqlite"` and `route="duckdb"` still explicitly
-  choose the engine and not a backend-specific SQL dialect
+- callers write `HumemSQL v0`; HumemDB applies a conservative internal classifier so
+  broad analytical SQL may route to DuckDB while writes and selective reads stay on
+  SQLite
 - public SQL params use named `$name` placeholders with mapping-style params
 - backend-specific SQLite or DuckDB SQL is not part of the supported public contract
 - statement coverage: `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `CREATE`
+- defended read shapes now include non-recursive CTEs, `UNION ALL`, window functions,
+  and `CASE` plus correlated `EXISTS` in the current portable subset
 - recursive CTEs intentionally unsupported in `v0`
 
 ### Cypher
 
-- narrow `CREATE` and `MATCH` flows
-- labeled nodes and single directed relationships
-- relationship aliases and reverse-edge matches
-- simple `WHERE ... AND ...` equality filtering
-- `ORDER BY` and `LIMIT`
-- omitted `route` currently keeps Cypher on SQLite by default; explicit `route="duckdb"`
-  still exists for controlled graph-read experiments
+- generated-parser-backed narrow `CREATE`, `MATCH`, `MATCH ... SET`, and narrow
+  `MATCH ... DELETE` flows
+- labeled nodes, single directed relationships, relationship aliases, reverse-edge
+  matches, anonymous relationship endpoints, and narrow relationship type alternation
+- simple scalar comparisons plus narrow top-level boolean regrouping in `WHERE`
+- string predicates with `STARTS WITH`, `ENDS WITH`, and `CONTAINS`
+- property null predicates with `IS NULL` and `IS NOT NULL`
+- `DISTINCT`, `ORDER BY`, `SKIP` or `OFFSET`, and `LIMIT` on the admitted read subset
+- public Cypher execution currently stays on SQLite
 
 ### Vector
 

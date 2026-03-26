@@ -661,34 +661,22 @@ Phase 11 conclusion:
 
 Add larger ingestion strategies.
 
-Status: in progress.
+Status: complete.
 
 - [x] Keep SQLite as the canonical ingest target because it remains the source of truth.
-- [ ] Add larger file-based and workload-specific ingestion paths only when the simple
-  transactional SQLite path is no longer enough.
-- [ ] Consider an optional Parquet materialization path only if later benchmarks show
-  that repeated broad analytical reads need a snapshot or cache layer beyond the
-  current live DuckDB-over-SQLite path.
 - [x] Start with CSV-first bulk ingest for table data into SQLite tables.
 - [x] Add graph CSV ingest into the SQLite-backed graph tables rather than treating the
   initial Cypher frontend as the bulk loader.
 - [x] Prioritize graph CSV ingest ahead of broader Cypher write-surface growth when
   the goal is operational scale rather than query-language completeness.
-- [ ] Add a real bulk Cypher ingest path later if usage justifies it; the current
-  `HumemCypher v0` write surface is transactional but still statement-oriented rather
-  than a true batched `CREATE` bulk loader.
-- [ ] Allow staging-table and normalize-into-final-table flows where they make ingest
-  simpler or safer.
-- [ ] Keep DuckDB as the analytical read path after ingest, not as the canonical
+- [x] Allow staging-table and normalize-into-final-table flows where they make ingest
+  simpler or safer; keep this table-first for now, and only add graph staging flows
+  later when a real graph-derivation workload justifies them.
+- [x] Keep DuckDB as the analytical read path after ingest, not as the canonical
   ingest destination.
-- [ ] If Parquet is added later, keep it as an optional analytical snapshot/export
-  layer, not as a replacement for fresh DuckDB reads over the SQLite source of truth.
-- [ ] Re-evaluate append-heavy time-series workloads later to see whether they need
-  time-aware partitioning, retention, rollups, or helper APIs beyond the current SQL
-  surface.
-- [ ] Choose ingest strategies based on data size, source format, and workload instead
+- [x] Choose ingest strategies based on data size, source format, and workload instead
   of assuming one bulk-load path fits everything.
-- [ ] Keep this as an ingestion/runtime phase, not a change to the public query
+- [x] Keep this as an ingestion/runtime phase, not a change to the public query
   surfaces.
 - [x] Add ingest benchmarks for transactional insert, CSV load, graph CSV ingest, and
   staging/normalize flows so larger ingest paths are admitted by evidence.
@@ -711,37 +699,29 @@ Current Phase 12 progress:
   graph edge import, and rollback behavior on relational uniqueness failures and graph
   foreign-key failures
 - the dedicated `csv_ingest.py` comparison benchmark now measures relational ingest,
-  graph node ingest, graph edge ingest, and post-ingest freshness queries against the
-  realistic public baselines plus internal SQLite lower bounds
-- the post-optimization sweep through `1M` rows now shows `import_table(...)` beating
-  public `executemany(...)`, while `import_nodes(...)` and `import_edges(...)` stay
-  close to the internal lower bound and far ahead of repeated public Cypher writes
+  staged relational ingest plus normalize-into-final-table flow, graph node ingest,
+  graph edge ingest, and post-ingest freshness queries against the realistic public
+  baselines plus internal SQLite lower bounds
+- the staged relational comparison now also shows that `staging_normalize` is a valid
+  table-first workflow option when permissive landing plus SQL cleanup is needed, but
+  that `import_table(...)` remains the default fast public path from `100k` through
+  `10M`
+- the post-optimization sweeps show `import_table(...)` beating public
+  `executemany(...)`, while `import_nodes(...)` and `import_edges(...)` stay close to
+  the internal lower bound and far ahead of repeated public Cypher writes
 - the benchmark README and public examples now cover the new ingestion family, so this
-  phase has moved from “API exists” to “API is benchmark-backed and documented,” even
-  though later staging/normalize and non-CSV ingest work still remains open
+  phase has moved from “API exists” to “API is benchmark-backed and documented”
 
 ## Phase 13
-
-Evaluate broader graph property values.
-
-Status: planned.
-
-- [ ] Decide whether HumemDB graph properties should remain scalar-only or expand toward
-  lists, nested values, or more document-like payloads.
-- [ ] Treat this as a data-model decision, not just a parser or grammar extension.
-- [ ] Define the storage, indexing, filtering, ordering, and return semantics before
-  claiming support for broader graph properties.
-- [ ] Keep this explicitly out of the initial public snapshot.
-- [ ] If broader graph property values are explored, benchmark their storage and query
-  cost against the scalar baseline before widening the model.
-
-## Phase 14
 
 Add indexed vector runtime and vector index lifecycle once indexed search is real.
 
 Status: planned.
 
-- [ ] Keep this out of the current exact-baseline work.
+- [x] Keep exact search as the current public baseline until indexed ANN is
+  benchmark-justified.
+- [ ] Add a real indexed ANN vector path, likely LanceDB-backed first, for larger
+  vector scales where exact NumPy search is no longer operationally enough.
 - [ ] Add explicit vector index build, rebuild, refresh, inspect, and drop operations
   once HumemDB ships a real indexed vector path.
 - [ ] Expose vector index lifecycle through the internal/advanced vector object API
@@ -750,13 +730,15 @@ Status: planned.
   object-API-only.
 - [ ] Keep exact search free of mandatory index-build steps.
 - [ ] Use vector benchmarks to define the admission bar for indexed search: build cost,
-  refresh cost, latency, recall, and memory overhead must justify the added runtime.
+  refresh cost, latency, recall, memory overhead, and larger-scale crossover behavior
+  must justify the added runtime.
 - [ ] Extend the current vector sweep and tuning benchmarks so exact versus indexed
-  crossover points are measured rather than guessed.
+  crossover points are measured rather than guessed, including larger LanceDB-backed
+  runs.
 - [ ] Treat this as the phase where indexed ANN semantics and lifecycle are defined
   together, not separately.
 
-## Phase 15
+## Phase 14
 
 Harden the public surfaces for `v0.1.0`.
 
@@ -768,7 +750,7 @@ backward compatibility with every earlier pre-`v0.1.0` API shape.
 - [ ] Review whether `HumemSQL v0`, `HumemCypher v0`, and `HumemVector v0` are
   stable, coherent, and documented enough to ship as one explicit `v0.1.0`
   snapshot.
-- [ ] Use surface maturity, benchmark evidence, and routing stability as the bar for
+- [x] Use surface maturity, benchmark evidence, and routing stability as the bar for
   release hardening, not raw feature count alone.
 - [ ] Decide explicitly whether HumemCypher should take one more narrow operational
   clause-family expansion before `v0.1.0`, instead of letting that scope drift during
@@ -776,19 +758,18 @@ backward compatibility with every earlier pre-`v0.1.0` API shape.
 - [ ] If one more graph-clause expansion lands before `v0.1.0`, prioritize a narrow
   `MERGE` subset first because it improves real graph write workflows more directly
   than broader path semantics.
-- [ ] Consider a narrow `OPTIONAL MATCH` subset only after the `MERGE` decision and
-  only if its null/return semantics can be documented and defended cleanly in tests.
-- [ ] Keep variable-length paths, named paths, richer multi-part Cypher flows, and
-  other broad graph-language features explicitly out of the `v0.1.0` admission bar
-  unless benchmark-backed product evidence shows they are more urgent than storage,
-  ingest, and release-coherence work.
+- [x] Keep `OPTIONAL MATCH`, variable-length paths, named paths, richer multi-part
+  Cypher flows, and other broad graph-language features explicitly out of the
+  `v0.1.0` admission bar unless benchmark-backed product evidence becomes stronger
+  than the current storage, ingest, vector, and release-coherence priorities.
 - [ ] Tighten unsupported-case behavior and error messages across SQL, Cypher, and
   vector paths.
 - [ ] Make result shapes and explicit query semantics stable and well documented.
 - [ ] Re-run benchmark-backed routing checks when runtime behavior changes materially.
 - [ ] Revisit the SQLite-to-NumPy vector load and exact-index materialization path if
-  later benchmarks show it has become a real bottleneck, but keep the current simple
-  loader unless measured evidence justifies lower-level optimization work.
+  it is still the active bottleneck after the indexed vector direction is settled, but
+  keep the current simple exact loader unless measured evidence justifies lower-level
+  optimization work.
 - [ ] Add public-surface tests that defend the documented semantics instead of only
   the current happy paths.
 - [ ] Turn the benchmark suite into a release-hardening tool with stable representative
@@ -798,7 +779,7 @@ backward compatibility with every earlier pre-`v0.1.0` API shape.
 - [ ] Use this phase to close the gap between a useful `v0` implementation and a
   release candidate that is stable enough to publish.
 
-Current Phase 15 progress:
+Current Phase 14 progress:
 
 - public examples and docs now use the backend-neutral `HumemDB.open(...)` helper
   instead of teaching paired SQLite and DuckDB filenames directly
@@ -814,10 +795,12 @@ Current Phase 15 progress:
 - the first public ingestion family is now benchmark-validated through `1M` rows and
   documented with a dedicated public example, which removes a major release-hardening
   gap for operational data loading
+- the full test suite and release example runner are currently green (`pytest` and
+  `python scripts/release/run_examples.py`)
 - broader release-hardening checks, benchmark gates, and final SQL/Cypher/vector
   coherence review still remain open
 
-## Phase 16
+## Phase 15
 
 Release `v0.1.0`.
 
@@ -830,66 +813,48 @@ coherent shipped surface, not continuity with every earlier experimental shape.
   explicit SQL/Cypher/vector baseline form one coherent public snapshot.
 - [ ] Publish the same `v0.1.0` to PyPI once the README, MkDocs setup, package
   metadata, and examples match that public snapshot.
-- [ ] Require the simple public vector model to be settled before release; do not
-  ship a placeholder abstraction that is likely to be renamed immediately.
-- [ ] Require the near-term vector story to be clear before release: SQL vector
-  search is row-oriented and Cypher vector search is node-oriented; keep direct-vector
-  runtime details out of the main public product narrative.
-- [ ] Require the direct vector-only story to be clear before release: it is an
-  explicit secondary surface, not the main public abstraction.
-- [ ] Require the public `v0` paths to be green in tests before release.
-- [ ] Require the benchmark suite to be green enough before release that the routing and
-  multimodel claims remain defensible.
-- [ ] Do not block `v0.1.0` on `db.ask(...)`, later model work, or future planner
+- [ ] Require the public vector story to be settled enough before release: exact
+  baseline semantics are clear, the indexed-vector direction is named clearly enough,
+  SQL vector search remains row-oriented, Cypher vector search remains node-oriented,
+  and direct-runtime details stay out of the main product narrative.
+- [ ] Require the public `v0` paths, release examples, and benchmark suite to be green
+  enough before release that the routing and multimodel claims remain defensible.
+- [x] Do not block `v0.1.0` on `db.ask(...)`, later model work, or future planner
   refinement.
 
-## Phase 17
+## Future phases
 
-Add `db.ask(...)` as the final major public surface.
+Only reopen these if later evidence justifies them. None of them should be treated as
+pre-`v0.1.0` default scope.
 
-Status: planned.
-
-- [ ] Keep `db.ask(...)` as the natural-language public surface built on top of the
-  already-cleaned `db.query(...)` surface and internal plan layer.
-- [ ] Do not expose `route`, `query_type`, or low-level param plumbing from
-  `db.ask(...)`.
-- [ ] Let `db.ask(...)` own intent understanding and planner selection instead of
-  forcing users to think in terms of SQL versus Cypher versus vector execution.
-- [ ] Start narrow: make `db.ask(...)` good at the supported SQL/Cypher/vector subset
-  instead of pretending to solve arbitrary natural-language database questions.
-- [ ] Start with an existing model or constrained NL-to-plan flow before considering
-  any model training.
-- [ ] Benchmark `db.ask(...)` separately from raw `db.query(...)` so NL latency,
-  planner quality, and end-to-end overhead are visible instead of being conflated with
-  core runtime performance.
-- [ ] Keep this phase focused on the first coherent NL UX, not on perfect automation
-  or a fully general planner.
-
-## Phase 18
-
-Revisit graph storage architecture if later evidence justifies it.
-
-Status: planned.
-
-This phase should only open after `v0.1.0` if later data-model or workload evidence
-shows that the current SQLite-backed property-graph table design has become the real
-constraint rather than the current implementation around it.
-
-- [ ] Do not treat this as pre-`v0.1.0` scope creep; keep the current graph storage
-  model through release hardening unless benchmark or correctness evidence forces a
-  change earlier.
-- [ ] Revisit the graph storage layout only if Phase 13 broadens graph property values,
-  Phase 12 follow-on ingest work still leaves graph loading too expensive, or later
-  workloads show that the current table model has become a product bottleneck.
-- [ ] Start by checking whether staged bulk-load flows, normalize-into-final-table
-  paths, or index-lifecycle changes solve the problem before replacing the logical
-  graph storage model outright.
-- [ ] If a deeper storage redesign is needed, compare it explicitly against the current
-  `graph_nodes` plus `graph_edges` plus property-table layout on ingest cost, query
-  cost, operational complexity, and migration risk.
+- [ ] Add larger file-based or workload-specific ingest paths only if the current
+  CSV-first SQLite path stops being enough in real use.
+- [ ] Add a real bulk Cypher ingest path only if usage justifies growing beyond the
+  current transactional, statement-oriented `HumemCypher v0` write surface.
+- [ ] Re-evaluate append-heavy time-series workloads only if later workloads show that
+  time-aware partitioning, retention, rollups, or helper APIs are actually needed.
+- [ ] Revisit broader graph property values only if real workloads justify moving
+  beyond the current scalar graph property model; treat that as a data-model change,
+  not just a parser expansion, and benchmark storage/query cost before widening it.
+- [ ] Revisit graph storage architecture only if later evidence shows that the current
+  SQLite-backed `graph_nodes` plus `graph_edges` plus property-table layout has become
+  the real bottleneck rather than the implementation around it.
+- [ ] Before replacing the current graph layout, first check whether staged bulk-load
+  flows, normalize-into-final-table paths, or index-lifecycle changes solve the
+  problem more cheaply.
 - [ ] Keep SQLite as the canonical persisted store unless the broader HumemDB storage
-  strategy itself changes; this phase is about graph layout and write/read strategy,
-  not about replacing the embedded storage foundation casually.
-- [ ] Treat broader property payloads, operational graph writes such as `MERGE`, and
-  post-release ingest workloads as the main triggers for deciding whether the current
-  EAV-style property-table model is still the right tradeoff.
+  strategy itself changes; any future graph-storage redesign is about layout and
+  write/read strategy, not casually replacing the embedded storage foundation.
+- [ ] Treat broader graph property payloads, operational graph writes such as `MERGE`,
+  and later ingest workloads as the main triggers for revisiting the current graph
+  storage model.
+- [ ] If later post-release benchmarks show that repeated broad analytical reads need a
+  materialized snapshot or cache layer beyond live DuckDB-over-SQLite reads, evaluate
+  an optional Parquet analytical snapshot or export path there rather than pulling
+  that work into the canonical pre-`v0.1.0` ingest story.
+- [ ] Revisit `db.ask(...)` only after the `db.query(...)`-first public snapshot is
+  stable; keep it as a later natural-language surface built on top of the cleaned
+  SQL, Cypher, and vector plan layer rather than part of the initial release bar.
+- [ ] Keep any future `db.ask(...)` scope narrow at first: do not expose low-level
+  routing or planner plumbing, and benchmark NL latency and planner quality
+  separately from raw `db.query(...)` execution.

@@ -256,6 +256,8 @@ What it reports:
 
 - relational ingest timings for:
   - `import_table(...)`
+  - `staging_normalize`, which loads CSV rows into one staging table first and then
+    normalizes them into the final relational table with one set-based SQLite insert
   - manual CSV parsing plus public `db.executemany(...)`
   - manual CSV parsing plus internal SQLite `executemany(...)` as a lower bound
 - graph node ingest timings for:
@@ -279,27 +281,43 @@ Use this benchmark when Phase 12 ingest behavior changes materially, especially 
 
 Method-selection flags:
 
-- `--table-methods import_table,public_executemany,internal_sqlite`
+- `--table-methods import_table,staging_normalize,public_executemany,internal_sqlite`
 - `--graph-methods import_api,public_cypher_query,internal_sqlite`
 - for larger graph sweeps, a practical pattern is
   `--graph-methods import_api,internal_sqlite`
+
+Current note on staged relational ingest:
+
+- `staging_normalize` exists to measure one realistic Phase 12 follow-on path where
+  CSV rows first land in a permissive staging table and then move into the final table
+  through one set-based SQLite normalization step
+- this staged path is intentionally table-first today; graph ingest is benchmarked
+  directly through `import_nodes(...)` and `import_edges(...)`, and graph-specific
+  staging flows should only be added later if a real graph-derivation workload
+  justifies them
+- a dedicated staged-relational comparison run has now been captured alongside the
+  original direct-import snapshot
 
 Current sweep snapshot:
 
 - sweep date: `2026-03-26`
 - `warmup=0`, `repetitions=1`
-- `edge_fanout=2`
-- this snapshot reflects the post-optimization full-method sweep through `1M`
-- a larger `10M` run was started separately, but the completed `10k`, `100k`, and
-  `1M` runs were already enough to judge the public ingest path direction
+- relational staged-comparison runs used `node_rows=100` and `edge_fanout=1` so the
+  script stayed focused on table ingest while still exercising the shared benchmark
+  harness
+- the relational table snapshot below now includes `10k`, `100k`, `1M`, and `10M`
+  staged-comparison measurements
+- the graph node and edge snapshots below remain the earlier post-optimization graph
+  comparison runs, which are still the representative evidence for graph ingest
 
 Relational table ingest means:
 
-| Rows | `import_table(...)` | `public_executemany` | `internal_sqlite` | Takeaway |
-| ---: | ------------------: | -------------------: | ----------------: | -------- |
-| `10k` | `46.53 ms` | `64.91 ms` | `53.54 ms` | At this smaller scale, `import_table(...)` already beat both comparison paths in this run. |
-| `100k` | `259.91 ms` | `296.64 ms` | `218.01 ms` | After the hot-path cleanup, `import_table(...)` moved ahead of public `executemany(...)` and stayed within about `1.19x` of the internal lower bound. |
-| `1M` | `2003.37 ms` | `2554.44 ms` | `1913.02 ms` | The same pattern held at `1M`: `import_table(...)` beat the realistic public baseline and stayed within about `1.05x` of internal SQLite batching. |
+| Rows | `import_table(...)` | `staging_normalize` | `public_executemany` | `internal_sqlite` | Takeaway |
+| ---: | ------------------: | ------------------: | -------------------: | ----------------: | -------- |
+| `10k` | `55.94 ms` | `124.55 ms` | `52.12 ms` | `44.28 ms` | At this small scale, `staging_normalize` is clearly a convenience path rather than a fast path: it was about `2.23x` slower than `import_table(...)` and about `2.39x` slower than public `executemany(...)`. |
+| `100k` | `256.68 ms` | `361.62 ms` | `283.00 ms` | `222.01 ms` | By `100k`, direct `import_table(...)` is still the right default; staged normalize remained about `1.41x` slower than `import_table(...)` and about `1.28x` slower than public `executemany(...)`. |
+| `1M` | `1996.66 ms` | `2514.54 ms` | `2518.13 ms` | `1843.78 ms` | At `1M`, staged normalize roughly matched the realistic public baseline but still trailed `import_table(...)` by about `1.26x`, which means the staged flow looks operationally reasonable when normalization is needed but not like the new default fast path. |
+| `10M` | `19737.82 ms` | `24939.36 ms` | `24203.80 ms` | `18456.09 ms` | The same pattern held at `10M`: `import_table(...)` remained the fastest public path, while `staging_normalize` stayed workable for schema-cleanup workflows but ended up slightly slower than public `executemany(...)` and about `1.35x` off the internal lower bound. |
 
 Graph node ingest means:
 
@@ -319,16 +337,19 @@ Graph edge ingest means:
 
 Current ingest takeaway:
 
-- relational CSV ingest is now in the right place: `import_table(...)` beats the
-  realistic public `executemany(...)` baseline at `100k` and `1M` and stays close to
-  the internal SQLite lower bound
+- relational CSV ingest is now in the right place: `import_table(...)` remains the
+  fastest public path and stays close to the internal SQLite lower bound from `100k`
+  through `10M`
+- `staging_normalize` is now benchmarked too, and the measured result is useful but
+  clear: it is a workflow option for permissive load plus SQL normalization, not the
+  new default performance path
 - graph CSV ingest continues to look directionally right: `import_nodes(...)` and
   `import_edges(...)` stay close to the internal lower bound at `100k` and `1M`
 - repeated public Cypher graph writes remain a valid baseline, but they scale much
   worse, especially for edges where they are still more than `6x` slower than the
   internal lower bound at `100k` and `1M`
-- the completed post-optimization `10k`, `100k`, and `1M` runs are strong enough to
-  treat the first public ingestion family as benchmark-validated for this phase
+- the completed direct-import plus staged-relational runs are strong enough to treat
+  the first public ingestion family as benchmark-validated for this phase
 
 ## [`routing_sweep.py`](./routing_sweep.py)
 

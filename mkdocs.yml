@@ -102,6 +102,7 @@ nav:
       - Benchmarks:
         - Overview: guide/benchmarks.md
         - Translation Overhead: guide/benchmarks/translation-overhead.md
+        - CSV Ingest: guide/benchmarks/csv-ingest.md
         - Relational Direct Read: guide/benchmarks/relational-direct-read.md
         - Cypher Graph Path: guide/benchmarks/cypher-graph-path.md
         - Vector Search: guide/benchmarks/vector-search.md

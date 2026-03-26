@@ -163,7 +163,7 @@ HumemDB.
 ```python
 from humemdb import HumemDB
 
-with HumemDB("app.sqlite3", "analytics.duckdb") as db:
+with HumemDB.open("app") as db:
     db.query("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
 
     with db.transaction():

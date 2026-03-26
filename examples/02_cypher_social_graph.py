@@ -28,7 +28,7 @@ def _make_timer() -> callable:
     return report
 
 
-def populate_nodes(db: HumemDB) -> None:
+def populate_nodes(db) -> None:
     for index in range(TEAM_COUNT):
         db.query(
             "CREATE (:Team {slug: $slug, region: $region, focus: $focus})",
@@ -88,7 +88,7 @@ def populate_nodes(db: HumemDB) -> None:
         )
 
 
-def populate_edges(db: HumemDB) -> None:
+def populate_edges(db) -> None:
     for index in range(USER_COUNT):
         user_name = f"User {index:03d}"
         teammate = f"User {(index + 1) % USER_COUNT:03d}"
@@ -163,7 +163,7 @@ def populate_edges(db: HumemDB) -> None:
             )
 
 
-def mutate_graph(db: HumemDB) -> None:
+def mutate_graph(db) -> None:
     db.query(
         "MATCH (u:User {name: 'User 000'}) SET u.city = $city, u.nickname = $nickname",
         params={"city": "Berlin-hub", "nickname": "anchor-user"},
@@ -196,10 +196,8 @@ def main() -> None:
     report = _make_timer()
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
-        sqlite_path = root / "graph.sqlite3"
-        duckdb_path = root / "graph.duckdb"
 
-        with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+        with HumemDB.open(root / "graph") as db:
             with db.transaction():
                 populate_nodes(db)
                 report("created graph nodes")
@@ -208,7 +206,7 @@ def main() -> None:
                 mutate_graph(db)
                 report("mutated graph state")
 
-            sqlite_result = db.query(
+            relationship_result = db.query(
                 (
                     "MATCH (u:User)-[r:KNOWS|MENTORS]->(peer:User) "
                     "WHERE u.name STARTS WITH 'User 0' AND peer.nickname IS NULL "
@@ -216,7 +214,7 @@ def main() -> None:
                     "ORDER BY r.since DESC, u.name LIMIT 6"
                 )
             )
-            report("ran mixed relationship read")
+            report("ran relationship read")
             reverse_result = db.query(
                 (
                     "MATCH (:Team {slug: 'team-0'})"
@@ -289,14 +287,16 @@ def main() -> None:
             )
             report("ran graph count scans")
 
-        assert sqlite_result.columns == (
+        assert relationship_result.columns == (
             "u.name",
             "r.type",
             "r.since",
             "peer.name",
         )
-        assert len(sqlite_result.rows) == 6
-        assert {row[1] for row in sqlite_result.rows}.issubset({"KNOWS", "MENTORS"})
+        assert len(relationship_result.rows) == 6
+        assert {row[1] for row in relationship_result.rows}.issubset(
+            {"KNOWS", "MENTORS"}
+        )
         assert reverse_result.columns == ("r.type", "r.since")
         assert len(reverse_result.rows) == 5
         assert all(row[0] == "MEMBER_OF" for row in reverse_result.rows)
@@ -322,7 +322,7 @@ def main() -> None:
         assert edge_count_map["TAGGED"] == DOCUMENT_COUNT - 1
         assert edge_count_map["MENTORS"] == (USER_COUNT // 6)
 
-        print("Cypher relationship rows:", sqlite_result.rows)
+        print("Cypher relationship rows:", relationship_result.rows)
         print("Cypher reverse team membership rows:", reverse_result.rows)
         print("Cypher authored document rows:", document_result.rows)
         print("Cypher distinct cohort rows:", distinct_result.rows)

@@ -10,6 +10,7 @@ repository README.
 ## Pages
 
 - Translation overhead: [`translation_overhead.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/translation_overhead.py)
+- CSV ingest benchmark: [`csv_ingest.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/csv_ingest.py)
 - Relational direct-read benchmark: [`duckdb_direct_read.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/duckdb_direct_read.py)
 - Cypher graph-path benchmark: [`cypher_graph_path.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/cypher_graph_path.py)
 - Vector single-run benchmark: [`vector_search.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/vector_search.py)
@@ -40,6 +41,26 @@ Current purpose:
 - isolate Cypher parse, generated-first runtime planning, and bind+compile overhead
 - keep frontend cost separate from backend execution cost when routing decisions are
     being discussed
+
+### CSV ingest benchmark
+
+```bash
+python scripts/benchmarks/csv_ingest.py --table-rows 50000 --node-rows 20000 --edge-fanout 2
+```
+
+Current takeaway:
+
+- the Phase 12 ingest benchmark covers both relational CSV ingest and graph CSV ingest
+- `staging_normalize` is intentionally a table-first benchmark path for permissive
+  staging-table load plus normalize-into-final-table flow
+- measured staged-relational runs now show that this path is operationally reasonable
+  when normalization is needed, but still slower than direct `import_table(...)`
+  across the current `10k` to `10M` sweep
+- graph ingest is benchmarked directly through `import_nodes(...)` and
+  `import_edges(...)`; graph-specific staging should wait until a real graph-derivation
+  workload justifies it
+- the current public ingest APIs now have benchmark evidence against both realistic
+  public baselines and internal SQLite lower bounds
 
 ### Relational benchmark
 

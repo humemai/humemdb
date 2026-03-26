@@ -23,6 +23,7 @@ EdgeBatch = list[tuple[int, int, int, int]]
 
 TABLE_METHODS = (
     "import_table",
+    "staging_normalize",
     "public_executemany",
     "internal_sqlite",
 )
@@ -307,6 +308,19 @@ def _create_users_table(db: Any) -> None:
     )
 
 
+def _create_users_staging_table(db: Any) -> None:
+    db.query(
+        (
+            "CREATE TABLE users_staging ("
+            "id TEXT NOT NULL, "
+            "name TEXT NOT NULL, "
+            "city TEXT NOT NULL, "
+            "active TEXT NOT NULL"
+            ")"
+        )
+    )
+
+
 def _run_table_import_api(
     db: Any,
     table_csv: Path,
@@ -314,6 +328,35 @@ def _run_table_import_api(
     chunk_size: int,
 ) -> int:
     return db.import_table("users", table_csv, chunk_size=chunk_size)
+
+
+def _run_table_staging_normalize(
+    db: Any,
+    table_csv: Path,
+    *,
+    chunk_size: int,
+) -> int:
+    _create_users_staging_table(db)
+    imported_rows = db.import_table(
+        "users_staging",
+        table_csv,
+        chunk_size=chunk_size,
+    )
+    db.query(
+        (
+            "INSERT INTO users (id, name, city, active) "
+            "SELECT "
+            "CAST(id AS INTEGER), "
+            "name, "
+            "city, "
+            "CASE "
+            "WHEN LOWER(active) IN ('true', '1', 'yes') THEN 1 "
+            "ELSE 0 "
+            "END "
+            "FROM users_staging"
+        )
+    )
+    return imported_rows
 
 
 def _run_table_public_executemany(
@@ -594,6 +637,11 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
 
         table_runners: dict[str, Callable[[Any, Path], int]] = {
             "import_table": lambda db, path: _run_table_import_api(
+                db,
+                path,
+                chunk_size=config.chunk_size,
+            ),
+            "staging_normalize": lambda db, path: _run_table_staging_normalize(
                 db,
                 path,
                 chunk_size=config.chunk_size,

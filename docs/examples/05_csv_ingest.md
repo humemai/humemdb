@@ -42,6 +42,9 @@ Schema note:
 - graph imports do not require manual creation of the internal graph storage tables;
   `import_nodes(...)` and `import_edges(...)` ensure that internal graph schema
   themselves before writing rows
+- when raw CSV needs permissive landing plus SQL cleanup before final insertion, the
+  staged relational `staging_normalize` comparison path is documented in the CSV
+  ingest benchmark guide rather than in this main example flow
 
 ## Representative flow
 

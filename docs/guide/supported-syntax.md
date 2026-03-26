@@ -119,6 +119,11 @@ Current read-clause subset:
 - integer-literal `SKIP` or `OFFSET`
 - integer-literal `LIMIT`
 - named parameters such as `$name`
+- row ordering is only part of the public contract when a Cypher query includes an
+  explicit `ORDER BY`; unordered `MATCH ... RETURN ...` results should be treated as
+  unspecified order
+- `SKIP` or `OFFSET` without `ORDER BY` is admitted, but pagination over unordered
+  results is still unspecified and should not be treated as stable paging
 
 Current vector-shaped Cypher subset:
 

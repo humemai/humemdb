@@ -234,11 +234,110 @@ def _cypher_workload_report(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "family": metadata["family"],
                 "shape": metadata["shape"],
                 "selectivity": metadata["selectivity"],
+                "comparison_group": metadata.get("comparison_group"),
+                "order_variant": metadata.get("order_variant"),
+                "cypher_features": metadata.get("cypher_features"),
+                "sqlite_plan_summary": metadata.get("sqlite_plan_summary"),
                 "first_duckdb_scale": first_duckdb_scale,
                 "winners": winners,
             }
         )
     return report
+
+
+def _phase11_cypher_diagnostics(
+    cypher_report: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Summarize graph benchmark evidence for Phase 11 storage/index decisions."""
+
+    property_join_heavy: list[str] = []
+    temp_btree_workloads: list[str] = []
+    direct_type_filter_workloads: list[str] = []
+    node_property_anchor_workloads: list[str] = []
+    edge_property_anchor_workloads: list[str] = []
+    candidate_index_workloads: list[str] = []
+    sort_cost_overhead: list[dict[str, Any]] = []
+    for entry in cypher_report:
+        workload_name = str(entry["workload"])
+        features = entry.get("cypher_features")
+        plan_summary = entry.get("sqlite_plan_summary")
+        if not isinstance(features, dict) or not isinstance(plan_summary, dict):
+            continue
+
+        node_property_joins = int(features.get("node_property_join_count", 0))
+        edge_property_joins = int(features.get("edge_property_join_count", 0))
+        uses_temp_btree = bool(plan_summary.get("uses_temp_btree", False))
+
+        if node_property_joins + edge_property_joins >= 2:
+            property_join_heavy.append(workload_name)
+        if uses_temp_btree:
+            temp_btree_workloads.append(workload_name)
+        if bool(features.get("direct_edge_type_filter", False)):
+            direct_type_filter_workloads.append(workload_name)
+        if bool(features.get("anchors_node_properties", False)):
+            node_property_anchor_workloads.append(workload_name)
+        if bool(features.get("anchors_edge_properties", False)):
+            edge_property_anchor_workloads.append(workload_name)
+        if (node_property_joins + edge_property_joins >= 1) and uses_temp_btree:
+            candidate_index_workloads.append(workload_name)
+    comparison_groups: dict[str, dict[str, dict[str, Any]]] = {}
+    for entry in cypher_report:
+        group = entry.get("comparison_group")
+        variant = entry.get("order_variant")
+        if not isinstance(group, str) or variant not in {"ordered", "unordered"}:
+            continue
+        comparison_groups.setdefault(group, {})[variant] = entry
+
+    for group_name, variants in sorted(comparison_groups.items()):
+        ordered_entry = variants.get("ordered")
+        unordered_entry = variants.get("unordered")
+        if not isinstance(ordered_entry, dict) or not isinstance(unordered_entry, dict):
+            continue
+        ordered_winners = ordered_entry.get("winners")
+        unordered_winners = unordered_entry.get("winners")
+        if not isinstance(ordered_winners, list) or not isinstance(
+            unordered_winners,
+            list,
+        ):
+            continue
+        unordered_by_scale = {
+            item["scale"]: item
+            for item in unordered_winners
+            if isinstance(item, dict) and "scale" in item
+        }
+        matched_deltas: list[float] = []
+        for ordered_item in ordered_winners:
+            if not isinstance(ordered_item, dict):
+                continue
+            scale = ordered_item.get("scale")
+            unordered_item = unordered_by_scale.get(scale)
+            if not isinstance(unordered_item, dict):
+                continue
+            matched_deltas.append(
+                float(ordered_item["sqlite_mean_ms"])
+                - float(unordered_item["sqlite_mean_ms"])
+            )
+        if not matched_deltas:
+            continue
+        sort_cost_overhead.append(
+            {
+                "comparison_group": group_name,
+                "ordered_workload": ordered_entry["workload"],
+                "unordered_workload": unordered_entry["workload"],
+                "avg_sqlite_order_overhead_ms": sum(matched_deltas)
+                / len(matched_deltas),
+            }
+        )
+
+    return {
+        "property_join_heavy_workloads": sorted(property_join_heavy),
+        "temp_btree_workloads": sorted(temp_btree_workloads),
+        "direct_type_filter_workloads": sorted(direct_type_filter_workloads),
+        "node_property_anchor_workloads": sorted(node_property_anchor_workloads),
+        "edge_property_anchor_workloads": sorted(edge_property_anchor_workloads),
+        "candidate_index_workloads": sorted(candidate_index_workloads),
+        "sort_cost_overhead": sort_cost_overhead,
+    }
 
 
 def _vector_workload_report(
@@ -347,6 +446,9 @@ def main() -> None:
     if isinstance(cypher_summary, dict):
         cypher_report = _cypher_workload_report(cypher_summary["runs"])
         report["cypher"] = cypher_report
+        report.setdefault("recommended_runtime", {})[
+            "cypher_phase11_diagnostics"
+        ] = _phase11_cypher_diagnostics(cypher_report)
         _print_section("Cypher routing crossover summary", cypher_report)
 
     vector_summary = summary.get("vector")

@@ -77,6 +77,12 @@ class TestRoutingBenchmarkRegression(unittest.TestCase):
         dataset_counts = getattr(benchmark_module, "_dataset_counts")
         workloads_for = getattr(benchmark_module, "_workloads")
         compile_workload = getattr(benchmark_module, "_compile_workload")
+        cypher_feature_dict = getattr(benchmark_module, "_cypher_feature_dict")
+        apply_graph_index_set = getattr(benchmark_module, "_apply_graph_index_set")
+        sqlite_plan_summary_from_details = getattr(
+            benchmark_module,
+            "_sqlite_plan_summary_from_details",
+        )
 
         dataset = dataset_counts(5_000, 3, 2)
         workloads = workloads_for(dataset)
@@ -111,6 +117,11 @@ class TestRoutingBenchmarkRegression(unittest.TestCase):
             "MATCH (:User {region: $region})-[r:KNOWS]->(:User {active: $active})",
             workloads["social_expand_anonymous_endpoints"].query,
         )
+        self.assertIn("social_type_filtered_region_expand", workloads)
+        self.assertIn(
+            "WHERE r.type = $type AND a.region = $region AND b.active = $active",
+            workloads["social_type_filtered_region_expand"].query,
+        )
         self.assertIn("social_reverse_expand_ordered", workloads)
         self.assertIn(
             "MATCH (b:User)<-[r:KNOWS]-(a:User)",
@@ -119,6 +130,148 @@ class TestRoutingBenchmarkRegression(unittest.TestCase):
         self.assertIn(
             "ORDER BY r.since DESC LIMIT 500",
             workloads["social_reverse_expand_ordered"].query,
+        )
+        self.assertIn("team_membership_role_region", workloads)
+        self.assertIn(
+            "WHERE r.role = $role AND g.region = $region",
+            workloads["team_membership_role_region"].query,
+        )
+        self.assertIn("team_membership_type_band", workloads)
+        self.assertIn(
+            "WHERE r.type = $type AND g.size_band = $size_band AND u.active = $active",
+            workloads["team_membership_type_band"].query,
+        )
+        self.assertIn("author_expand_unordered", workloads)
+        self.assertEqual(
+            workloads["author_expand_ordered"].comparison_group,
+            "author_expand_score_order",
+        )
+        self.assertEqual(
+            workloads["author_expand_unordered"].order_variant,
+            "unordered",
+        )
+        self.assertIn("team_membership_role_region_unordered", workloads)
+        self.assertEqual(
+            workloads["team_membership_role_region"].comparison_group,
+            "team_membership_name_order",
+        )
+        self.assertIn("tagged_weight_domain_unordered", workloads)
+        self.assertEqual(
+            workloads["tagged_weight_domain"].order_variant,
+            "ordered",
+        )
+        self.assertIn("tagged_weight_domain", workloads)
+        self.assertIn(
+            "WHERE r.weight = $weight AND t.domain = $domain",
+            workloads["tagged_weight_domain"].query,
+        )
+
+        distinct_features = cypher_feature_dict(
+            workloads["user_distinct_region_offset"]
+        )
+        edge_property_features = cypher_feature_dict(
+            workloads["team_membership_role_region"]
+        )
+        type_filter_features = cypher_feature_dict(
+            workloads["social_type_filtered_region_expand"]
+        )
+
+        self.assertTrue(bool(distinct_features["has_distinct"]))
+        self.assertTrue(bool(distinct_features["has_order_by"]))
+        self.assertTrue(bool(distinct_features["has_offset"]))
+        self.assertTrue(bool(distinct_features["has_limit"]))
+        self.assertGreaterEqual(
+            int(edge_property_features["edge_property_join_count"]),
+            1,
+        )
+        self.assertFalse(bool(edge_property_features["anchors_edge_properties"]))
+        self.assertTrue(bool(type_filter_features["direct_edge_type_filter"]))
+
+        plan_summary = sqlite_plan_summary_from_details(
+            [
+                (
+                    "SEARCH graph_edge_properties AS r_filter USING INDEX "
+                    "idx_graph_edge_props_lookup "
+                    "(key=? AND value_type=? AND value=? AND edge_id=?)"
+                ),
+                (
+                    "SEARCH graph_edges AS r USING COVERING INDEX "
+                    "idx_graph_edges_to_type_from "
+                    "(to_node_id=? AND type=? AND from_node_id=?)"
+                ),
+                "SEARCH graph_nodes AS g USING INTEGER PRIMARY KEY (rowid=?)",
+                "USE TEMP B-TREE FOR ORDER BY",
+            ]
+        )
+        self.assertEqual(plan_summary["edge_property_search_count"], 1)
+        self.assertEqual(plan_summary["edge_search_count"], 1)
+        self.assertEqual(plan_summary["node_search_count"], 1)
+        self.assertTrue(bool(plan_summary["uses_temp_btree"]))
+        self.assertEqual(len(plan_summary["index_mentions"]), 2)
+
+        with self.assertRaisesRegex(ValueError, "Unknown graph index set"):
+            apply_graph_index_set(None, index_set="not-a-real-index-set")
+
+        unordered_compiled = compile_workload(
+            workloads["team_membership_role_region_unordered"]
+        )
+        author_ordered_compiled = compile_workload(
+            workloads["author_expand_ordered"]
+        )
+        social_mixed_boolean_compiled = compile_workload(
+            workloads["social_mixed_boolean"]
+        )
+        team_membership_ordered_compiled = compile_workload(
+            workloads["team_membership_role_region"]
+        )
+        self.assertNotIn("ORDER BY u.id, r.id, g.id", unordered_compiled.sql)
+        self.assertTrue(unordered_compiled.sql.endswith("LIMIT 250"))
+        self.assertNotIn(
+            "JOIN graph_node_properties AS d_return_2",
+            author_ordered_compiled.sql,
+        )
+        self.assertIn("FROM (SELECT u.id AS __left_id", author_ordered_compiled.sql)
+        self.assertIn("d_order_0", author_ordered_compiled.sql)
+        self.assertIn(
+            "narrowed.__order_value_0 AS \"__value_2\"",
+            author_ordered_compiled.sql,
+        )
+        self.assertIn(
+            "ORDER BY narrowed.__order_0 DESC, narrowed.__order_1 DESC",
+            author_ordered_compiled.sql,
+        )
+        self.assertNotIn(
+            "JOIN graph_nodes AS u ON u.id = narrowed.__left_id",
+            author_ordered_compiled.sql,
+        )
+        self.assertNotIn(
+            "JOIN graph_edges AS edge_rel ON edge_rel.id = narrowed.__edge_id",
+            author_ordered_compiled.sql,
+        )
+        self.assertNotIn(
+            "JOIN graph_nodes AS d ON d.id = narrowed.__right_id",
+            author_ordered_compiled.sql,
+        )
+        self.assertIn(
+            "u_return_0.node_id = narrowed.__left_id",
+            author_ordered_compiled.sql,
+        )
+        self.assertIn(
+            "d_return_1.node_id = narrowed.__right_id",
+            author_ordered_compiled.sql,
+        )
+        self.assertIn(
+            (
+                "FROM (SELECT \"a.id\" AS __left_id, \"r.id\" AS __edge_id, "
+                "\"b.id\" AS __right_id"
+            ),
+            social_mixed_boolean_compiled.sql,
+        )
+        self.assertIn(" UNION ", social_mixed_boolean_compiled.sql)
+        self.assertIn("AS matched", social_mixed_boolean_compiled.sql)
+        self.assertNotIn(
+            "FROM (SELECT u.id AS __left_id",
+            team_membership_ordered_compiled.sql,
         )
 
         for workload in workloads.values():
@@ -424,6 +577,10 @@ class TestRoutingBenchmarkRegression(unittest.TestCase):
             "humemdb_routing_threshold_report_cypher",
         )
         cypher_workload_report = getattr(report_module, "_cypher_workload_report")
+        phase11_cypher_diagnostics = getattr(
+            report_module,
+            "_phase11_cypher_diagnostics",
+        )
 
         report = cypher_workload_report(
             [
@@ -434,6 +591,12 @@ class TestRoutingBenchmarkRegression(unittest.TestCase):
                             "family": "graph",
                             "shape": "node_lookup",
                             "selectivity": "high",
+                            "cypher_features": {
+                                "edge_property_join_count": 0,
+                            },
+                            "sqlite_plan_summary": {
+                                "edge_search_count": 0,
+                            },
                             "sqlite_raw_sql": {"mean_ms": 0.3},
                             "duckdb_raw_sql": {"mean_ms": 10.0},
                         },
@@ -441,6 +604,12 @@ class TestRoutingBenchmarkRegression(unittest.TestCase):
                             "family": "graph",
                             "shape": "fanout",
                             "selectivity": "broad",
+                            "cypher_features": {
+                                "edge_property_join_count": 0,
+                            },
+                            "sqlite_plan_summary": {
+                                "edge_search_count": 1,
+                            },
                             "sqlite_raw_sql": {"mean_ms": 21.0},
                             "duckdb_raw_sql": {"mean_ms": 27.0},
                         },
@@ -453,6 +622,12 @@ class TestRoutingBenchmarkRegression(unittest.TestCase):
                             "family": "graph",
                             "shape": "node_lookup",
                             "selectivity": "high",
+                            "cypher_features": {
+                                "edge_property_join_count": 0,
+                            },
+                            "sqlite_plan_summary": {
+                                "edge_search_count": 0,
+                            },
                             "sqlite_raw_sql": {"mean_ms": 0.5},
                             "duckdb_raw_sql": {"mean_ms": 12.0},
                         },
@@ -460,6 +635,12 @@ class TestRoutingBenchmarkRegression(unittest.TestCase):
                             "family": "graph",
                             "shape": "fanout",
                             "selectivity": "broad",
+                            "cypher_features": {
+                                "edge_property_join_count": 0,
+                            },
+                            "sqlite_plan_summary": {
+                                "edge_search_count": 1,
+                            },
                             "sqlite_raw_sql": {"mean_ms": 215.0},
                             "duckdb_raw_sql": {"mean_ms": 60.0},
                         },
@@ -473,6 +654,153 @@ class TestRoutingBenchmarkRegression(unittest.TestCase):
         self.assertEqual(
             by_workload["broad_social_fanout"]["first_duckdb_scale"],
             1_000_000,
+        )
+        self.assertEqual(
+            by_workload["broad_social_fanout"]["cypher_features"][
+                "edge_property_join_count"
+            ],
+            0,
+        )
+        self.assertEqual(
+            by_workload["broad_social_fanout"]["sqlite_plan_summary"][
+                "edge_search_count"
+            ],
+            1,
+        )
+
+        diagnostics = phase11_cypher_diagnostics(report)
+        self.assertEqual(
+            diagnostics["property_join_heavy_workloads"],
+            [],
+        )
+        self.assertEqual(
+            diagnostics["temp_btree_workloads"],
+            [],
+        )
+        self.assertEqual(diagnostics["sort_cost_overhead"], [])
+
+    def test_phase11_cypher_diagnostics_highlight_property_join_pressure(
+        self,
+    ) -> None:
+        report_module = _load_module(
+            "scripts/benchmarks/routing_threshold_report.py",
+            "humemdb_routing_threshold_report_cypher_phase11",
+        )
+        phase11_cypher_diagnostics = getattr(
+            report_module,
+            "_phase11_cypher_diagnostics",
+        )
+
+        diagnostics = phase11_cypher_diagnostics(
+            [
+                {
+                    "workload": "team_membership_role_region",
+                    "family": "graph",
+                    "shape": "edge_property_plus_endpoint_filter",
+                    "selectivity": "medium",
+                    "comparison_group": "team_membership_name_order",
+                    "order_variant": "ordered",
+                    "cypher_features": {
+                        "node_property_join_count": 1,
+                        "edge_property_join_count": 2,
+                        "anchors_node_properties": False,
+                        "anchors_edge_properties": False,
+                        "direct_edge_type_filter": False,
+                    },
+                    "sqlite_plan_summary": {
+                        "uses_temp_btree": True,
+                    },
+                    "winners": [
+                        {
+                            "scale": 100000,
+                            "sqlite_mean_ms": 1.8,
+                            "duckdb_mean_ms": 9.5,
+                        }
+                    ],
+                },
+                {
+                    "workload": "team_membership_role_region_unordered",
+                    "family": "graph",
+                    "shape": "edge_property_plus_endpoint_filter",
+                    "selectivity": "medium",
+                    "comparison_group": "team_membership_name_order",
+                    "order_variant": "unordered",
+                    "cypher_features": {
+                        "node_property_join_count": 1,
+                        "edge_property_join_count": 2,
+                        "anchors_node_properties": False,
+                        "anchors_edge_properties": False,
+                        "direct_edge_type_filter": False,
+                    },
+                    "sqlite_plan_summary": {
+                        "uses_temp_btree": False,
+                    },
+                    "winners": [
+                        {
+                            "scale": 100000,
+                            "sqlite_mean_ms": 1.1,
+                            "duckdb_mean_ms": 9.0,
+                        }
+                    ],
+                },
+                {
+                    "workload": "social_type_filtered_region_expand",
+                    "family": "graph",
+                    "shape": "endpoint_plus_type_filter",
+                    "selectivity": "medium",
+                    "comparison_group": None,
+                    "order_variant": None,
+                    "cypher_features": {
+                        "node_property_join_count": 1,
+                        "edge_property_join_count": 0,
+                        "anchors_node_properties": True,
+                        "anchors_edge_properties": False,
+                        "direct_edge_type_filter": True,
+                    },
+                    "sqlite_plan_summary": {
+                        "uses_temp_btree": False,
+                    },
+                },
+            ]
+        )
+
+        self.assertEqual(
+            diagnostics["property_join_heavy_workloads"],
+            [
+                "team_membership_role_region",
+                "team_membership_role_region_unordered",
+            ],
+        )
+        self.assertEqual(
+            diagnostics["temp_btree_workloads"],
+            ["team_membership_role_region"],
+        )
+        self.assertEqual(
+            diagnostics["direct_type_filter_workloads"],
+            ["social_type_filtered_region_expand"],
+        )
+        self.assertEqual(
+            diagnostics["node_property_anchor_workloads"],
+            ["social_type_filtered_region_expand"],
+        )
+        self.assertEqual(
+            diagnostics["edge_property_anchor_workloads"],
+            [],
+        )
+        self.assertEqual(
+            diagnostics["candidate_index_workloads"],
+            ["team_membership_role_region"],
+        )
+        self.assertEqual(
+            diagnostics["sort_cost_overhead"],
+            [
+                {
+                    "comparison_group": "team_membership_name_order",
+                    "ordered_workload": "team_membership_role_region",
+                    "unordered_workload": "team_membership_role_region_unordered",
+                    "avg_sqlite_order_overhead_ms": 0.7,
+                }
+            ],
         )
 
     def test_vector_threshold_report_keeps_filtered_crossovers_stable(self) -> None:
@@ -612,7 +940,9 @@ class TestRoutingBenchmarkRegression(unittest.TestCase):
                 }
             else:
                 nodes = int(command[command.index("--nodes") + 1])
+                index_set = command[command.index("--index-set") + 1]
                 payload = {
+                    "index_set": index_set,
                     "workloads": {
                         "anchored_user_lookup": {
                             "family": "graph",
@@ -644,6 +974,7 @@ class TestRoutingBenchmarkRegression(unittest.TestCase):
                 )
                 cypher_summary = run_cypher_sweep(
                     scales=(100_000,),
+                    index_set="phase11-targeted",
                     warmup=0,
                     repetitions=1,
                     output_dir=output_dir,
@@ -662,6 +993,7 @@ class TestRoutingBenchmarkRegression(unittest.TestCase):
                 [run["scale_value"] for run in cypher_summary["runs"]],
                 [100_000],
             )
+            self.assertEqual(cypher_summary["index_set"], "phase11-targeted")
             self.assertEqual(
                 [run["scale_key"] for run in cypher_summary["runs"]],
                 ["nodes"],

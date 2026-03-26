@@ -10,6 +10,10 @@ from unittest import mock
 from tests.support import humemdb_class
 
 
+def sqlite_engine(db):
+    return getattr(db, "_sqlite")
+
+
 class TestCypher(unittest.TestCase):
     def test_graph_storage_enables_sqlite_foreign_key_enforcement(self) -> None:
         HumemDB = humemdb_class()
@@ -18,7 +22,7 @@ class TestCypher(unittest.TestCase):
             sqlite_path = Path(tmpdir) / "humem.sqlite3"
 
             with HumemDB(str(sqlite_path)) as db:
-                pragma_result = db.sqlite.execute("PRAGMA foreign_keys")
+                pragma_result = sqlite_engine(db).execute("PRAGMA foreign_keys")
 
                 self.assertEqual(pragma_result.rows, ((1,),))
 
@@ -388,7 +392,7 @@ class TestCypher(unittest.TestCase):
                 db.query("CREATE (:User {name: 'Alice'})")
 
                 with self.assertRaises(sqlite3.IntegrityError):
-                    db.sqlite.execute(
+                    sqlite_engine(db).execute(
                         (
                             "INSERT INTO graph_edges (type, from_node_id, to_node_id) "
                             "VALUES (?, ?, ?)"
@@ -397,7 +401,7 @@ class TestCypher(unittest.TestCase):
                     )
 
                 with self.assertRaises(sqlite3.IntegrityError):
-                    db.sqlite.execute(
+                    sqlite_engine(db).execute(
                         (
                             "INSERT INTO graph_node_properties "
                             "(node_id, key, value, value_type) VALUES (?, ?, ?, ?)"
@@ -406,7 +410,7 @@ class TestCypher(unittest.TestCase):
                     )
 
                 with self.assertRaises(sqlite3.IntegrityError):
-                    db.sqlite.execute(
+                    sqlite_engine(db).execute(
                         (
                             "INSERT INTO graph_edge_properties "
                             "(edge_id, key, value, value_type) VALUES (?, ?, ?, ?)"
@@ -427,7 +431,7 @@ class TestCypher(unittest.TestCase):
                 )
 
                 with self.assertRaises(sqlite3.IntegrityError):
-                    db.sqlite.execute(
+                    sqlite_engine(db).execute(
                         (
                             "INSERT INTO graph_node_properties "
                             "(node_id, key, value, value_type) VALUES (?, ?, ?, ?)"
@@ -450,7 +454,7 @@ class TestCypher(unittest.TestCase):
                     )
                 )
 
-                before_delete = db.sqlite.execute(
+                before_delete = sqlite_engine(db).execute(
                     (
                         "SELECT "
                         "(SELECT COUNT(*) FROM graph_nodes), "
@@ -461,9 +465,9 @@ class TestCypher(unittest.TestCase):
                 )
                 self.assertEqual(before_delete.rows, ((2, 2, 1, 1),))
 
-                db.sqlite.execute("DELETE FROM graph_nodes WHERE id = ?", (1,))
+                sqlite_engine(db).execute("DELETE FROM graph_nodes WHERE id = ?", (1,))
 
-                after_delete = db.sqlite.execute(
+                after_delete = sqlite_engine(db).execute(
                     (
                         "SELECT "
                         "(SELECT COUNT(*) FROM graph_nodes), "
@@ -486,7 +490,7 @@ class TestCypher(unittest.TestCase):
                     params={"embedding": [1.0, 0.0]},
                 )
                 node_id = created.rows[0][0]
-                vector_id = db.sqlite.execute(
+                vector_id = sqlite_engine(db).execute(
                     (
                         "SELECT vector_id FROM vector_entries "
                         "WHERE target = 'graph_node' AND namespace = '' "
@@ -494,7 +498,7 @@ class TestCypher(unittest.TestCase):
                     ),
                     (node_id,),
                 ).rows[0][0]
-                db.sqlite.execute(
+                sqlite_engine(db).execute(
                     (
                         "INSERT INTO vector_entry_metadata "
                         "(vector_id, key, value, value_type) VALUES (?, ?, ?, ?)"
@@ -502,9 +506,12 @@ class TestCypher(unittest.TestCase):
                     (vector_id, "tag", "alpha", "string"),
                 )
 
-                db.sqlite.execute("DELETE FROM graph_nodes WHERE id = ?", (node_id,))
+                sqlite_engine(db).execute(
+                    "DELETE FROM graph_nodes WHERE id = ?",
+                    (node_id,),
+                )
 
-                remaining = db.sqlite.execute(
+                remaining = sqlite_engine(db).execute(
                     (
                         "SELECT "
                         "(SELECT COUNT(*) FROM vector_entries), "
@@ -533,7 +540,7 @@ class TestCypher(unittest.TestCase):
                 )
 
                 self.assertEqual(deleted.rowcount, 1)
-                graph_counts = db.sqlite.execute(
+                graph_counts = sqlite_engine(db).execute(
                     (
                         "SELECT "
                         "(SELECT COUNT(*) FROM graph_nodes), "
@@ -565,7 +572,7 @@ class TestCypher(unittest.TestCase):
                 )
 
                 self.assertEqual(deleted.rowcount, 1)
-                graph_counts = db.sqlite.execute(
+                graph_counts = sqlite_engine(db).execute(
                     (
                         "SELECT "
                         "(SELECT COUNT(*) FROM graph_nodes), "
@@ -1250,6 +1257,40 @@ class TestCypher(unittest.TestCase):
                 )
 
                 self.assertEqual(result.rows, (("Bob",), ("Dave",)))
+
+    def test_cypher_relationship_match_where_or_does_not_duplicate_overlap_rows(
+        self,
+    ) -> None:
+        HumemDB = humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+
+            with HumemDB(str(sqlite_path)) as db:
+                db.query(
+                    (
+                        "CREATE (a:User {name: 'Alice'})"
+                        "-[r:KNOWS {since: 2022, strength: 2}]->"
+                        "(b:User {name: 'Bob'})"
+                    )
+                )
+                db.query(
+                    (
+                        "CREATE (a:User {name: 'Alice'})"
+                        "-[r:KNOWS {since: 2022, strength: 1}]->"
+                        "(b:User {name: 'Carol'})"
+                    )
+                )
+
+                result = db.query(
+                    (
+                        "MATCH (a:User)-[r:KNOWS]->(b:User) "
+                        "WHERE r.since >= 2022 OR b.name = 'Bob' "
+                        "RETURN b.name, r.id ORDER BY b.name, r.id"
+                    )
+                )
+
+                self.assertEqual(result.rows, (("Bob", 1), ("Carol", 2)))
 
     def test_cypher_match_set_supports_top_level_or_predicate(self) -> None:
         HumemDB = humemdb_class()

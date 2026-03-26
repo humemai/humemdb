@@ -208,8 +208,18 @@ Machine-readable output:
 
 - pass `--output-json path/to/results.json` to persist one run as structured JSON for
   later graph-routing analysis and scale summaries
+- pass `--index-set baseline|phase11-node-prop-covering|phase11-edge-prop-covering|phase11-targeted`
+  to rerun the same graph workload set against one named SQLite graph-index experiment
 - use [`routing_sweep.py`](./routing_sweep.py) to automate multi-scale SQL and Cypher
   runs into one merged summary file
+
+Structured Cypher payloads now also include:
+
+- per-workload `cypher_features` describing lightweight query shape such as property
+  join count, direct type filters, and whether the admitted Cypher includes `ORDER BY`,
+  `LIMIT`, `OFFSET`, or `DISTINCT`
+- per-workload `sqlite_plan_summary` derived from `EXPLAIN QUERY PLAN`, including
+  index mentions and whether SQLite used a temp B-tree
 
 ## [`routing_sweep.py`](./routing_sweep.py)
 
@@ -218,6 +228,8 @@ Purpose:
 - run scale ladders for the SQL and Cypher routing benchmarks
 - persist per-scale JSON outputs plus one merged summary document
 - keep scale-sweep workflow reproducible instead of ad hoc terminal history
+- allow Cypher sweeps to compare named graph-index experiments without hand-editing
+  the benchmark script
 
 Example command:
 
@@ -226,6 +238,7 @@ HUMEMDB_THREADS=8 python scripts/benchmarks/routing_sweep.py \
   --benchmark all \
   --sql-scales 10000,100000,1000000 \
   --cypher-scales 100000,1000000 \
+  --cypher-index-set baseline \
   --warmup 1 \
   --repetitions 3
 ```
@@ -239,6 +252,8 @@ Main outputs:
 - `sql_summary.json`
 - `cypher_summary.json`
 - `routing_sweep_summary.json`
+- when the Cypher benchmark is enabled, the merged summary also records the selected
+  graph `index_set`
 
 ## [`routing_threshold_report.py`](./routing_threshold_report.py)
 
@@ -247,6 +262,9 @@ Purpose:
 - summarize the merged routing sweep JSON into a workload-by-workload crossover report
 - show the first scale where DuckDB wins for each SQL or Cypher workload, if any
 - show the first scale where indexed vector search wins with acceptable recall, if any
+- emit `recommended_runtime.cypher_phase11_diagnostics` for graph-specific follow-up
+  work such as temp-B-tree pressure, property-join-heavy workloads, direct type-filter
+  workloads, and ordered-versus-unordered sort overhead pairs
 
 Example command:
 
@@ -254,6 +272,22 @@ Example command:
 python scripts/benchmarks/routing_threshold_report.py \
   --input scripts/benchmarks/results/routing_sweep/routing_sweep_summary.json \
   --output-json scripts/benchmarks/results/routing_sweep/routing_thresholds.json
+```
+
+Targeted Phase 11 comparison example:
+
+```bash
+python scripts/benchmarks/routing_sweep.py \
+  --benchmark cypher \
+  --cypher-scales 100000,1000000 \
+  --cypher-index-set phase11-targeted \
+  --warmup 0 \
+  --repetitions 1 \
+  --output-dir /tmp/humemdb-phase11-sweep-targeted
+
+python scripts/benchmarks/routing_threshold_report.py \
+  --input /tmp/humemdb-phase11-sweep-targeted/routing_sweep_summary.json \
+  --output-json /tmp/humemdb-phase11-sweep-targeted/report.json
 ```
 
 Current full-sweep inputs:

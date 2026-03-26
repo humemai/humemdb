@@ -10,6 +10,10 @@ from unittest import mock
 from tests.support import humemdb_class, runtime_module
 
 
+def _duckdb_engine(db):
+    return getattr(db, "_duckdb")
+
+
 class TestRoutingRuntime(unittest.TestCase):
     def test_public_api_no_longer_exposes_route_selection(self) -> None:
         HumemDB = humemdb_class()
@@ -63,7 +67,7 @@ class TestRoutingRuntime(unittest.TestCase):
 
             with mock.patch.dict(os.environ, {"HUMEMDB_THREADS": "8"}):
                 with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
-                    threads = db.duckdb.connection.execute(
+                    threads = _duckdb_engine(db).connection.execute(
                         "SELECT current_setting('threads')"
                     ).fetchone()[0]
 
@@ -342,4 +346,3 @@ class TestRoutingRuntime(unittest.TestCase):
 
                 result = db.query("SELECT COUNT(*) FROM users")
                 self.assertEqual(result.rows, ((0,),))
-

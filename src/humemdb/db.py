@@ -274,9 +274,9 @@ class HumemDB:
         sqlite_path_obj = Path(self.sqlite_path)
         sqlite_path_obj.parent.mkdir(parents=True, exist_ok=True)
 
-        self.sqlite = SQLiteEngine(str(sqlite_path_obj))
-        self.duckdb = DuckDBEngine(self.duckdb_path)
-        self.duckdb.attach_sqlite(str(sqlite_path_obj))
+        self._sqlite = SQLiteEngine(str(sqlite_path_obj))
+        self._duckdb = DuckDBEngine(self.duckdb_path)
+        self._duckdb.attach_sqlite(str(sqlite_path_obj))
         logger.debug(
             "HumemDB initialized with sqlite_path=%s duckdb_path=%s",
             self.sqlite_path,
@@ -346,18 +346,18 @@ class HumemDB:
 
         self._ensure_vector_schema()
         normalized_rows, assigned_ids, metadata_rows = _normalize_direct_vector_rows(
-            self.sqlite,
+            self._sqlite,
             rows,
         )
         insert_vector_rows(
-            self.sqlite,
+            self._sqlite,
             normalized_rows,
             target="direct",
             namespace="",
         )
         if metadata_rows:
             upsert_vector_metadata(
-                self.sqlite,
+                self._sqlite,
                 metadata_rows,
                 target="direct",
                 namespace="",
@@ -424,7 +424,7 @@ class HumemDB:
 
         self._ensure_vector_schema()
         upsert_vector_metadata(
-            self.sqlite,
+            self._sqlite,
             rows,
             target="direct",
             namespace="",
@@ -461,7 +461,7 @@ class HumemDB:
             return
 
         logger.debug("Initializing graph schema on first Cypher use")
-        ensure_graph_schema(self.sqlite)
+        ensure_graph_schema(self._sqlite)
         self._graph_schema_ready = True
 
     def _ensure_vector_schema(self) -> None:
@@ -471,7 +471,7 @@ class HumemDB:
             return
 
         logger.debug("Initializing vector schema on first vector use")
-        ensure_vector_schema(self.sqlite)
+        ensure_vector_schema(self._sqlite)
         self._vector_schema_ready = True
 
     def _execute_vector_query(
@@ -568,8 +568,8 @@ class HumemDB:
             plan.text,
             route=plan.route,
             params=plan.params,
-            sqlite=self.sqlite,
-            duckdb=self.duckdb,
+            sqlite=self._sqlite,
+            duckdb=self._duckdb,
             plan=plan.cypher_plan,
         )
         if not plan.workload.is_read_only:
@@ -589,7 +589,7 @@ class HumemDB:
                 plan.workload.kind,
             )
             write_plan = _vectorrt_plan_sql_vector_write(plan.text, plan.params)
-            result = self.sqlite.execute(
+            result = self._sqlite.execute(
                 translated_text,
                 write_plan.normalized_params,
                 query_type=plan.query_type,
@@ -598,7 +598,7 @@ class HumemDB:
                 self._ensure_vector_schema()
                 if write_plan.vector_mode == "insert":
                     resolved_vector_rows = _resolved_sql_vector_rows_after_insert(
-                        self.sqlite,
+                        self._sqlite,
                         write_plan.vector_rows,
                     )
                 else:
@@ -607,7 +607,7 @@ class HumemDB:
                         write_plan.vector_rows,
                     )
                 _write_target_namespaced_vector_rows(
-                    self.sqlite,
+                    self._sqlite,
                     resolved_vector_rows,
                     mode=write_plan.vector_mode or "insert",
                 )
@@ -629,7 +629,7 @@ class HumemDB:
                 "Routing read-only SQL query to DuckDB workload=%s",
                 plan.workload.kind,
             )
-            return self.duckdb.execute(
+            return self._duckdb.execute(
                 translated_text,
                 plan.params,
                 query_type=plan.query_type,
@@ -654,7 +654,7 @@ class HumemDB:
                     batch_plan.vector_rows,
                     strict=True,
                 ):
-                    result = self.sqlite.execute(
+                    result = self._sqlite.execute(
                         plan.translated_text,
                         normalized_params,
                         query_type="sql",
@@ -662,13 +662,13 @@ class HumemDB:
                     total_rowcount += result.rowcount
                     resolved_vector_rows.extend(
                         _resolved_sql_vector_rows_after_insert(
-                            self.sqlite,
+                            self._sqlite,
                             [pending_row],
                         )
                     )
                 self._ensure_vector_schema()
                 _write_target_namespaced_vector_rows(
-                    self.sqlite,
+                    self._sqlite,
                     resolved_vector_rows,
                     mode="insert",
                 )
@@ -681,7 +681,7 @@ class HumemDB:
                     query_type="sql",
                     rowcount=total_rowcount,
                 )
-            result = self.sqlite.executemany(
+            result = self._sqlite.executemany(
                 plan.translated_text,
                 batch_plan.normalized_params_seq,
                 query_type="sql",
@@ -689,7 +689,7 @@ class HumemDB:
             if batch_plan.vector_rows:
                 self._ensure_vector_schema()
                 _write_target_namespaced_vector_rows(
-                    self.sqlite,
+                    self._sqlite,
                     cast(list[_TargetNamespacedVectorRow], batch_plan.vector_rows),
                     mode="insert",
                 )
@@ -775,7 +775,7 @@ class HumemDB:
             return self._vector_matrix_cache
 
         self._ensure_vector_schema()
-        cached = load_vector_matrix(self.sqlite)
+        cached = load_vector_matrix(self._sqlite)
         self._vector_matrix_cache = cached
         self._prime_vector_lookup_caches(cached[0])
         return cached
@@ -875,7 +875,7 @@ class HumemDB:
         self._ensure_vector_schema()
         candidate_keys = tuple(
             load_filtered_vector_target_keys(
-                self.sqlite,
+                self._sqlite,
                 plan.filters,
                 target="direct",
                 namespace="",
@@ -964,7 +964,7 @@ class HumemDB:
     def _has_vector_table(self) -> bool:
         """Return whether the current SQLite database already has vector storage."""
 
-        result = self.sqlite.execute(
+        result = self._sqlite.execute(
             (
                 "SELECT name "
                 "FROM sqlite_master "
@@ -1000,19 +1000,19 @@ class HumemDB:
         """Begin an explicit transaction on the canonical SQLite store."""
 
         logger.debug("Beginning transaction on route=sqlite")
-        self.sqlite.begin()
+        self._sqlite.begin()
 
     def commit(self) -> None:
         """Commit the active transaction on the canonical SQLite store."""
 
         logger.debug("Committing transaction on route=sqlite")
-        self.sqlite.commit()
+        self._sqlite.commit()
 
     def rollback(self) -> None:
         """Roll back the active transaction on the canonical SQLite store."""
 
         logger.debug("Rolling back transaction on route=sqlite")
-        self.sqlite.rollback()
+        self._sqlite.rollback()
 
     def transaction(self) -> _TransactionContext:
         """Return a transaction context manager for the canonical SQLite store.
@@ -1063,8 +1063,8 @@ class HumemDB:
         """
 
         logger.debug("Closing HumemDB connections")
-        self.sqlite.close()
-        self.duckdb.close()
+        self._sqlite.close()
+        self._duckdb.close()
 
     def __enter__(self) -> HumemDB:
         """Return `self` for context-manager usage.
@@ -1090,10 +1090,10 @@ class HumemDB:
         """Resolve a route string into its backing engine object."""
 
         if route == "sqlite":
-            return self.sqlite
+            return self._sqlite
 
         if route == "duckdb":
-            return self.duckdb
+            return self._duckdb
 
         raise ValueError(f"Unsupported route: {route!r}")
 
@@ -1572,7 +1572,7 @@ def _touches_vector_entries(text: str) -> bool:
 
 
 def _validate_public_query_params(
-    query_type: QueryType,
+    query_type: InternalQueryType,
     params: QueryParameters,
 ) -> None:
     """Enforce the current public parameter conventions for each query surface."""

@@ -9,6 +9,10 @@ import numpy as np
 from tests.support import humemdb_class, vector_module
 
 
+def sqlite_engine(db):
+    return getattr(db, "_sqlite")
+
+
 class TestVectorCore(unittest.TestCase):
     def test_vector_blob_roundtrip(self) -> None:
         vector = vector_module()
@@ -112,17 +116,17 @@ class TestVectorCore(unittest.TestCase):
             sqlite_path = Path(tmpdir) / "humem.sqlite3"
 
             with HumemDB(str(sqlite_path)) as db:
-                vector.ensure_vector_schema(db.sqlite)
+                vector.ensure_vector_schema(sqlite_engine(db))
                 with db.transaction():
                     vector.insert_vectors(
-                        db.sqlite,
+                        sqlite_engine(db),
                         [
                             (1, [1.0, 0.0]),
                             (2, [0.0, 1.0]),
                         ],
                     )
 
-                item_ids, matrix = vector.load_vector_matrix(db.sqlite)
+                item_ids, matrix = vector.load_vector_matrix(sqlite_engine(db))
 
         self.assertEqual(
             item_ids.tolist(),

@@ -28,6 +28,51 @@ For the exact supported PostgreSQL-like SQL and Neo4j-like Cypher subset, see
 - Current public Cypher execution stays on SQLite.
 - Cypher writes still go to SQLite.
 
+### Current graph storage layout
+
+HumemDB currently stores the property graph in four SQLite tables: one table for
+nodes, one for edges, and one property table for each side.
+
+```text
+graph_nodes
+  id (PK)
+  label
+      |
+      | 1-to-many via node_id
+      v
+graph_node_properties
+  node_id (PK, FK -> graph_nodes.id)
+  key     (PK)
+  value
+  value_type
+
+
+graph_edges
+  id (PK)
+  type
+  from_node_id (FK -> graph_nodes.id)
+  to_node_id   (FK -> graph_nodes.id)
+      |
+      | 1-to-many via edge_id
+      v
+graph_edge_properties
+  edge_id (PK, FK -> graph_edges.id)
+  key     (PK)
+  value
+  value_type
+```
+
+Practical consequences of this layout:
+
+- one logical node becomes one `graph_nodes` row plus zero or more
+  `graph_node_properties` rows
+- one logical edge becomes one `graph_edges` row plus zero or more
+  `graph_edge_properties` rows
+- properties are stored as typed key/value rows rather than as one JSON blob per node
+  or edge
+- foreign keys keep node and edge relationships consistent, and SQLite indexes cover
+  the common label, endpoint, and property lookup paths
+
 ## `HumemVector v0`
 
 - Vector search is expressed inside HumemSQL or HumemCypher text rather than as a

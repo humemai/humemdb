@@ -1,0 +1,150 @@
+{
+  "config": {
+    "chunk_size": 10000,
+    "edge_fanout": 2,
+    "graph_methods": [
+      "import_api",
+      "public_cypher_query",
+      "internal_sqlite"
+    ],
+    "node_rows": 1000000,
+    "repetitions": 1,
+    "table_methods": [
+      "import_table",
+      "public_executemany",
+      "internal_sqlite"
+    ],
+    "table_rows": 1000000,
+    "warmup": 0
+  },
+  "edge_rows": 2000000,
+  "freshness_timings_ms": {
+    "edge_count_query": {
+      "import_api": {
+        "maximum_ms": 1924.3772067129612,
+        "mean_ms": 1924.3772067129612,
+        "minimum_ms": 1924.3772067129612,
+        "stdev_ms": 0.0
+      },
+      "internal_sqlite": {
+        "maximum_ms": 1967.9126646369696,
+        "mean_ms": 1967.9126646369696,
+        "minimum_ms": 1967.9126646369696,
+        "stdev_ms": 0.0
+      },
+      "public_cypher_query": {
+        "maximum_ms": 1923.4285140410066,
+        "mean_ms": 1923.4285140410066,
+        "minimum_ms": 1923.4285140410066,
+        "stdev_ms": 0.0
+      }
+    },
+    "node_count_query": {
+      "import_api": {
+        "maximum_ms": 493.93640737980604,
+        "mean_ms": 493.93640737980604,
+        "minimum_ms": 493.93640737980604,
+        "stdev_ms": 0.0
+      },
+      "internal_sqlite": {
+        "maximum_ms": 422.186475712806,
+        "mean_ms": 422.186475712806,
+        "minimum_ms": 422.186475712806,
+        "stdev_ms": 0.0
+      },
+      "public_cypher_query": {
+        "maximum_ms": 429.1051556356251,
+        "mean_ms": 429.1051556356251,
+        "minimum_ms": 429.1051556356251,
+        "stdev_ms": 0.0
+      }
+    },
+    "table_count_query": {
+      "import_table": {
+        "maximum_ms": 7.4180723167955875,
+        "mean_ms": 7.4180723167955875,
+        "minimum_ms": 7.4180723167955875,
+        "stdev_ms": 0.0
+      },
+      "internal_sqlite": {
+        "maximum_ms": 7.853272836655378,
+        "mean_ms": 7.853272836655378,
+        "minimum_ms": 7.853272836655378,
+        "stdev_ms": 0.0
+      },
+      "public_executemany": {
+        "maximum_ms": 8.97540571168065,
+        "mean_ms": 8.97540571168065,
+        "minimum_ms": 8.97540571168065,
+        "stdev_ms": 0.0
+      }
+    }
+  },
+  "imported_counts": {
+    "edge_rows": 2000000,
+    "node_rows": 1000000,
+    "table_rows": 1000000
+  },
+  "stage_timings_ms": {
+    "edge_ingest": {
+      "import_api": {
+        "maximum_ms": 25242.788038682193,
+        "mean_ms": 25242.788038682193,
+        "minimum_ms": 25242.788038682193,
+        "stdev_ms": 0.0
+      },
+      "internal_sqlite": {
+        "maximum_ms": 23834.691585041583,
+        "mean_ms": 23834.691585041583,
+        "minimum_ms": 23834.691585041583,
+        "stdev_ms": 0.0
+      },
+      "public_cypher_query": {
+        "maximum_ms": 149294.07410603017,
+        "mean_ms": 149294.07410603017,
+        "minimum_ms": 149294.07410603017,
+        "stdev_ms": 0.0
+      }
+    },
+    "node_ingest": {
+      "import_api": {
+        "maximum_ms": 15092.713179066777,
+        "mean_ms": 15092.713179066777,
+        "minimum_ms": 15092.713179066777,
+        "stdev_ms": 0.0
+      },
+      "internal_sqlite": {
+        "maximum_ms": 14370.081037748605,
+        "mean_ms": 14370.081037748605,
+        "minimum_ms": 14370.081037748605,
+        "stdev_ms": 0.0
+      },
+      "public_cypher_query": {
+        "maximum_ms": 34613.55318687856,
+        "mean_ms": 34613.55318687856,
+        "minimum_ms": 34613.55318687856,
+        "stdev_ms": 0.0
+      }
+    },
+    "table_ingest": {
+      "import_table": {
+        "maximum_ms": 2003.365098964423,
+        "mean_ms": 2003.365098964423,
+        "minimum_ms": 2003.365098964423,
+        "stdev_ms": 0.0
+      },
+      "internal_sqlite": {
+        "maximum_ms": 1913.0234131589532,
+        "mean_ms": 1913.0234131589532,
+        "minimum_ms": 1913.0234131589532,
+        "stdev_ms": 0.0
+      },
+      "public_executemany": {
+        "maximum_ms": 2554.442104883492,
+        "mean_ms": 2554.442104883492,
+        "minimum_ms": 2554.442104883492,
+        "stdev_ms": 0.0
+      }
+    }
+  }
+}

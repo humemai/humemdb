@@ -221,6 +221,115 @@ Structured Cypher payloads now also include:
 - per-workload `sqlite_plan_summary` derived from `EXPLAIN QUERY PLAN`, including
   index mentions and whether SQLite used a temp B-tree
 
+## [`csv_ingest.py`](./csv_ingest.py)
+
+Purpose:
+
+- Measure the first Phase 12 ingestion family built on top of the canonical SQLite
+  write path.
+- Compare the new CSV-backed import APIs against the current manual alternatives the
+  team would realistically use today.
+- Keep a small post-ingest freshness query for each path so the benchmark validates
+  that every comparison method produced the expected relational or graph rows.
+
+Example command:
+
+```bash
+python scripts/benchmarks/csv_ingest.py \
+  --table-rows 50000 \
+  --node-rows 20000 \
+  --edge-fanout 2 \
+  --chunk-size 1000 \
+  --warmup 1 \
+  --repetitions 5
+```
+
+Large-scale sweep pattern:
+
+- run all comparison methods at smaller scales where repeated public Cypher writes are
+  still realistic
+- drop `public_cypher_query` at larger graph scales and compare `import_api` against
+  `internal_sqlite` instead
+- use `--table-methods` and `--graph-methods` to select those subsets explicitly
+
+What it reports:
+
+- relational ingest timings for:
+  - `import_table(...)`
+  - manual CSV parsing plus public `db.executemany(...)`
+  - manual CSV parsing plus internal SQLite `executemany(...)` as a lower bound
+- graph node ingest timings for:
+  - `import_nodes(...)`
+  - repeated public Cypher `db.query(...)` writes inside one transaction
+  - internal SQLite graph-table batch writes as a lower bound
+- graph edge ingest timings for:
+  - `import_edges(...)`
+  - repeated public Cypher `db.query(...)` writes inside one transaction
+  - internal SQLite graph-table batch writes as a lower bound
+- post-ingest count-query timing summaries for each comparison path
+
+Use this benchmark when Phase 12 ingest behavior changes materially, especially when:
+
+- chunk-size defaults are adjusted
+- graph import validation or property coercion rules change
+- staging-table or normalize-into-final-table flows are added later
+- the team needs evidence on whether the new import APIs are actually better than
+  staying with `executemany(...)`, repeated `db.query(...)`, or internal benchmark-only
+  write paths
+
+Method-selection flags:
+
+- `--table-methods import_table,public_executemany,internal_sqlite`
+- `--graph-methods import_api,public_cypher_query,internal_sqlite`
+- for larger graph sweeps, a practical pattern is
+  `--graph-methods import_api,internal_sqlite`
+
+Current sweep snapshot:
+
+- sweep date: `2026-03-26`
+- `warmup=0`, `repetitions=1`
+- `edge_fanout=2`
+- this snapshot reflects the post-optimization full-method sweep through `1M`
+- a larger `10M` run was started separately, but the completed `10k`, `100k`, and
+  `1M` runs were already enough to judge the public ingest path direction
+
+Relational table ingest means:
+
+| Rows | `import_table(...)` | `public_executemany` | `internal_sqlite` | Takeaway |
+| ---: | ------------------: | -------------------: | ----------------: | -------- |
+| `10k` | `46.53 ms` | `64.91 ms` | `53.54 ms` | At this smaller scale, `import_table(...)` already beat both comparison paths in this run. |
+| `100k` | `259.91 ms` | `296.64 ms` | `218.01 ms` | After the hot-path cleanup, `import_table(...)` moved ahead of public `executemany(...)` and stayed within about `1.19x` of the internal lower bound. |
+| `1M` | `2003.37 ms` | `2554.44 ms` | `1913.02 ms` | The same pattern held at `1M`: `import_table(...)` beat the realistic public baseline and stayed within about `1.05x` of internal SQLite batching. |
+
+Graph node ingest means:
+
+| Node rows | `import_api` | `public_cypher_query` | `internal_sqlite` | Takeaway |
+| --------: | -----------: | --------------------: | ----------------: | -------- |
+| `10k` | `467.35 ms` | `403.24 ms` | `440.08 ms` | At this smaller scale, repeated public Cypher writes were still competitive enough to benchmark directly, while `import_nodes(...)` stayed in the same rough range. |
+| `100k` | `1642.19 ms` | `3508.84 ms` | `1740.47 ms` | `import_nodes(...)` stayed effectively at the internal lower bound, while public Cypher writes were about `2.14x` slower. |
+| `1M` | `15092.71 ms` | `34613.55 ms` | `14370.08 ms` | `import_nodes(...)` remained close to the internal lower bound at larger scale, about `1.05x`, while public Cypher writes were about `2.41x` slower. |
+
+Graph edge ingest means:
+
+| Edge rows | `import_api` | `public_cypher_query` | `internal_sqlite` | Takeaway |
+| --------: | -----------: | --------------------: | ----------------: | -------- |
+| `20k` | `264.64 ms` | `1543.90 ms` | `244.70 ms` | Repeated public Cypher edge creation was already about `6.31x` slower than the internal lower bound, while `import_edges(...)` stayed close to it. |
+| `200k` | `2401.76 ms` | `15482.01 ms` | `2233.34 ms` | `import_edges(...)` stayed within about `1.08x` of the internal lower bound, while public Cypher edge writes were about `6.93x` slower. |
+| `2M` | `25242.79 ms` | `149294.07 ms` | `23834.69 ms` | The larger edge run still kept `import_edges(...)` close to internal SQLite, about `1.06x`, while public Cypher edge writes were about `6.26x` slower. |
+
+Current ingest takeaway:
+
+- relational CSV ingest is now in the right place: `import_table(...)` beats the
+  realistic public `executemany(...)` baseline at `100k` and `1M` and stays close to
+  the internal SQLite lower bound
+- graph CSV ingest continues to look directionally right: `import_nodes(...)` and
+  `import_edges(...)` stay close to the internal lower bound at `100k` and `1M`
+- repeated public Cypher graph writes remain a valid baseline, but they scale much
+  worse, especially for edges where they are still more than `6x` slower than the
+  internal lower bound at `100k` and `1M`
+- the completed post-optimization `10k`, `100k`, and `1M` runs are strong enough to
+  treat the first public ingestion family as benchmark-validated for this phase
+
 ## [`routing_sweep.py`](./routing_sweep.py)
 
 Purpose:

@@ -1,0 +1,150 @@
+{
+    "config": {
+        "chunk_size": 25,
+        "edge_fanout": 2,
+        "graph_methods": [
+            "import_api",
+            "public_cypher_query",
+            "internal_sqlite"
+        ],
+        "node_rows": 100,
+        "repetitions": 1,
+        "table_methods": [
+            "import_table",
+            "public_executemany",
+            "internal_sqlite"
+        ],
+        "table_rows": 100,
+        "warmup": 0
+    },
+    "edge_rows": 200,
+    "freshness_timings_ms": {
+        "edge_count_query": {
+            "import_api": {
+                "maximum_ms": 5.500615108758211,
+                "mean_ms": 5.500615108758211,
+                "minimum_ms": 5.500615108758211,
+                "stdev_ms": 0.0
+            },
+            "internal_sqlite": {
+                "maximum_ms": 0.5532209761440754,
+                "mean_ms": 0.5532209761440754,
+                "minimum_ms": 0.5532209761440754,
+                "stdev_ms": 0.0
+            },
+            "public_cypher_query": {
+                "maximum_ms": 0.4042619839310646,
+                "mean_ms": 0.4042619839310646,
+                "minimum_ms": 0.4042619839310646,
+                "stdev_ms": 0.0
+            }
+        },
+        "node_count_query": {
+            "import_api": {
+                "maximum_ms": 48.110147938132286,
+                "mean_ms": 48.110147938132286,
+                "minimum_ms": 48.110147938132286,
+                "stdev_ms": 0.0
+            },
+            "internal_sqlite": {
+                "maximum_ms": 0.4113507457077503,
+                "mean_ms": 0.4113507457077503,
+                "minimum_ms": 0.4113507457077503,
+                "stdev_ms": 0.0
+            },
+            "public_cypher_query": {
+                "maximum_ms": 0.26152096688747406,
+                "mean_ms": 0.26152096688747406,
+                "minimum_ms": 0.26152096688747406,
+                "stdev_ms": 0.0
+            }
+        },
+        "table_count_query": {
+            "import_table": {
+                "maximum_ms": 0.5570324137806892,
+                "mean_ms": 0.5570324137806892,
+                "minimum_ms": 0.5570324137806892,
+                "stdev_ms": 0.0
+            },
+            "internal_sqlite": {
+                "maximum_ms": 0.12871995568275452,
+                "mean_ms": 0.12871995568275452,
+                "minimum_ms": 0.12871995568275452,
+                "stdev_ms": 0.0
+            },
+            "public_executemany": {
+                "maximum_ms": 0.15678023919463158,
+                "mean_ms": 0.15678023919463158,
+                "minimum_ms": 0.15678023919463158,
+                "stdev_ms": 0.0
+            }
+        }
+    },
+    "imported_counts": {
+        "edge_rows": 200,
+        "node_rows": 100,
+        "table_rows": 100
+    },
+    "stage_timings_ms": {
+        "edge_ingest": {
+            "import_api": {
+                "maximum_ms": 28.840315993875265,
+                "mean_ms": 28.840315993875265,
+                "minimum_ms": 28.840315993875265,
+                "stdev_ms": 0.0
+            },
+            "internal_sqlite": {
+                "maximum_ms": 30.607622116804123,
+                "mean_ms": 30.607622116804123,
+                "minimum_ms": 30.607622116804123,
+                "stdev_ms": 0.0
+            },
+            "public_cypher_query": {
+                "maximum_ms": 58.70615504682064,
+                "mean_ms": 58.70615504682064,
+                "minimum_ms": 58.70615504682064,
+                "stdev_ms": 0.0
+            }
+        },
+        "node_ingest": {
+            "import_api": {
+                "maximum_ms": 314.8220758885145,
+                "mean_ms": 314.8220758885145,
+                "minimum_ms": 314.8220758885145,
+                "stdev_ms": 0.0
+            },
+            "internal_sqlite": {
+                "maximum_ms": 309.7225520759821,
+                "mean_ms": 309.7225520759821,
+                "minimum_ms": 309.7225520759821,
+                "stdev_ms": 0.0
+            },
+            "public_cypher_query": {
+                "maximum_ms": 53.38622210547328,
+                "mean_ms": 53.38622210547328,
+                "minimum_ms": 53.38622210547328,
+                "stdev_ms": 0.0
+            }
+        },
+        "table_ingest": {
+            "import_table": {
+                "maximum_ms": 28.051984030753374,
+                "mean_ms": 28.051984030753374,
+                "minimum_ms": 28.051984030753374,
+                "stdev_ms": 0.0
+            },
+            "internal_sqlite": {
+                "maximum_ms": 26.76949091255665,
+                "mean_ms": 26.76949091255665,
+                "minimum_ms": 26.76949091255665,
+                "stdev_ms": 0.0
+            },
+            "public_executemany": {
+                "maximum_ms": 28.198854997754097,
+                "mean_ms": 28.198854997754097,
+                "minimum_ms": 28.198854997754097,
+                "stdev_ms": 0.0
+            }
+        }
+    }
+}

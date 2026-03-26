@@ -1,0 +1,125 @@
+{
+  "config": {
+    "chunk_size": 2000,
+    "edge_fanout": 2,
+    "graph_methods": [
+      "import_api",
+      "internal_sqlite"
+    ],
+    "node_rows": 100000,
+    "repetitions": 1,
+    "table_methods": [
+      "import_table",
+      "public_executemany",
+      "internal_sqlite"
+    ],
+    "table_rows": 100000,
+    "warmup": 0
+  },
+  "edge_rows": 200000,
+  "freshness_timings_ms": {
+    "edge_count_query": {
+      "import_api": {
+        "maximum_ms": 190.34855486825109,
+        "mean_ms": 190.34855486825109,
+        "minimum_ms": 190.34855486825109,
+        "stdev_ms": 0.0
+      },
+      "internal_sqlite": {
+        "maximum_ms": 182.82541586086154,
+        "mean_ms": 182.82541586086154,
+        "minimum_ms": 182.82541586086154,
+        "stdev_ms": 0.0
+      }
+    },
+    "node_count_query": {
+      "import_api": {
+        "maximum_ms": 88.96400593221188,
+        "mean_ms": 88.96400593221188,
+        "minimum_ms": 88.96400593221188,
+        "stdev_ms": 0.0
+      },
+      "internal_sqlite": {
+        "maximum_ms": 43.46050601452589,
+        "mean_ms": 43.46050601452589,
+        "minimum_ms": 43.46050601452589,
+        "stdev_ms": 0.0
+      }
+    },
+    "table_count_query": {
+      "import_table": {
+        "maximum_ms": 1.2452742084860802,
+        "mean_ms": 1.2452742084860802,
+        "minimum_ms": 1.2452742084860802,
+        "stdev_ms": 0.0
+      },
+      "internal_sqlite": {
+        "maximum_ms": 0.7075616158545017,
+        "mean_ms": 0.7075616158545017,
+        "minimum_ms": 0.7075616158545017,
+        "stdev_ms": 0.0
+      },
+      "public_executemany": {
+        "maximum_ms": 0.8809519931674004,
+        "mean_ms": 0.8809519931674004,
+        "minimum_ms": 0.8809519931674004,
+        "stdev_ms": 0.0
+      }
+    }
+  },
+  "imported_counts": {
+    "edge_rows": 200000,
+    "node_rows": 100000,
+    "table_rows": 100000
+  },
+  "stage_timings_ms": {
+    "edge_ingest": {
+      "import_api": {
+        "maximum_ms": 2520.354392938316,
+        "mean_ms": 2520.354392938316,
+        "minimum_ms": 2520.354392938316,
+        "stdev_ms": 0.0
+      },
+      "internal_sqlite": {
+        "maximum_ms": 2362.128332257271,
+        "mean_ms": 2362.128332257271,
+        "minimum_ms": 2362.128332257271,
+        "stdev_ms": 0.0
+      }
+    },
+    "node_ingest": {
+      "import_api": {
+        "maximum_ms": 1718.9781446941197,
+        "mean_ms": 1718.9781446941197,
+        "minimum_ms": 1718.9781446941197,
+        "stdev_ms": 0.0
+      },
+      "internal_sqlite": {
+        "maximum_ms": 1689.2313747666776,
+        "mean_ms": 1689.2313747666776,
+        "minimum_ms": 1689.2313747666776,
+        "stdev_ms": 0.0
+      }
+    },
+    "table_ingest": {
+      "import_table": {
+        "maximum_ms": 432.16799665242434,
+        "mean_ms": 432.16799665242434,
+        "minimum_ms": 432.16799665242434,
+        "stdev_ms": 0.0
+      },
+      "internal_sqlite": {
+        "maximum_ms": 220.5930850468576,
+        "mean_ms": 220.5930850468576,
+        "minimum_ms": 220.5930850468576,
+        "stdev_ms": 0.0
+      },
+      "public_executemany": {
+        "maximum_ms": 298.0124009773135,
+        "mean_ms": 298.0124009773135,
+        "minimum_ms": 298.0124009773135,
+        "stdev_ms": 0.0
+      }
+    }
+  }
+}

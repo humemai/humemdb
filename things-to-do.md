@@ -661,18 +661,18 @@ Phase 11 conclusion:
 
 Add larger ingestion strategies.
 
-Status: planned.
+Status: in progress.
 
-- [ ] Keep SQLite as the canonical ingest target because it remains the source of truth.
+- [x] Keep SQLite as the canonical ingest target because it remains the source of truth.
 - [ ] Add larger file-based and workload-specific ingestion paths only when the simple
   transactional SQLite path is no longer enough.
 - [ ] Consider an optional Parquet materialization path only if later benchmarks show
   that repeated broad analytical reads need a snapshot or cache layer beyond the
   current live DuckDB-over-SQLite path.
-- [ ] Start with CSV-first bulk ingest for table data into SQLite tables.
-- [ ] Add graph CSV ingest into the SQLite-backed graph tables rather than treating the
+- [x] Start with CSV-first bulk ingest for table data into SQLite tables.
+- [x] Add graph CSV ingest into the SQLite-backed graph tables rather than treating the
   initial Cypher frontend as the bulk loader.
-- [ ] Prioritize graph CSV ingest ahead of broader Cypher write-surface growth when
+- [x] Prioritize graph CSV ingest ahead of broader Cypher write-surface growth when
   the goal is operational scale rather than query-language completeness.
 - [ ] Add a real bulk Cypher ingest path later if usage justifies it; the current
   `HumemCypher v0` write surface is transactional but still statement-oriented rather
@@ -690,10 +690,35 @@ Status: planned.
   of assuming one bulk-load path fits everything.
 - [ ] Keep this as an ingestion/runtime phase, not a change to the public query
   surfaces.
-- [ ] Add ingest benchmarks for transactional insert, CSV load, graph CSV ingest, and
+- [x] Add ingest benchmarks for transactional insert, CSV load, graph CSV ingest, and
   staging/normalize flows so larger ingest paths are admitted by evidence.
-- [ ] Measure ingest-to-query freshness and end-to-end load cost, not just raw rows per
+- [x] Measure ingest-to-query freshness and end-to-end load cost, not just raw rows per
   second.
+
+Current Phase 12 progress:
+
+- `HumemDB` now ships a first public ingestion family with `import_table(...)`,
+  `import_nodes(...)`, and `import_edges(...)`, all backed by chunked CSV reads,
+  SQLite transactions, and direct SQLite batch writes on the relational hot path
+- relational CSV import currently supports header-based column inference, explicit
+  column selection, headerless imports with explicit columns, and full rollback when
+  later chunks fail
+- graph CSV ingest now writes directly into the current SQLite-backed graph tables,
+  preserving explicit imported node ids, assigning edge ids transactionally, and
+  reusing the existing graph property encoding rules for string, integer, real, and
+  boolean property values
+- focused public-surface tests now cover relational CSV import, graph node import,
+  graph edge import, and rollback behavior on relational uniqueness failures and graph
+  foreign-key failures
+- the dedicated `csv_ingest.py` comparison benchmark now measures relational ingest,
+  graph node ingest, graph edge ingest, and post-ingest freshness queries against the
+  realistic public baselines plus internal SQLite lower bounds
+- the post-optimization sweep through `1M` rows now shows `import_table(...)` beating
+  public `executemany(...)`, while `import_nodes(...)` and `import_edges(...)` stay
+  close to the internal lower bound and far ahead of repeated public Cypher writes
+- the benchmark README and public examples now cover the new ingestion family, so this
+  phase has moved from “API exists” to “API is benchmark-backed and documented,” even
+  though later staging/normalize and non-CSV ingest work still remains open
 
 ## Phase 13
 
@@ -735,7 +760,7 @@ Status: planned.
 
 Harden the public surfaces for `v0.1.0`.
 
-Status: planned.
+Status: in progress.
 
 This phase is about coherence, correctness, and documentation quality, not preserving
 backward compatibility with every earlier pre-`v0.1.0` API shape.
@@ -772,6 +797,25 @@ backward compatibility with every earlier pre-`v0.1.0` API shape.
   regressions.
 - [ ] Use this phase to close the gap between a useful `v0` implementation and a
   release candidate that is stable enough to publish.
+
+Current Phase 15 progress:
+
+- public examples and docs now use the backend-neutral `HumemDB.open(...)` helper
+  instead of teaching paired SQLite and DuckDB filenames directly
+- public examples no longer label query results with backend-specific names such as
+  `sqlite_result` or `duckdb_result` where the route is an internal concern
+- ordinary app-owned SQLite `CREATE INDEX IF NOT EXISTS ...` DDL now works through
+  `db.query(...)`, so the public examples no longer need to imply that users should
+  reach into backend engine handles to manage workload-specific relational indexes
+- `HumemDB` no longer exposes `sqlite` or `duckdb` as public attributes, and the test
+  suite now locks that public-surface expectation in directly
+- a narrow public convenience constructor and the first import-family public-surface
+  tests are now in place
+- the first public ingestion family is now benchmark-validated through `1M` rows and
+  documented with a dedicated public example, which removes a major release-hardening
+  gap for operational data loading
+- broader release-hardening checks, benchmark gates, and final SQL/Cypher/vector
+  coherence review still remain open
 
 ## Phase 16
 
@@ -820,3 +864,32 @@ Status: planned.
   core runtime performance.
 - [ ] Keep this phase focused on the first coherent NL UX, not on perfect automation
   or a fully general planner.
+
+## Phase 18
+
+Revisit graph storage architecture if later evidence justifies it.
+
+Status: planned.
+
+This phase should only open after `v0.1.0` if later data-model or workload evidence
+shows that the current SQLite-backed property-graph table design has become the real
+constraint rather than the current implementation around it.
+
+- [ ] Do not treat this as pre-`v0.1.0` scope creep; keep the current graph storage
+  model through release hardening unless benchmark or correctness evidence forces a
+  change earlier.
+- [ ] Revisit the graph storage layout only if Phase 13 broadens graph property values,
+  Phase 12 follow-on ingest work still leaves graph loading too expensive, or later
+  workloads show that the current table model has become a product bottleneck.
+- [ ] Start by checking whether staged bulk-load flows, normalize-into-final-table
+  paths, or index-lifecycle changes solve the problem before replacing the logical
+  graph storage model outright.
+- [ ] If a deeper storage redesign is needed, compare it explicitly against the current
+  `graph_nodes` plus `graph_edges` plus property-table layout on ingest cost, query
+  cost, operational complexity, and migration risk.
+- [ ] Keep SQLite as the canonical persisted store unless the broader HumemDB storage
+  strategy itself changes; this phase is about graph layout and write/read strategy,
+  not about replacing the embedded storage foundation casually.
+- [ ] Treat broader property payloads, operational graph writes such as `MERGE`, and
+  post-release ingest workloads as the main triggers for deciding whether the current
+  EAV-style property-table model is still the right tradeoff.

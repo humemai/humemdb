@@ -1,0 +1,74 @@
+{
+  "config": {
+    "chunk_size": 10000,
+    "edge_fanout": 2,
+    "graph_methods": [
+      "public_cypher_query"
+    ],
+    "node_rows": 1000000,
+    "repetitions": 1,
+    "table_methods": [
+      "internal_sqlite"
+    ],
+    "table_rows": 1000000,
+    "warmup": 0
+  },
+  "edge_rows": 2000000,
+  "freshness_timings_ms": {
+    "edge_count_query": {
+      "public_cypher_query": {
+        "maximum_ms": 1987.2299069538713,
+        "mean_ms": 1987.2299069538713,
+        "minimum_ms": 1987.2299069538713,
+        "stdev_ms": 0.0
+      }
+    },
+    "node_count_query": {
+      "public_cypher_query": {
+        "maximum_ms": 479.95216492563486,
+        "mean_ms": 479.95216492563486,
+        "minimum_ms": 479.95216492563486,
+        "stdev_ms": 0.0
+      }
+    },
+    "table_count_query": {
+      "internal_sqlite": {
+        "maximum_ms": 7.542689796537161,
+        "mean_ms": 7.542689796537161,
+        "minimum_ms": 7.542689796537161,
+        "stdev_ms": 0.0
+      }
+    }
+  },
+  "imported_counts": {
+    "edge_rows": 2000000,
+    "node_rows": 1000000,
+    "table_rows": 1000000
+  },
+  "stage_timings_ms": {
+    "edge_ingest": {
+      "public_cypher_query": {
+        "maximum_ms": 161870.5666102469,
+        "mean_ms": 161870.5666102469,
+        "minimum_ms": 161870.5666102469,
+        "stdev_ms": 0.0
+      }
+    },
+    "node_ingest": {
+      "public_cypher_query": {
+        "maximum_ms": 36149.118572007865,
+        "mean_ms": 36149.118572007865,
+        "minimum_ms": 36149.118572007865,
+        "stdev_ms": 0.0
+      }
+    },
+    "table_ingest": {
+      "internal_sqlite": {
+        "maximum_ms": 2001.8644561059773,
+        "mean_ms": 2001.8644561059773,
+        "minimum_ms": 2001.8644561059773,
+        "stdev_ms": 0.0
+      }
+    }
+  }
+}

@@ -11,7 +11,7 @@ main public style to design around.
 ```python
 from humemdb import HumemDB
 
-with HumemDB("app.sqlite3", "analytics.duckdb") as db:
+with HumemDB.open("app") as db:
     db.query("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
 
     with db.transaction():
@@ -38,7 +38,7 @@ helper.
 ```python
 from humemdb import HumemDB
 
-with HumemDB("graph.sqlite3", "graph.duckdb") as db:
+with HumemDB.open("graph") as db:
     db.query("CREATE (a:User {name: 'Alice'})-[:KNOWS]->(b:User {name: 'Bob'})")
 
     result = db.query("MATCH (a:User)-[:KNOWS]->(b:User) RETURN a.name, b.name")

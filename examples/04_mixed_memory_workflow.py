@@ -1749,10 +1749,8 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
-        sqlite_path = root / "memory.sqlite3"
-        duckdb_path = root / "memory.duckdb"
 
-        with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+        with HumemDB.open(root / "memory") as db:
             create_relational_tables(db)
             table_counts = populate_relational_rows(db)
             report("loaded twelve relational tables with 128-dimensional embeddings")

@@ -47,7 +47,7 @@ but they are not the main reason the direct and graph-owned vector lookups stay 
 ## Representative flow
 
 ```python
-with HumemDB("memory.sqlite3", "memory.duckdb") as db:
+with HumemDB.open("memory") as db:
     create_relational_tables(db)
     populate_relational_rows(db)
     populate_graph(db)

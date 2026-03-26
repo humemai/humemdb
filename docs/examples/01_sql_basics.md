@@ -41,7 +41,7 @@ that is big enough to surface realistic join, ranking, and reporting shapes.
 ## Representative flow
 
 ```python
-with HumemDB("app.sqlite3", "analytics.duckdb") as db:
+with HumemDB.open("app") as db:
     db.query("CREATE TABLE users (...)")
     db.query("CREATE TABLE products (...)")
     db.query("CREATE TABLE orders (...)")

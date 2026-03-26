@@ -2354,6 +2354,27 @@ class HumemDBTest(unittest.TestCase):
                 self.assertFalse(hasattr(db, "sqlite"))
                 self.assertFalse(hasattr(db, "duckdb"))
 
+    def test_humemdb_open_derives_companion_file_paths(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_path = Path(tmpdir) / "graph"
+
+            with HumemDB.open(base_path) as db:
+                db.query(
+                    "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
+                )
+                db.query(
+                    "INSERT INTO users (name) VALUES ($name)",
+                    params={"name": "Alice"},
+                )
+
+                result = db.query("SELECT name FROM users")
+
+                self.assertEqual(db.sqlite_path, str(base_path.with_suffix(".sqlite3")))
+                self.assertEqual(db.duckdb_path, str(base_path.with_suffix(".duckdb")))
+                self.assertEqual(result.rows, (("Alice",),))
+
     def test_duckdb_rejects_data_modifying_cte_queries(self) -> None:
         HumemDB = _humemdb_class()
         db_module = importlib.import_module("humemdb.db")

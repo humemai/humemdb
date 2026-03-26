@@ -89,7 +89,7 @@ def build_direct_rows() -> list[dict[str, object]]:
     return rows
 
 
-def run_direct_workflow(db: HumemDB) -> tuple[object, ...]:
+def run_direct_workflow(db) -> tuple[object, ...]:
     inserted_ids = db.insert_vectors(build_direct_rows())
     db.set_vector_metadata(
         [
@@ -143,7 +143,7 @@ def run_direct_workflow(db: HumemDB) -> tuple[object, ...]:
     )
 
 
-def run_sql_workflow(db: HumemDB) -> tuple[object, ...]:
+def run_sql_workflow(db) -> tuple[object, ...]:
     with db.transaction():
         db.query(
             (
@@ -251,7 +251,7 @@ def run_sql_workflow(db: HumemDB) -> tuple[object, ...]:
     return before_update, after_update, vector_guides, counts
 
 
-def run_graph_workflow(db: HumemDB) -> tuple[object, ...]:
+def run_graph_workflow(db) -> tuple[object, ...]:
     profile_ids: dict[str, int] = {}
     with db.transaction():
         for name, cohort, role, embedding in (
@@ -353,11 +353,9 @@ def run_graph_workflow(db: HumemDB) -> tuple[object, ...]:
 def main() -> None:
     report = _make_timer()
     with tempfile.TemporaryDirectory() as tmpdir:
-        direct_sqlite_path = Path(tmpdir) / "vectors-direct.sqlite3"
-        row_sqlite_path = Path(tmpdir) / "vectors-rows.sqlite3"
-        graph_sqlite_path = Path(tmpdir) / "vectors-graph.sqlite3"
+        root = Path(tmpdir)
 
-        with HumemDB(str(direct_sqlite_path)) as db:
+        with HumemDB.open(root / "vectors-direct") as db:
             (
                 inserted_ids,
                 top_matches,
@@ -368,7 +366,7 @@ def main() -> None:
             ) = run_direct_workflow(db)
             report("ran direct-vector workflow")
 
-        with HumemDB(str(row_sqlite_path)) as db:
+        with HumemDB.open(root / "vectors-rows") as db:
             (
                 sql_before_update,
                 sql_after_update,
@@ -377,7 +375,7 @@ def main() -> None:
             ) = run_sql_workflow(db)
             report("ran SQL-owned vector workflow")
 
-        with HumemDB(str(graph_sqlite_path)) as db:
+        with HumemDB.open(root / "vectors-graph") as db:
             (
                 profile_ids,
                 cypher_initial,

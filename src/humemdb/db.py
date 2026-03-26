@@ -245,8 +245,8 @@ class HumemDB:
 
     def __init__(
         self,
-        sqlite_path: str,
-        duckdb_path: str | None = None,
+        sqlite_path: str | Path,
+        duckdb_path: str | Path | None = None,
         *,
         preload_vectors: bool = False,
     ) -> None:
@@ -260,8 +260,8 @@ class HumemDB:
                 vector storage already exists.
         """
 
-        self.sqlite_path = sqlite_path
-        self.duckdb_path = duckdb_path
+        self.sqlite_path = str(sqlite_path)
+        self.duckdb_path = None if duckdb_path is None else str(duckdb_path)
         self._graph_schema_ready = False
         self._vector_schema_ready = False
         self._vector_matrix_cache: tuple[Any, Any] | None = None
@@ -284,6 +284,32 @@ class HumemDB:
         )
         if preload_vectors:
             self.preload_vectors()
+
+    @classmethod
+    def open(
+        cls,
+        base_path: str | Path,
+        *,
+        preload_vectors: bool = False,
+    ) -> HumemDB:
+        """Open HumemDB using one public-facing base path.
+
+        This derives companion storage files as `<base>.sqlite3` and
+        `<base>.duckdb`, which keeps public examples from teaching backend-specific
+        filenames directly.
+
+        Args:
+            base_path: Base path stem for the paired on-disk database files.
+            preload_vectors: Whether to warm the exact vector cache immediately when
+                vector storage already exists.
+        """
+
+        base = Path(base_path)
+        return cls(
+            sqlite_path=base.with_suffix(".sqlite3"),
+            duckdb_path=base.with_suffix(".duckdb"),
+            preload_vectors=preload_vectors,
+        )
 
     def query(
         self,

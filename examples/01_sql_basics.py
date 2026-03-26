@@ -105,10 +105,8 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
-        sqlite_path = root / "app.sqlite3"
-        duckdb_path = root / "analytics.duckdb"
 
-        with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+        with HumemDB.open(root / "app") as db:
             with db.transaction():
                 db.query(
                     (
@@ -238,7 +236,7 @@ def main() -> None:
                 )
             report("created schema and inserted rows")
 
-            sqlite_result = db.query(
+            filtered_users_result = db.query(
                 (
                     "SELECT u.id, u.name, u.segment, u.city "
                     "FROM users u "
@@ -251,8 +249,8 @@ def main() -> None:
                     "LIMIT 5"
                 )
             )
-            report("ran SQLite selective read")
-            duckdb_result = db.query(
+            report("ran selective user read")
+            segment_revenue_result = db.query(
                 (
                     "WITH paid_items AS ("
                     "  SELECT "
@@ -287,8 +285,8 @@ def main() -> None:
                     "LIMIT 8"
                 )
             )
-            report("ran DuckDB analytical read")
-            sqlite_join_result = db.query(
+            report("ran analytical revenue read")
+            top_order_items_result = db.query(
                 (
                     "SELECT "
                     "  u.name, "
@@ -304,7 +302,7 @@ def main() -> None:
                     "LIMIT 5"
                 )
             )
-            report("ran SQLite join read")
+            report("ran joined order-item read")
             product_mix_result = db.query(
                 (
                     "WITH category_totals AS ("
@@ -322,7 +320,7 @@ def main() -> None:
                 )
             )
             report("ran UNION ALL rollup")
-            sqlite_counts = db.query(
+            row_count_result = db.query(
                 (
                     "SELECT "
                     "  COUNT(*) AS user_count, "
@@ -333,38 +331,38 @@ def main() -> None:
             )
             report("ran row-count summary")
 
-        assert sqlite_result.columns == ("id", "name", "segment", "city")
-        assert sqlite_result.rows == (
+        assert filtered_users_result.columns == ("id", "name", "segment", "city")
+        assert filtered_users_result.rows == (
             (1, "User 0001", "enterprise", "Berlin"),
             (7, "User 0007", "research", "Berlin"),
             (13, "User 0013", "enterprise", "Berlin"),
             (19, "User 0019", "research", "Berlin"),
             (25, "User 0025", "enterprise", "Berlin"),
         )
-        assert duckdb_result.columns == (
+        assert segment_revenue_result.columns == (
             "segment",
             "country",
             "order_day",
             "gross_cents",
             "revenue_rank",
         )
-        assert sqlite_counts.rows == ((
+        assert row_count_result.rows == ((
             USER_COUNT,
             USER_COUNT * ORDER_COUNT_PER_USER,
             USER_COUNT * ORDER_COUNT_PER_USER * ITEMS_PER_ORDER,
         ),)
-        assert len(duckdb_result.rows) == 8
-        assert all(row[4] >= 1 for row in duckdb_result.rows)
-        assert duckdb_result.rows[0][3] >= duckdb_result.rows[1][3]
-        assert len(sqlite_join_result.rows) == 5
-        assert sqlite_join_result.rows[0][3] >= sqlite_join_result.rows[-1][3]
+        assert len(segment_revenue_result.rows) == 8
+        assert all(row[4] >= 1 for row in segment_revenue_result.rows)
+        assert segment_revenue_result.rows[0][3] >= segment_revenue_result.rows[1][3]
+        assert len(top_order_items_result.rows) == 5
+        assert top_order_items_result.rows[0][3] >= top_order_items_result.rows[-1][3]
         assert product_mix_result.rows[0][0] == "all"
         assert product_mix_result.rows[0][1] > product_mix_result.rows[1][1]
 
-        print("SQLite counts:", sqlite_counts.rows)
-        print("SQLite filtered users:", sqlite_result.rows)
-        print("SQLite joined order items:", sqlite_join_result.rows)
-        print("DuckDB daily segment revenue:", duckdb_result.rows)
+        print("Row counts:", row_count_result.rows)
+        print("Filtered users:", filtered_users_result.rows)
+        print("Top joined order items:", top_order_items_result.rows)
+        print("Daily segment revenue:", segment_revenue_result.rows)
         print("Unioned product mix:", product_mix_result.rows)
 
 

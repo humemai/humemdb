@@ -586,38 +586,76 @@ Current regression guardrails:
 
 Re-evaluate the graph-table representation as its own architecture phase.
 
-Status: planned.
+Status: completed.
 
-- [ ] Treat this as a distinct architecture decision after Phase 9 grammar growth and
+- [x] Treat this as a distinct architecture decision after Phase 9 grammar growth and
   Phase 10 routing evidence, not as overflow work inside either of those phases.
-- [ ] Revisit the current graph-to-table representation with dedicated benchmark
+- [x] Revisit the current graph-to-table representation with dedicated benchmark
   evidence when graph runtime behavior changes materially: measure whether the SQLite
   graph tables plus DuckDB-over-SQLite analytics path are still solid enough before
   changing routing claims or pursuing deeper graph-storage redesign.
-- [ ] Separate three questions clearly: whether the current write path is correct
+- [x] Separate three questions clearly: whether the current write path is correct
   enough, whether the current storage model is performant enough, and whether a real
   structural redesign is justified.
-- [ ] Keep the default outcome conservative unless evidence says otherwise: prefer to
+- [x] Keep the default outcome conservative unless evidence says otherwise: prefer to
   keep the current representation plus targeted hardening if benchmarks still support
   it.
-- [ ] Measure the current graph-table path more directly on the access patterns that
+- [x] Measure the current graph-table path more directly on the access patterns that
   are most likely to become product constraints: multi-edge traversals, endpoint-plus-
   type filters, endpoint-plus-property filters, and broader ordered fanout reads.
-- [ ] Revisit whether the current default SQLite graph indexes are still the right
+- [x] Revisit whether the current default SQLite graph indexes are still the right
   minimal set once the broader benchmark matrix is rerun, and add narrowly targeted
   graph indexes before considering a larger storage redesign.
-- [ ] Check whether graph property-table joins, rather than the node/edge base tables
+- [x] Check whether graph property-table joins, rather than the node/edge base tables
   themselves, have become the main graph-read bottleneck before changing the storage
   model.
-- [ ] Evaluate whether a more DuckDB-friendly graph-read shape or lightweight
+- [x] Evaluate whether a more DuckDB-friendly graph-read shape or lightweight
   analytical projection is justified for broader graph scans, but keep fresh
   DuckDB-over-SQLite reads as the default analytical path unless measured evidence
   says otherwise.
-- [ ] Only pursue graph-storage redesign in this phase if benchmark evidence shows the
+- [x] Only pursue graph-storage redesign in this phase if benchmark evidence shows the
   current SQLite-backed graph tables have become a meaningful product constraint.
-- [ ] If redesign work is justified, compare it against the current graph-table path on
+- [x] If redesign work is justified, compare it against the current graph-table path on
   correctness cost, routing implications, migration cost, and benchmark deltas rather
   than treating a new storage model as automatically better.
+
+Current Phase 11 progress:
+
+- current benchmark/report plumbing now captures graph workload families, lightweight
+  plan-shape metadata, and SQLite plan summaries so storage and index questions are
+  driven by current evidence rather than ad hoc inspection
+- unordered `MATCH` no longer carries implicit stable ordering; explicit `ORDER BY`
+  is the only ordering contract and the benchmark suite now measures ordered versus
+  unordered cost separately
+- ordered relationship reads now reuse property joins across projection and ordering,
+  and descending single-key top-k relationship reads use a narrowed projection fast
+  path when the measured plan shape justifies it
+- disjunctive relationship `MATCH` queries now union matched graph identities before
+  the outer projection and ordering step, which materially reduces the
+  `social_mixed_boolean` workload without changing row semantics
+- split Phase 11 index experiments show the node-property covering index is the
+  better narrow candidate, but the broader `phase11-targeted` rollout is still not a
+  default winner after the saved 100k and 1M routing sweeps; the current minimal
+  graph index set still stands unless a narrower ordered-workload win emerges
+- [x] ordinary app-owned SQLite `CREATE INDEX IF NOT EXISTS ...` DDL now works
+  through `db.query(...)`, so public examples no longer need to reach into
+  `db.sqlite` just to add workload-specific relational indexes
+- the remaining active bottlenecks are still temp-B-tree-heavy ordered traversals and
+  the question of whether narrowly targeted graph indexes are justified before any
+  storage redesign work
+
+Phase 11 conclusion:
+
+- write-path question: this phase did not uncover evidence that the current SQLite
+  graph write path is incorrect enough to force a storage-model change; the work here
+  stayed focused on read-path planning and benchmark evidence
+- storage-model question: the current SQLite-backed graph tables are still performant
+  enough for the admitted public graph contract once the compiler avoids implicit
+  stable ordering, reuses property joins, and narrows the highest-value ordered
+  top-k relationship reads before full projection
+- redesign question: a structural graph-storage redesign is not justified by the
+  current benchmark matrix, so the redesign-comparison branch closes here as not
+  triggered rather than rolling speculative architecture work into Phase 11
 
 ## Phase 12
 

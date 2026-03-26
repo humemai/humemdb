@@ -1897,12 +1897,14 @@ def _compile_match_plan(
     return _compile_match_relationship_plan(plan)
 
 
-def _compile_match_node_plan(plan: MatchNodePlan) -> _CompiledMatchQuery:
+def _compile_match_node_plan(
+    plan: MatchNodePlan,
+) -> _CompiledMatchQuery:
     """Compile a node MATCH plan into relational SQL over graph tables.
 
     This compiler tries to anchor the scan from the most selective property equality
     constraint when possible, then layers on remaining property joins, projection,
-    ordering, and an optional LIMIT.
+    explicit ordering, and an optional LIMIT.
     """
 
     alias = plan.node.alias
@@ -1916,6 +1918,7 @@ def _compile_match_node_plan(plan: MatchNodePlan) -> _CompiledMatchQuery:
     order_params: list[object] = []
     where_params: list[object] = []
     returns: list[_CompiledReturnItem] = []
+    property_join_aliases: dict[tuple[str, str, str], str] = {}
 
     property_constraints = _node_property_constraints(plan.node, plan.predicates)
     anchor_constraint = _pick_anchor_constraint(property_constraints)
@@ -1948,6 +1951,7 @@ def _compile_match_node_plan(plan: MatchNodePlan) -> _CompiledMatchQuery:
         params=join_params,
         select_parts=select_parts,
         returns=returns,
+        property_join_aliases=property_join_aliases,
     )
     _compile_order_items(
         alias_map={plan.node.alias: alias},
@@ -1956,6 +1960,7 @@ def _compile_match_node_plan(plan: MatchNodePlan) -> _CompiledMatchQuery:
         joins=order_joins,
         params=order_params,
         order_parts=order_parts,
+        property_join_aliases=property_join_aliases,
     )
 
     select_keyword = "SELECT DISTINCT" if plan.distinct else "SELECT"
@@ -1971,8 +1976,6 @@ def _compile_match_node_plan(plan: MatchNodePlan) -> _CompiledMatchQuery:
             str(index) for index in range(1, len(select_parts) + 1)
         )
         sql.append(f"ORDER BY {order_by_projection}")
-    else:
-        sql.append(f"ORDER BY {alias}.id")
     if plan.limit is not None:
         sql.append(f"LIMIT {plan.limit}")
     if plan.skip is not None:
@@ -1994,7 +1997,7 @@ def _compile_match_relationship_plan(
 
     The compiler chooses an anchor side based on available property constraints, joins
     through the edge table in the requested direction, and then applies projection,
-    ordering, and an optional LIMIT.
+    explicit ordering, and an optional LIMIT.
     """
 
     left_alias = plan.left.alias
@@ -2011,6 +2014,35 @@ def _compile_match_relationship_plan(
     order_params: list[object] = []
     where_params: list[object] = []
     returns: list[_CompiledReturnItem] = []
+    property_join_aliases: dict[tuple[str, str, str], str] = {}
+    alias_map = {
+        plan.left.alias: left_alias,
+        plan.right.alias: right_alias,
+        **(
+            {plan.relationship.alias: edge_alias}
+            if plan.relationship.alias is not None
+            else {}
+        ),
+    }
+    alias_kinds: dict[str, Literal["node", "relationship"]] = {
+        plan.left.alias: "node",
+        plan.right.alias: "node",
+        **(
+            {plan.relationship.alias: "relationship"}
+            if plan.relationship.alias is not None
+            else {}
+        ),
+    }
+
+    if _can_use_relationship_disjunction_identity_union(plan):
+        return _compile_match_relationship_disjunction_plan(
+            plan,
+            alias_map=alias_map,
+            alias_kinds=alias_kinds,
+            left_alias=left_alias,
+            edge_alias=edge_alias,
+            right_alias=right_alias,
+        )
 
     left_constraints = _node_property_constraints(plan.left, plan.predicates)
     right_constraints = _node_property_constraints(plan.right, plan.predicates)
@@ -2080,24 +2112,8 @@ def _compile_match_relationship_plan(
         where_params.extend(relationship_type_names)
 
     _compile_predicates(
-        alias_map={
-            plan.left.alias: left_alias,
-            plan.right.alias: right_alias,
-            **(
-                {plan.relationship.alias: edge_alias}
-                if plan.relationship.alias is not None
-                else {}
-            ),
-        },
-        alias_kinds={
-            plan.left.alias: "node",
-            plan.right.alias: "node",
-            **(
-                {plan.relationship.alias: "relationship"}
-                if plan.relationship.alias is not None
-                else {}
-            ),
-        },
+        alias_map=alias_map,
+        alias_kinds=alias_kinds,
         predicates=plan.predicates,
         where_parts=where_parts,
         where_params=where_params,
@@ -2126,54 +2142,162 @@ def _compile_match_relationship_plan(
             id_column="edge_id",
         )
     )
+    order_bindings = _compile_order_bindings(
+        alias_map=alias_map,
+        alias_kinds=alias_kinds,
+        order_to_compile=plan.order_by,
+        joins=order_joins,
+        params=order_params,
+        property_join_aliases=property_join_aliases,
+    )
+    order_parts.extend(
+        f"{expression} {direction}" for expression, direction in order_bindings
+    )
+
+    if _can_use_order_limit_projection_fastpath(plan, order_bindings):
+        return_aliases = {item.alias for item in plan.returns}
+        narrowed_select_parts: list[str] = []
+        outer_alias_id_expressions: dict[str, str] = {}
+        outer_projected_properties: dict[tuple[str, str], tuple[str, str]] = {}
+        if plan.left.alias in return_aliases:
+            narrowed_select_parts.append(f"{left_alias}.id AS __left_id")
+            outer_alias_id_expressions[plan.left.alias] = "narrowed.__left_id"
+        if (
+            plan.relationship.alias is not None
+            and plan.relationship.alias in return_aliases
+        ):
+            narrowed_select_parts.append(f"{edge_alias}.id AS __edge_id")
+            outer_alias_id_expressions[plan.relationship.alias] = "narrowed.__edge_id"
+        if plan.right.alias in return_aliases:
+            narrowed_select_parts.append(f"{right_alias}.id AS __right_id")
+            outer_alias_id_expressions[plan.right.alias] = "narrowed.__right_id"
+        narrowed_select_parts.extend(
+            f"{expression} AS __order_{index}"
+            for index, (expression, _) in enumerate(order_bindings)
+        )
+        order_item = plan.order_by[0]
+        if not _is_raw_return_field(
+            alias_kind=alias_kinds[order_item.alias],
+            field=order_item.field,
+        ):
+            order_property_alias = property_join_aliases.get(
+                (
+                    alias_map[order_item.alias],
+                    alias_kinds[order_item.alias],
+                    order_item.field,
+                )
+            )
+            if order_property_alias is not None:
+                narrowed_select_parts.extend(
+                    [
+                        f"{order_property_alias}.value AS __order_value_0",
+                        (
+                            f"{order_property_alias}.value_type "
+                            "AS __order_value_type_0"
+                        ),
+                    ]
+                )
+                outer_projected_properties[(order_item.alias, order_item.field)] = (
+                    "narrowed.__order_value_0",
+                    "narrowed.__order_value_type_0",
+                )
+        narrowed_sql = [
+            f"SELECT {', '.join(narrowed_select_parts)}",
+            from_clause,
+        ]
+        narrowed_sql.extend(joins)
+        narrowed_sql.extend(order_joins)
+        narrowed_sql.append(f"WHERE {' AND '.join(where_parts)}")
+        narrowed_sql.append(f"ORDER BY {', '.join(order_parts)}")
+        assert plan.limit is not None
+        narrowed_sql.append(f"LIMIT {plan.limit}")
+
+        outer_select_parts: list[str] = []
+        outer_joins: list[str] = []
+        outer_alias_map: dict[str, str] = {}
+        for item in plan.returns:
+            alias_kind = alias_kinds[item.alias]
+            if not _is_raw_return_field(alias_kind=alias_kind, field=item.field):
+                continue
+            if item.alias in outer_alias_map:
+                continue
+            if item.alias == plan.left.alias:
+                outer_joins.append(
+                    (
+                        f"JOIN graph_nodes AS {left_alias} "
+                        f"ON {left_alias}.id = narrowed.__left_id"
+                    )
+                )
+                outer_alias_map[item.alias] = left_alias
+                continue
+            if item.alias == plan.right.alias:
+                outer_joins.append(
+                    (
+                        f"JOIN graph_nodes AS {right_alias} "
+                        f"ON {right_alias}.id = narrowed.__right_id"
+                    )
+                )
+                outer_alias_map[item.alias] = right_alias
+                continue
+            if (
+                plan.relationship.alias is not None
+                and item.alias == plan.relationship.alias
+            ):
+                outer_joins.append(
+                    (
+                        f"JOIN graph_edges AS {edge_alias} "
+                        f"ON {edge_alias}.id = narrowed.__edge_id"
+                    )
+                )
+                outer_alias_map[item.alias] = edge_alias
+        outer_join_params: list[object] = []
+        outer_returns: list[_CompiledReturnItem] = []
+        outer_property_join_aliases: dict[tuple[str, str, str], str] = {}
+        _compile_return_items(
+            alias_map=outer_alias_map,
+            alias_kinds=alias_kinds,
+            returns_to_compile=plan.returns,
+            joins=outer_joins,
+            params=outer_join_params,
+            select_parts=outer_select_parts,
+            returns=outer_returns,
+            property_join_aliases=outer_property_join_aliases,
+            alias_id_expressions=outer_alias_id_expressions,
+            projected_property_expressions=outer_projected_properties,
+        )
+        outer_sql = [
+            f"SELECT {', '.join(outer_select_parts)}",
+            f"FROM ({' '.join(narrowed_sql)}) AS narrowed",
+        ]
+        outer_sql.extend(outer_joins)
+        outer_sql.append(
+            "ORDER BY "
+            + ", ".join(
+                f"narrowed.__order_{index} {direction}"
+                for index, (_, direction) in enumerate(order_bindings)
+            )
+        )
+        return _CompiledMatchQuery(
+            sql=" ".join(outer_sql),
+            params=tuple(
+                from_params
+                + join_params
+                + order_params
+                + where_params
+                + outer_join_params
+            ),
+            returns=tuple(outer_returns),
+        )
+
     _compile_return_items(
-        alias_map={
-            plan.left.alias: left_alias,
-            plan.right.alias: right_alias,
-            **(
-                {plan.relationship.alias: edge_alias}
-                if plan.relationship.alias is not None
-                else {}
-            ),
-        },
-        alias_kinds={
-            plan.left.alias: "node",
-            plan.right.alias: "node",
-            **(
-                {plan.relationship.alias: "relationship"}
-                if plan.relationship.alias is not None
-                else {}
-            ),
-        },
+        alias_map=alias_map,
+        alias_kinds=alias_kinds,
         returns_to_compile=plan.returns,
         joins=joins,
         params=join_params,
         select_parts=select_parts,
         returns=returns,
-    )
-    _compile_order_items(
-        alias_map={
-            plan.left.alias: left_alias,
-            plan.right.alias: right_alias,
-            **(
-                {plan.relationship.alias: edge_alias}
-                if plan.relationship.alias is not None
-                else {}
-            ),
-        },
-        alias_kinds={
-            plan.left.alias: "node",
-            plan.right.alias: "node",
-            **(
-                {plan.relationship.alias: "relationship"}
-                if plan.relationship.alias is not None
-                else {}
-            ),
-        },
-        order_to_compile=plan.order_by,
-        joins=order_joins,
-        params=order_params,
-        order_parts=order_parts,
+        property_join_aliases=property_join_aliases,
     )
 
     select_keyword = "SELECT DISTINCT" if plan.distinct else "SELECT"
@@ -2188,8 +2312,6 @@ def _compile_match_relationship_plan(
             str(index) for index in range(1, len(select_parts) + 1)
         )
         sql.append(f"ORDER BY {order_by_projection}")
-    else:
-        sql.append(f"ORDER BY {left_alias}.id, {edge_alias}.id, {right_alias}.id")
     if plan.limit is not None:
         sql.append(f"LIMIT {plan.limit}")
     if plan.skip is not None:
@@ -2200,6 +2322,129 @@ def _compile_match_relationship_plan(
     return _CompiledMatchQuery(
         sql=" ".join(sql),
         params=tuple(from_params + join_params + order_params + where_params),
+        returns=tuple(returns),
+    )
+
+
+def _can_use_relationship_disjunction_identity_union(
+    plan: MatchRelationshipPlan,
+) -> bool:
+    """Return whether one relationship MATCH can union disjunct identities first."""
+
+    return (
+        not _predicates_are_simple_conjunction(plan.predicates)
+        and plan.relationship.alias is not None
+    )
+
+
+def _compile_match_relationship_disjunction_plan(
+    plan: MatchRelationshipPlan,
+    *,
+    alias_map: dict[str, str],
+    alias_kinds: dict[str, Literal["node", "relationship"]],
+    left_alias: str,
+    edge_alias: str,
+    right_alias: str,
+) -> _CompiledMatchQuery:
+    """Compile a disjunctive relationship MATCH by unioning matched identities."""
+
+    relationship_alias = plan.relationship.alias
+    assert relationship_alias is not None
+
+    identity_selects: list[str] = []
+    identity_params: list[object] = []
+    identity_returns = (
+        ReturnItem(plan.left.alias, "id"),
+        ReturnItem(relationship_alias, "id"),
+        ReturnItem(plan.right.alias, "id"),
+    )
+    left_id_column = identity_returns[0].column_name
+    edge_id_column = identity_returns[1].column_name
+    right_id_column = identity_returns[2].column_name
+
+    for disjunct_predicates in _group_predicates_by_disjunct(plan.predicates):
+        branch_plan = MatchRelationshipPlan(
+            left=plan.left,
+            relationship=plan.relationship,
+            right=plan.right,
+            predicates=disjunct_predicates,
+            returns=identity_returns,
+            order_by=(),
+            limit=None,
+            distinct=False,
+            skip=None,
+        )
+        branch_compiled = _compile_match_relationship_plan(branch_plan)
+        identity_selects.append(
+            (
+                f'SELECT "{left_id_column}" AS __left_id, '
+                f'"{edge_id_column}" AS __edge_id, '
+                f'"{right_id_column}" AS __right_id '
+                f"FROM ({branch_compiled.sql})"
+            )
+        )
+        identity_params.extend(branch_compiled.params)
+
+    select_parts: list[str] = []
+    joins = [
+        f"JOIN graph_nodes AS {left_alias} ON {left_alias}.id = matched.__left_id",
+        f"JOIN graph_edges AS {edge_alias} ON {edge_alias}.id = matched.__edge_id",
+        (
+            f"JOIN graph_nodes AS {right_alias} "
+            f"ON {right_alias}.id = matched.__right_id"
+        ),
+    ]
+    order_joins: list[str] = []
+    join_params: list[object] = []
+    order_params: list[object] = []
+    order_parts: list[str] = []
+    returns: list[_CompiledReturnItem] = []
+    property_join_aliases: dict[tuple[str, str, str], str] = {}
+
+    _compile_return_items(
+        alias_map=alias_map,
+        alias_kinds=alias_kinds,
+        returns_to_compile=plan.returns,
+        joins=joins,
+        params=join_params,
+        select_parts=select_parts,
+        returns=returns,
+        property_join_aliases=property_join_aliases,
+    )
+    _compile_order_items(
+        alias_map=alias_map,
+        alias_kinds=alias_kinds,
+        order_to_compile=plan.order_by,
+        joins=order_joins,
+        params=order_params,
+        order_parts=order_parts,
+        property_join_aliases=property_join_aliases,
+    )
+
+    select_keyword = "SELECT DISTINCT" if plan.distinct else "SELECT"
+    sql = [
+        f"{select_keyword} {', '.join(select_parts)}",
+        f"FROM ({' UNION '.join(identity_selects)}) AS matched",
+    ]
+    sql.extend(joins)
+    sql.extend(order_joins)
+    if order_parts:
+        sql.append(f"ORDER BY {', '.join(order_parts)}")
+    elif plan.distinct:
+        order_by_projection = ", ".join(
+            str(index) for index in range(1, len(select_parts) + 1)
+        )
+        sql.append(f"ORDER BY {order_by_projection}")
+    if plan.limit is not None:
+        sql.append(f"LIMIT {plan.limit}")
+    if plan.skip is not None:
+        if plan.limit is None:
+            sql.append("LIMIT -1")
+        sql.append(f"OFFSET {plan.skip}")
+
+    return _CompiledMatchQuery(
+        sql=" ".join(sql),
+        params=tuple(identity_params + join_params + order_params),
         returns=tuple(returns),
     )
 
@@ -2421,6 +2666,18 @@ def _constraint_rank(constraint: PropertyConstraint) -> int:
     return 3
 
 
+def _is_raw_return_field(
+    *,
+    alias_kind: Literal["node", "relationship"],
+    field: str,
+) -> bool:
+    """Return whether one RETURN field comes from the base graph row directly."""
+
+    return field == "id" or (
+        alias_kind == "node" and field == "label"
+    ) or (alias_kind == "relationship" and field == "type")
+
+
 def _compile_return_items(
     *,
     alias_map: dict[str, str],
@@ -2430,17 +2687,33 @@ def _compile_return_items(
     params: list[object],
     select_parts: list[str],
     returns: list[_CompiledReturnItem],
+    property_join_aliases: dict[tuple[str, str, str], str],
+    alias_id_expressions: dict[str, str] | None = None,
+    projected_property_expressions: dict[
+        tuple[str, str], tuple[str, str]
+    ] | None = None,
 ) -> None:
     """Compile RETURN items into projections and supporting property joins."""
 
+    if alias_id_expressions is None:
+        alias_id_expressions = {}
+    if projected_property_expressions is None:
+        projected_property_expressions = {}
+
     for index, item in enumerate(returns_to_compile):
-        if item.alias not in alias_map:
+        if item.alias not in alias_kinds:
             raise ValueError(
                 f"HumemCypher v0 cannot RETURN unknown alias {item.alias!r}."
             )
 
-        table_alias = alias_map[item.alias]
+        table_alias = alias_map.get(item.alias)
         alias_kind = alias_kinds[item.alias]
+        if _is_raw_return_field(alias_kind=alias_kind, field=item.field):
+            if table_alias is None:
+                raise ValueError(
+                    f"HumemCypher v0 cannot RETURN raw field {item.alias}.{item.field}."
+                )
+
         if item.field == "id":
             select_parts.append(f"{table_alias}.id AS \"{item.column_name}\"")
             returns.append(_CompiledReturnItem(item.column_name, "raw"))
@@ -2456,24 +2729,82 @@ def _compile_return_items(
             returns.append(_CompiledReturnItem(item.column_name, "raw"))
             continue
 
-        property_alias = f"{table_alias}_return_{index}"
-        property_table = (
-            "graph_node_properties"
-            if alias_kind == "node"
-            else "graph_edge_properties"
+        projected_property = projected_property_expressions.get(
+            (item.alias, item.field)
         )
-        id_column = "node_id" if alias_kind == "node" else "edge_id"
-        joins.append(
-            f"LEFT JOIN {property_table} AS {property_alias} "
-            f"ON {property_alias}.{id_column} = {table_alias}.id "
-            f"AND {property_alias}.key = ?"
+        if projected_property is not None:
+            value_expression, value_type_expression = projected_property
+            select_parts.append(f"{value_expression} AS \"__value_{index}\"")
+            select_parts.append(
+                f"{value_type_expression} AS \"__value_type_{index}\""
+            )
+            returns.append(_CompiledReturnItem(item.column_name, "property"))
+            continue
+
+        property_alias = _ensure_property_join(
+            table_alias=table_alias or item.alias,
+            alias_kind=alias_kind,
+            field=item.field,
+            join_alias=f"{(table_alias or item.alias)}_return_{index}",
+            joins=joins,
+            params=params,
+            property_join_aliases=property_join_aliases,
+            id_expression=alias_id_expressions.get(item.alias),
         )
-        params.append(item.field)
         select_parts.append(f"{property_alias}.value AS \"__value_{index}\"")
         select_parts.append(
             f"{property_alias}.value_type AS \"__value_type_{index}\""
         )
         returns.append(_CompiledReturnItem(item.column_name, "property"))
+
+
+def _ensure_property_join(
+    *,
+    table_alias: str,
+    alias_kind: Literal["node", "relationship"],
+    field: str,
+    join_alias: str,
+    joins: list[str],
+    params: list[object],
+    property_join_aliases: dict[tuple[str, str, str], str],
+    id_expression: str | None = None,
+) -> str:
+    """Return one shared property join alias for one alias/field lookup."""
+
+    join_key = (table_alias, alias_kind, field)
+    existing_alias = property_join_aliases.get(join_key)
+    if existing_alias is not None:
+        return existing_alias
+
+    property_table = (
+        "graph_node_properties" if alias_kind == "node" else "graph_edge_properties"
+    )
+    id_column = "node_id" if alias_kind == "node" else "edge_id"
+    join_id_expression = id_expression or f"{table_alias}.id"
+    joins.append(
+        f"LEFT JOIN {property_table} AS {join_alias} "
+        f"ON {join_alias}.{id_column} = {join_id_expression} "
+        f"AND {join_alias}.key = ?"
+    )
+    params.append(field)
+    property_join_aliases[join_key] = join_alias
+    return join_alias
+
+
+def _can_use_order_limit_projection_fastpath(
+    plan: MatchRelationshipPlan,
+    order_bindings: list[tuple[str, str]],
+) -> bool:
+    """Return whether one relationship MATCH can narrow rows before projection."""
+
+    return (
+        plan.limit is not None
+        and plan.skip is None
+        and not plan.distinct
+        and bool(order_bindings)
+        and len(plan.order_by) == 1
+        and plan.order_by[0].direction.lower() == "desc"
+    )
 
 
 def _compile_predicates(
@@ -2609,6 +2940,31 @@ def _predicates_are_simple_conjunction(predicates: tuple[Predicate, ...]) -> boo
     """Return whether all predicates belong to the single default AND clause."""
 
     return all(predicate.disjunct_index == 0 for predicate in predicates)
+
+
+def _group_predicates_by_disjunct(
+    predicates: tuple[Predicate, ...],
+) -> tuple[tuple[Predicate, ...], ...]:
+    """Group parsed predicates by their disjunct index while preserving order."""
+
+    grouped: dict[int, list[Predicate]] = {}
+    disjunct_order: list[int] = []
+
+    for predicate in predicates:
+        if predicate.disjunct_index not in grouped:
+            grouped[predicate.disjunct_index] = []
+            disjunct_order.append(predicate.disjunct_index)
+        grouped[predicate.disjunct_index].append(
+            Predicate(
+                alias=predicate.alias,
+                field=predicate.field,
+                operator=predicate.operator,
+                value=predicate.value,
+                disjunct_index=0,
+            )
+        )
+
+    return tuple(tuple(grouped[index]) for index in disjunct_order)
 
 
 def _validate_direct_predicate_operator(
@@ -2797,20 +3153,23 @@ def _coerce_numeric_predicate_value(value: ScalarQueryParam) -> int | float:
     )
 
 
-def _compile_order_items(
+def _compile_order_bindings(
     *,
     alias_map: dict[str, str],
     alias_kinds: dict[str, Literal["node", "relationship"]],
     order_to_compile: tuple[OrderItem, ...],
     joins: list[str],
     params: list[object],
-    order_parts: list[str],
-) -> None:
-    """Compile ORDER BY items into SQL expressions and any needed property joins.
+    property_join_aliases: dict[tuple[str, str, str], str],
+
+) -> list[tuple[str, str]]:
+    """Compile ORDER BY items into reusable expressions and join requirements.
 
     Property ordering is expressed in a type-aware way so integers, reals, booleans,
     and strings can be sorted without losing their stored scalar semantics.
     """
+
+    order_bindings: list[tuple[str, str]] = []
 
     for index, item in enumerate(order_to_compile):
         if item.alias not in alias_map:
@@ -2823,39 +3182,62 @@ def _compile_order_items(
         direction = item.direction.upper()
 
         if item.field == "id":
-            order_parts.append(f"{table_alias}.id {direction}")
+            order_bindings.append((f"{table_alias}.id", direction))
             continue
 
         if alias_kind == "node" and item.field == "label":
-            order_parts.append(f"{table_alias}.label {direction}")
+            order_bindings.append((f"{table_alias}.label", direction))
             continue
 
         if alias_kind == "relationship" and item.field == "type":
-            order_parts.append(f"{table_alias}.type {direction}")
+            order_bindings.append((f"{table_alias}.type", direction))
             continue
 
-        property_alias = f"{table_alias}_order_{index}"
-        property_table = (
-            "graph_node_properties"
-            if alias_kind == "node"
-            else "graph_edge_properties"
+        property_alias = _ensure_property_join(
+            table_alias=table_alias,
+            alias_kind=alias_kind,
+            field=item.field,
+            join_alias=f"{table_alias}_order_{index}",
+            joins=joins,
+            params=params,
+            property_join_aliases=property_join_aliases,
         )
-        id_column = "node_id" if alias_kind == "node" else "edge_id"
-        joins.append(
-            f"LEFT JOIN {property_table} AS {property_alias} "
-            f"ON {property_alias}.{id_column} = {table_alias}.id "
-            f"AND {property_alias}.key = ?"
-        )
-        params.append(item.field)
-        order_parts.extend(
+        order_bindings.extend(
             [
-                _compile_numeric_order_expression(property_alias, direction),
-                _compile_string_order_expression(property_alias, direction),
+                (_compile_numeric_order_expression(property_alias), direction),
+                (_compile_string_order_expression(property_alias), direction),
             ]
         )
 
+    return order_bindings
 
-def _compile_numeric_order_expression(property_alias: str, direction: str) -> str:
+
+def _compile_order_items(
+    *,
+    alias_map: dict[str, str],
+    alias_kinds: dict[str, Literal["node", "relationship"]],
+    order_to_compile: tuple[OrderItem, ...],
+    joins: list[str],
+    params: list[object],
+    order_parts: list[str],
+    property_join_aliases: dict[tuple[str, str, str], str],
+) -> None:
+    """Compile ORDER BY items into SQL expressions and any needed property joins."""
+
+    order_parts.extend(
+        f"{expression} {direction}"
+        for expression, direction in _compile_order_bindings(
+            alias_map=alias_map,
+            alias_kinds=alias_kinds,
+            order_to_compile=order_to_compile,
+            joins=joins,
+            params=params,
+            property_join_aliases=property_join_aliases,
+        )
+    )
+
+
+def _compile_numeric_order_expression(property_alias: str) -> str:
     """Build one numeric ORDER BY expression for a typed property join."""
 
     return (
@@ -2867,11 +3249,10 @@ def _compile_numeric_order_expression(property_alias: str, direction: str) -> st
         f"WHEN {property_alias}.value_type = 'boolean' "
         f"THEN CASE WHEN {property_alias}.value = 'true' THEN 1 ELSE 0 END "
         "END "
-        f"{direction}"
     )
 
 
-def _compile_string_order_expression(property_alias: str, direction: str) -> str:
+def _compile_string_order_expression(property_alias: str) -> str:
     """Build one string/null ORDER BY expression for a typed property join."""
 
     return (
@@ -2879,7 +3260,6 @@ def _compile_string_order_expression(property_alias: str, direction: str) -> str
         f"WHEN {property_alias}.value_type IN ('string', 'null') "
         f"THEN {property_alias}.value "
         "END "
-        f"{direction}"
     )
 
 

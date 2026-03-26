@@ -133,6 +133,9 @@ them behind a fake "single engine" narrative.
 - string predicates with `STARTS WITH`, `ENDS WITH`, and `CONTAINS`
 - property null predicates with `IS NULL` and `IS NOT NULL`
 - `DISTINCT`, `ORDER BY`, `SKIP` or `OFFSET`, and `LIMIT` on the admitted read subset
+- row ordering is only guaranteed when the query includes an explicit `ORDER BY`
+- `SKIP` or `OFFSET` without `ORDER BY` is allowed, but unordered pagination is not
+  a stable contract
 - public Cypher execution currently stays on SQLite
 
 ### Vector

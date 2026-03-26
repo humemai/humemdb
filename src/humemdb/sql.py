@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 import logging
+import re
 from typing import Any
 
 from sqlglot import parse_one
@@ -18,6 +19,8 @@ from sqlglot import errors as sqlglot_errors
 from .types import Route
 
 logger = logging.getLogger(__name__)
+
+_CREATE_INDEX_PREFIX = re.compile(r"^\s*CREATE\s+(UNIQUE\s+)?INDEX\b", re.IGNORECASE)
 
 _SUPPORTED_STATEMENT_NAMES = {
     "Select",
@@ -92,6 +95,7 @@ def _translate_sql_plan_cached(text: str, target: Route) -> SQLTranslationPlan:
     expression = parse_one(text, read="postgres")
     _validate_humemsql_v0(expression)
     translated = expression.sql(dialect=target)
+    translated = _normalize_translated_sql(text, translated, expression, target=target)
     statement_name = type(expression).__name__
     logger.debug(
         "Translated SQL statement kind=%s target=%s",
@@ -137,6 +141,32 @@ def _validate_humemsql_v0(expression: Any) -> None:
         raise ValueError(
             "HumemDB HumemSQL v0 does not support recursive CTEs."
         )
+
+
+def _normalize_translated_sql(
+    original_text: str,
+    translated_text: str,
+    expression: Any,
+    *,
+    target: Route,
+) -> str:
+    """Apply narrow backend-safe fixes after sqlglot translation.
+
+    HumemSQL should let ordinary SQLite index DDL flow through `db.query(...)`.
+    sqlglot currently emits `NULLS LAST` inside SQLite `CREATE INDEX` column lists,
+    which SQLite rejects. Keep the fix narrow to SQLite-targeted index DDL.
+    """
+
+    if target != "sqlite":
+        return translated_text
+
+    if type(expression).__name__ != "Create":
+        return translated_text
+
+    if not _CREATE_INDEX_PREFIX.match(original_text):
+        return translated_text
+
+    return translated_text.replace(" NULLS LAST", "")
 
 
 def _expression_is_read_only(expression: Any) -> bool:

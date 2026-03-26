@@ -1,0 +1,2091 @@
+{
+  "batch_size": 5000,
+  "benchmark": "cypher_graph_path",
+  "dataset": {
+    "authored_edges": 30000,
+    "documents": 30000,
+    "knows_edges": 180000,
+    "member_of_edges": 45000,
+    "seed_seconds": 3.7206800850108266,
+    "tagged_edges": 60000,
+    "teams": 8333,
+    "topics": 16667,
+    "total_nodes": 100000,
+    "total_storage_rows": 1105000,
+    "users": 45000
+  },
+  "fanout": 4,
+  "index_set": "baseline",
+  "repetitions": 2,
+  "tag_fanout": 2,
+  "thread_limit": "default",
+  "warmup": 0,
+  "workloads": {
+    "author_expand": {
+      "comparison_group": null,
+      "cypher_compile": {
+        "max_ms": 0.09144004434347153,
+        "mean_ms": 0.07734005339443684,
+        "min_ms": 0.06324006244540215,
+        "stdev_ms": 0.01409999094903469
+      },
+      "cypher_features": {
+        "anchors_edge_properties": false,
+        "anchors_node_properties": true,
+        "direct_edge_type_filter": true,
+        "direct_node_label_filter": true,
+        "edge_property_join_count": 0,
+        "family": "edge",
+        "graph_edges_join_count": 1,
+        "graph_nodes_join_count": 2,
+        "has_distinct": false,
+        "has_limit": false,
+        "has_offset": false,
+        "has_order_by": false,
+        "node_property_join_count": 3,
+        "selectivity": "medium",
+        "shape": "selective_relationship_expand"
+      },
+      "cypher_parse": {
+        "max_ms": 0.06876979023218155,
+        "mean_ms": 0.057060038670897484,
+        "min_ms": 0.04535028710961342,
+        "stdev_ms": 0.011709751561284065
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 194.84149804338813,
+        "mean_ms": 191.90516602247953,
+        "min_ms": 188.96883400157094,
+        "stdev_ms": 2.936332020908594
+      },
+      "family": "edge",
+      "order_variant": null,
+      "params": {
+        "published": true,
+        "region": "region_7"
+      },
+      "public_cypher": {
+        "max_ms": 14.142946805804968,
+        "mean_ms": 13.428820064291358,
+        "min_ms": 12.714693322777748,
+        "stdev_ms": 0.7141267415136099
+      },
+      "query": "MATCH (u:User)-[:AUTHORED]->(d:Document) WHERE u.region = $region AND d.published = $published RETURN u.name, d.title",
+      "selectivity": "medium",
+      "shape": "selective_relationship_expand",
+      "sqlite_plan_summary": {
+        "detail_count": 7,
+        "edge_property_search_count": 0,
+        "edge_search_count": 1,
+        "index_mentions": [
+          "SEARCH d_filter_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?)",
+          "SEARCH d_return_1 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH edge_rel USING COVERING INDEX idx_graph_edges_from_type_to (from_node_id=? AND type=?)",
+          "SEARCH u_anchor USING COVERING INDEX idx_graph_node_props_lookup (key=? AND value_type=? AND value=?)",
+          "SEARCH u_return_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN"
+        ],
+        "node_property_search_count": 3,
+        "node_search_count": 0,
+        "uses_temp_btree": false
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 12.760613113641739,
+        "mean_ms": 12.475847732275724,
+        "min_ms": 12.19108235090971,
+        "stdev_ms": 0.2847653813660145
+      }
+    },
+    "author_expand_ordered": {
+      "comparison_group": "author_expand_score_order",
+      "cypher_compile": {
+        "max_ms": 0.06701983511447906,
+        "mean_ms": 0.06325985305011272,
+        "min_ms": 0.059499870985746384,
+        "stdev_ms": 0.0037599820643663406
+      },
+      "cypher_features": {
+        "anchors_edge_properties": false,
+        "anchors_node_properties": true,
+        "direct_edge_type_filter": true,
+        "direct_node_label_filter": true,
+        "edge_property_join_count": 0,
+        "family": "edge",
+        "graph_edges_join_count": 1,
+        "graph_nodes_join_count": 2,
+        "has_distinct": false,
+        "has_limit": true,
+        "has_offset": false,
+        "has_order_by": true,
+        "node_property_join_count": 4,
+        "selectivity": "medium",
+        "shape": "ordered_relationship_expand"
+      },
+      "cypher_parse": {
+        "max_ms": 0.06094062700867653,
+        "mean_ms": 0.05268538370728493,
+        "min_ms": 0.044430140405893326,
+        "stdev_ms": 0.008255243301391602
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 216.9397370889783,
+        "mean_ms": 205.98247810266912,
+        "min_ms": 195.02521911635995,
+        "stdev_ms": 10.95725898630917
+      },
+      "family": "edge",
+      "order_variant": "ordered",
+      "params": {
+        "published": true
+      },
+      "public_cypher": {
+        "max_ms": 71.78082829341292,
+        "mean_ms": 71.21826615184546,
+        "min_ms": 70.65570401027799,
+        "stdev_ms": 0.5625621415674686
+      },
+      "query": "MATCH (u:User)-[:AUTHORED]->(d:Document) WHERE d.published = $published RETURN u.name, d.title, d.score ORDER BY d.score DESC LIMIT 100",
+      "selectivity": "medium",
+      "shape": "ordered_relationship_expand",
+      "sqlite_plan_summary": {
+        "detail_count": 9,
+        "edge_property_search_count": 0,
+        "edge_search_count": 1,
+        "index_mentions": [
+          "SEARCH d_anchor USING COVERING INDEX idx_graph_node_props_lookup (key=? AND value_type=? AND value=?)",
+          "SEARCH d_order_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH d_return_1 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH d_return_2 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH edge_rel USING COVERING INDEX idx_graph_edges_to_type_from (to_node_id=? AND type=?)",
+          "SEARCH u_return_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN"
+        ],
+        "node_property_search_count": 4,
+        "node_search_count": 0,
+        "uses_temp_btree": true
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 71.74766669049859,
+        "mean_ms": 71.1944259237498,
+        "min_ms": 70.64118515700102,
+        "stdev_ms": 0.553240766748786
+      }
+    },
+    "author_expand_unordered": {
+      "comparison_group": "author_expand_score_order",
+      "cypher_compile": {
+        "max_ms": 0.06273994222283363,
+        "mean_ms": 0.05835504271090031,
+        "min_ms": 0.05397014319896698,
+        "stdev_ms": 0.004384899511933327
+      },
+      "cypher_features": {
+        "anchors_edge_properties": false,
+        "anchors_node_properties": true,
+        "direct_edge_type_filter": true,
+        "direct_node_label_filter": true,
+        "edge_property_join_count": 0,
+        "family": "edge",
+        "graph_edges_join_count": 1,
+        "graph_nodes_join_count": 2,
+        "has_distinct": false,
+        "has_limit": true,
+        "has_offset": false,
+        "has_order_by": false,
+        "node_property_join_count": 3,
+        "selectivity": "medium",
+        "shape": "unordered_relationship_expand"
+      },
+      "cypher_parse": {
+        "max_ms": 0.05113007500767708,
+        "mean_ms": 0.04530511796474457,
+        "min_ms": 0.03948016092181206,
+        "stdev_ms": 0.00582495704293251
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 178.99334663525224,
+        "mean_ms": 178.0108348466456,
+        "min_ms": 177.02832305803895,
+        "stdev_ms": 0.9825117886066437
+      },
+      "family": "edge",
+      "order_variant": "unordered",
+      "params": {
+        "published": true
+      },
+      "public_cypher": {
+        "max_ms": 1.9056550227105618,
+        "mean_ms": 1.254373462870717,
+        "min_ms": 0.6030919030308723,
+        "stdev_ms": 0.6512815598398447
+      },
+      "query": "MATCH (u:User)-[:AUTHORED]->(d:Document) WHERE d.published = $published RETURN u.name, d.title, d.score LIMIT 100",
+      "selectivity": "medium",
+      "shape": "unordered_relationship_expand",
+      "sqlite_plan_summary": {
+        "detail_count": 7,
+        "edge_property_search_count": 0,
+        "edge_search_count": 1,
+        "index_mentions": [
+          "SEARCH d_anchor USING COVERING INDEX idx_graph_node_props_lookup (key=? AND value_type=? AND value=?)",
+          "SEARCH d_return_1 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH d_return_2 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH edge_rel USING COVERING INDEX idx_graph_edges_to_type_from (to_node_id=? AND type=?)",
+          "SEARCH u_return_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN"
+        ],
+        "node_property_search_count": 3,
+        "node_search_count": 0,
+        "uses_temp_btree": false
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 0.6548706442117691,
+        "mean_ms": 0.5783960223197937,
+        "min_ms": 0.5019214004278183,
+        "stdev_ms": 0.0764746218919754
+      }
+    },
+    "document_lookup": {
+      "comparison_group": null,
+      "cypher_compile": {
+        "max_ms": 0.050380825996398926,
+        "mean_ms": 0.046015484258532524,
+        "min_ms": 0.04165014252066612,
+        "stdev_ms": 0.004365341737866402
+      },
+      "cypher_features": {
+        "anchors_edge_properties": false,
+        "anchors_node_properties": true,
+        "direct_edge_type_filter": false,
+        "direct_node_label_filter": true,
+        "edge_property_join_count": 0,
+        "family": "node",
+        "graph_edges_join_count": 0,
+        "graph_nodes_join_count": 1,
+        "has_distinct": false,
+        "has_limit": false,
+        "has_offset": false,
+        "has_order_by": false,
+        "node_property_join_count": 4,
+        "selectivity": "high",
+        "shape": "anchored_node_lookup"
+      },
+      "cypher_parse": {
+        "max_ms": 0.04226993769407272,
+        "mean_ms": 0.03815488889813423,
+        "min_ms": 0.03403984010219574,
+        "stdev_ms": 0.004115048795938492
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 147.33314467594028,
+        "mean_ms": 145.85671573877335,
+        "min_ms": 144.38028680160642,
+        "stdev_ms": 1.4764289371669292
+      },
+      "family": "node",
+      "order_variant": null,
+      "params": {
+        "title": "document_15000"
+      },
+      "public_cypher": {
+        "max_ms": 5.546575412154198,
+        "mean_ms": 2.846057526767254,
+        "min_ms": 0.14553964138031006,
+        "stdev_ms": 2.700517885386944
+      },
+      "query": "MATCH (d:Document) WHERE d.title = $title RETURN d.title, d.category, d.published, d.score",
+      "selectivity": "high",
+      "shape": "anchored_node_lookup",
+      "sqlite_plan_summary": {
+        "detail_count": 6,
+        "edge_property_search_count": 0,
+        "edge_search_count": 0,
+        "index_mentions": [
+          "SEARCH d_anchor USING COVERING INDEX idx_graph_node_props_lookup (key=? AND value_type=? AND value=?)",
+          "SEARCH d_return_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH d_return_1 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH d_return_2 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH d_return_3 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN"
+        ],
+        "node_property_search_count": 4,
+        "node_search_count": 0,
+        "uses_temp_btree": false
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 0.14800997450947762,
+        "mean_ms": 0.10854494757950306,
+        "min_ms": 0.0690799206495285,
+        "stdev_ms": 0.039465026929974556
+      }
+    },
+    "social_expand": {
+      "comparison_group": null,
+      "cypher_compile": {
+        "max_ms": 0.09815022349357605,
+        "mean_ms": 0.0882251188158989,
+        "min_ms": 0.07830001413822174,
+        "stdev_ms": 0.009925104677677155
+      },
+      "cypher_features": {
+        "anchors_edge_properties": false,
+        "anchors_node_properties": true,
+        "direct_edge_type_filter": true,
+        "direct_node_label_filter": true,
+        "edge_property_join_count": 0,
+        "family": "edge",
+        "graph_edges_join_count": 1,
+        "graph_nodes_join_count": 2,
+        "has_distinct": false,
+        "has_limit": false,
+        "has_offset": false,
+        "has_order_by": false,
+        "node_property_join_count": 3,
+        "selectivity": "low",
+        "shape": "broad_relationship_expand"
+      },
+      "cypher_parse": {
+        "max_ms": 0.16537122428417206,
+        "mean_ms": 0.10730070061981678,
+        "min_ms": 0.0492301769554615,
+        "stdev_ms": 0.05807052366435528
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 201.7680872231722,
+        "mean_ms": 199.97627777047455,
+        "min_ms": 198.18446831777692,
+        "stdev_ms": 1.7918094526976347
+      },
+      "family": "edge",
+      "order_variant": null,
+      "params": {
+        "active": true,
+        "region": "region_11"
+      },
+      "public_cypher": {
+        "max_ms": 39.931484032422304,
+        "mean_ms": 33.318876987323165,
+        "min_ms": 26.706269942224026,
+        "stdev_ms": 6.612607045099139
+      },
+      "query": "MATCH (a:User)-[:KNOWS]->(b:User) WHERE a.region = $region AND b.active = $active RETURN a.name, b.name",
+      "selectivity": "low",
+      "shape": "broad_relationship_expand",
+      "sqlite_plan_summary": {
+        "detail_count": 7,
+        "edge_property_search_count": 0,
+        "edge_search_count": 1,
+        "index_mentions": [
+          "SEARCH a_anchor USING COVERING INDEX idx_graph_node_props_lookup (key=? AND value_type=? AND value=?)",
+          "SEARCH a_return_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH b_filter_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?)",
+          "SEARCH b_return_1 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH edge_rel USING COVERING INDEX idx_graph_edges_from_type_to (from_node_id=? AND type=?)"
+        ],
+        "node_property_search_count": 3,
+        "node_search_count": 0,
+        "uses_temp_btree": false
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 26.34720876812935,
+        "mean_ms": 25.937732541933656,
+        "min_ms": 25.528256315737963,
+        "stdev_ms": 0.409476226195693
+      }
+    },
+    "social_expand_anonymous_endpoints": {
+      "comparison_group": null,
+      "cypher_compile": {
+        "max_ms": 0.06803032010793686,
+        "mean_ms": 0.060835154727101326,
+        "min_ms": 0.05363998934626579,
+        "stdev_ms": 0.007195165380835533
+      },
+      "cypher_features": {
+        "anchors_edge_properties": false,
+        "anchors_node_properties": true,
+        "direct_edge_type_filter": true,
+        "direct_node_label_filter": true,
+        "edge_property_join_count": 2,
+        "family": "edge",
+        "graph_edges_join_count": 1,
+        "graph_nodes_join_count": 2,
+        "has_distinct": false,
+        "has_limit": true,
+        "has_offset": false,
+        "has_order_by": true,
+        "node_property_join_count": 1,
+        "selectivity": "low",
+        "shape": "anonymous_endpoint_expand"
+      },
+      "cypher_parse": {
+        "max_ms": 0.057110097259283066,
+        "mean_ms": 0.048449961468577385,
+        "min_ms": 0.039789825677871704,
+        "stdev_ms": 0.00866013579070568
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 184.26184123381972,
+        "mean_ms": 183.29194351099432,
+        "min_ms": 182.3220457881689,
+        "stdev_ms": 0.969897722825408
+      },
+      "family": "edge",
+      "order_variant": null,
+      "params": {
+        "active": true,
+        "region": "region_11"
+      },
+      "public_cypher": {
+        "max_ms": 34.963810816407204,
+        "mean_ms": 30.30037390999496,
+        "min_ms": 25.636937003582716,
+        "stdev_ms": 4.663436906412244
+      },
+      "query": "MATCH (:User {region: $region})-[r:KNOWS]->(:User {active: $active}) RETURN r.type, r.since ORDER BY r.since DESC LIMIT 500",
+      "selectivity": "low",
+      "shape": "anonymous_endpoint_expand",
+      "sqlite_plan_summary": {
+        "detail_count": 8,
+        "edge_property_search_count": 2,
+        "edge_search_count": 1,
+        "index_mentions": [
+          "SEARCH __humem_match_left_node_anchor USING COVERING INDEX idx_graph_node_props_lookup (key=? AND value_type=? AND value=?)",
+          "SEARCH __humem_match_right_node_filter_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?)",
+          "SEARCH r USING COVERING INDEX idx_graph_edges_from_type_to (from_node_id=? AND type=?)",
+          "SEARCH r_order_0 USING INDEX sqlite_autoindex_graph_edge_properties_1 (edge_id=? AND key=?) LEFT-JOIN",
+          "SEARCH r_return_1 USING INDEX sqlite_autoindex_graph_edge_properties_1 (edge_id=? AND key=?) LEFT-JOIN"
+        ],
+        "node_property_search_count": 1,
+        "node_search_count": 0,
+        "uses_temp_btree": true
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 25.655297096818686,
+        "mean_ms": 25.600727181881666,
+        "min_ms": 25.546157266944647,
+        "stdev_ms": 0.05456991493701935
+      }
+    },
+    "social_expand_offset": {
+      "comparison_group": null,
+      "cypher_compile": {
+        "max_ms": 0.0696997158229351,
+        "mean_ms": 0.06482983008027077,
+        "min_ms": 0.05995994433760643,
+        "stdev_ms": 0.004869885742664337
+      },
+      "cypher_features": {
+        "anchors_edge_properties": false,
+        "anchors_node_properties": true,
+        "direct_edge_type_filter": true,
+        "direct_node_label_filter": true,
+        "edge_property_join_count": 2,
+        "family": "edge",
+        "graph_edges_join_count": 1,
+        "graph_nodes_join_count": 2,
+        "has_distinct": false,
+        "has_limit": true,
+        "has_offset": true,
+        "has_order_by": true,
+        "node_property_join_count": 2,
+        "selectivity": "low",
+        "shape": "offset_relationship_expand"
+      },
+      "cypher_parse": {
+        "max_ms": 0.06248988211154938,
+        "mean_ms": 0.05400483496487141,
+        "min_ms": 0.045519787818193436,
+        "stdev_ms": 0.008485047146677971
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 188.0372711457312,
+        "mean_ms": 186.13261613063514,
+        "min_ms": 184.22796111553907,
+        "stdev_ms": 1.9046550150960684
+      },
+      "family": "edge",
+      "order_variant": null,
+      "params": {
+        "region": "region_11"
+      },
+      "public_cypher": {
+        "max_ms": 28.79214473068714,
+        "mean_ms": 27.615251950919628,
+        "min_ms": 26.438359171152115,
+        "stdev_ms": 1.1768927797675133
+      },
+      "query": "MATCH (a:User)-[r:KNOWS]->(b:User) WHERE a.region = $region RETURN a.name, b.name, r.since ORDER BY r.since DESC OFFSET 50 LIMIT 250",
+      "selectivity": "low",
+      "shape": "offset_relationship_expand",
+      "sqlite_plan_summary": {
+        "detail_count": 9,
+        "edge_property_search_count": 2,
+        "edge_search_count": 1,
+        "index_mentions": [
+          "SEARCH a_anchor USING COVERING INDEX idx_graph_node_props_lookup (key=? AND value_type=? AND value=?)",
+          "SEARCH a_return_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH b_return_1 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH r USING COVERING INDEX idx_graph_edges_from_type_to (from_node_id=? AND type=?)",
+          "SEARCH r_order_0 USING INDEX sqlite_autoindex_graph_edge_properties_1 (edge_id=? AND key=?) LEFT-JOIN",
+          "SEARCH r_return_2 USING INDEX sqlite_autoindex_graph_edge_properties_1 (edge_id=? AND key=?) LEFT-JOIN"
+        ],
+        "node_property_search_count": 2,
+        "node_search_count": 0,
+        "uses_temp_btree": true
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 27.07049110904336,
+        "mean_ms": 26.690349681302905,
+        "min_ms": 26.31020825356245,
+        "stdev_ms": 0.3801414277404547
+      }
+    },
+    "social_expand_ordered": {
+      "comparison_group": null,
+      "cypher_compile": {
+        "max_ms": 0.07043033838272095,
+        "mean_ms": 0.0655807089060545,
+        "min_ms": 0.060731079429388046,
+        "stdev_ms": 0.0048496294766664505
+      },
+      "cypher_features": {
+        "anchors_edge_properties": false,
+        "anchors_node_properties": true,
+        "direct_edge_type_filter": true,
+        "direct_node_label_filter": true,
+        "edge_property_join_count": 0,
+        "family": "edge",
+        "graph_edges_join_count": 1,
+        "graph_nodes_join_count": 2,
+        "has_distinct": false,
+        "has_limit": true,
+        "has_offset": false,
+        "has_order_by": true,
+        "node_property_join_count": 4,
+        "selectivity": "low",
+        "shape": "ordered_relationship_expand"
+      },
+      "cypher_parse": {
+        "max_ms": 0.0791097991168499,
+        "mean_ms": 0.06311479955911636,
+        "min_ms": 0.04711980000138283,
+        "stdev_ms": 0.015994999557733536
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 200.62196301296353,
+        "mean_ms": 199.14359506219625,
+        "min_ms": 197.66522711142898,
+        "stdev_ms": 1.4783679507672787
+      },
+      "family": "edge",
+      "order_variant": null,
+      "params": {
+        "region": "region_11"
+      },
+      "public_cypher": {
+        "max_ms": 30.977710615843534,
+        "mean_ms": 29.940512729808688,
+        "min_ms": 28.903314843773842,
+        "stdev_ms": 1.0371978860348463
+      },
+      "query": "MATCH (a:User)-[:KNOWS]->(b:User) WHERE a.region = $region RETURN a.name, b.name, b.reputation ORDER BY b.reputation DESC LIMIT 500",
+      "selectivity": "low",
+      "shape": "ordered_relationship_expand",
+      "sqlite_plan_summary": {
+        "detail_count": 9,
+        "edge_property_search_count": 0,
+        "edge_search_count": 1,
+        "index_mentions": [
+          "SEARCH a_anchor USING COVERING INDEX idx_graph_node_props_lookup (key=? AND value_type=? AND value=?)",
+          "SEARCH a_return_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH b_order_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH b_return_1 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH b_return_2 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH edge_rel USING COVERING INDEX idx_graph_edges_from_type_to (from_node_id=? AND type=?)"
+        ],
+        "node_property_search_count": 4,
+        "node_search_count": 0,
+        "uses_temp_btree": true
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 28.966805897653103,
+        "mean_ms": 28.825555462390184,
+        "min_ms": 28.684305027127266,
+        "stdev_ms": 0.14125043526291847
+      }
+    },
+    "social_expand_type_alternation": {
+      "comparison_group": null,
+      "cypher_compile": {
+        "max_ms": 0.07084989920258522,
+        "mean_ms": 0.06561493501067162,
+        "min_ms": 0.06037997081875801,
+        "stdev_ms": 0.005234964191913605
+      },
+      "cypher_features": {
+        "anchors_edge_properties": false,
+        "anchors_node_properties": true,
+        "direct_edge_type_filter": true,
+        "direct_node_label_filter": true,
+        "edge_property_join_count": 0,
+        "family": "edge",
+        "graph_edges_join_count": 1,
+        "graph_nodes_join_count": 2,
+        "has_distinct": false,
+        "has_limit": true,
+        "has_offset": false,
+        "has_order_by": true,
+        "node_property_join_count": 4,
+        "selectivity": "low",
+        "shape": "relationship_type_alternation"
+      },
+      "cypher_parse": {
+        "max_ms": 0.05854014307260513,
+        "mean_ms": 0.05128001794219017,
+        "min_ms": 0.04401989281177521,
+        "stdev_ms": 0.007260125130414963
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 177.44550295174122,
+        "mean_ms": 176.68173648416996,
+        "min_ms": 175.9179700165987,
+        "stdev_ms": 0.7637664675712585
+      },
+      "family": "edge",
+      "order_variant": null,
+      "params": {
+        "region": "region_11"
+      },
+      "public_cypher": {
+        "max_ms": 33.066056203097105,
+        "mean_ms": 31.743563013151288,
+        "min_ms": 30.42106982320547,
+        "stdev_ms": 1.322493189945817
+      },
+      "query": "MATCH (a:User)-[r:KNOWS|FOLLOWS]->(b:User) WHERE a.region = $region RETURN a.name, r.type, b.name ORDER BY a.name, b.name LIMIT 500",
+      "selectivity": "low",
+      "shape": "relationship_type_alternation",
+      "sqlite_plan_summary": {
+        "detail_count": 9,
+        "edge_property_search_count": 0,
+        "edge_search_count": 1,
+        "index_mentions": [
+          "SEARCH a_anchor USING COVERING INDEX idx_graph_node_props_lookup (key=? AND value_type=? AND value=?)",
+          "SEARCH a_order_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH a_return_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH b_order_1 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH b_return_2 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH r USING COVERING INDEX idx_graph_edges_from_type_to (from_node_id=? AND type=?)"
+        ],
+        "node_property_search_count": 4,
+        "node_search_count": 0,
+        "uses_temp_btree": true
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 32.07405423745513,
+        "mean_ms": 31.613927567377687,
+        "min_ms": 31.153800897300243,
+        "stdev_ms": 0.4601266700774431
+      }
+    },
+    "social_expand_unfiltered": {
+      "comparison_group": null,
+      "cypher_compile": {
+        "max_ms": 0.04238029941916466,
+        "mean_ms": 0.0360801350325346,
+        "min_ms": 0.02977997064590454,
+        "stdev_ms": 0.006300164386630058
+      },
+      "cypher_features": {
+        "anchors_edge_properties": false,
+        "anchors_node_properties": false,
+        "direct_edge_type_filter": true,
+        "direct_node_label_filter": true,
+        "edge_property_join_count": 0,
+        "family": "edge",
+        "graph_edges_join_count": 1,
+        "graph_nodes_join_count": 1,
+        "has_distinct": false,
+        "has_limit": true,
+        "has_offset": false,
+        "has_order_by": false,
+        "node_property_join_count": 2,
+        "selectivity": "very_low",
+        "shape": "full_relationship_expand"
+      },
+      "cypher_parse": {
+        "max_ms": 0.029449816793203354,
+        "mean_ms": 0.02771010622382164,
+        "min_ms": 0.025970395654439926,
+        "stdev_ms": 0.0017397105693817139
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 136.69789675623178,
+        "mean_ms": 135.9164349269122,
+        "min_ms": 135.1349730975926,
+        "stdev_ms": 0.7814618293195963
+      },
+      "family": "edge",
+      "order_variant": null,
+      "params": {},
+      "public_cypher": {
+        "max_ms": 12.928884010761976,
+        "mean_ms": 12.50472292304039,
+        "min_ms": 12.080561835318804,
+        "stdev_ms": 0.4241610877215862
+      },
+      "query": "MATCH (a:User)-[:KNOWS]->(b:User) RETURN a.name, b.name LIMIT 5000",
+      "selectivity": "very_low",
+      "shape": "full_relationship_expand",
+      "sqlite_plan_summary": {
+        "detail_count": 5,
+        "edge_property_search_count": 0,
+        "edge_search_count": 1,
+        "index_mentions": [
+          "SEARCH a USING COVERING INDEX idx_graph_nodes_label_id (label=?)",
+          "SEARCH a_return_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH b_return_1 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH edge_rel USING COVERING INDEX idx_graph_edges_from_type_to (from_node_id=? AND type=?)"
+        ],
+        "node_property_search_count": 2,
+        "node_search_count": 1,
+        "uses_temp_btree": false
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 10.600988287478685,
+        "mean_ms": 10.497152572497725,
+        "min_ms": 10.393316857516766,
+        "stdev_ms": 0.10383571498095989
+      }
+    },
+    "social_expand_untyped": {
+      "comparison_group": null,
+      "cypher_compile": {
+        "max_ms": 0.08299015462398529,
+        "mean_ms": 0.07275515235960484,
+        "min_ms": 0.06252015009522438,
+        "stdev_ms": 0.010235002264380455
+      },
+      "cypher_features": {
+        "anchors_edge_properties": false,
+        "anchors_node_properties": true,
+        "direct_edge_type_filter": true,
+        "direct_node_label_filter": true,
+        "edge_property_join_count": 0,
+        "family": "edge",
+        "graph_edges_join_count": 1,
+        "graph_nodes_join_count": 2,
+        "has_distinct": false,
+        "has_limit": true,
+        "has_offset": false,
+        "has_order_by": false,
+        "node_property_join_count": 3,
+        "selectivity": "low",
+        "shape": "untyped_relationship_expand"
+      },
+      "cypher_parse": {
+        "max_ms": 0.07099006325006485,
+        "mean_ms": 0.057759927585721016,
+        "min_ms": 0.04452979192137718,
+        "stdev_ms": 0.013230135664343834
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 177.97097517177463,
+        "mean_ms": 177.6999596040696,
+        "min_ms": 177.42894403636456,
+        "stdev_ms": 0.2710155677050352
+      },
+      "family": "edge",
+      "order_variant": null,
+      "params": {
+        "active": true,
+        "region": "region_11"
+      },
+      "public_cypher": {
+        "max_ms": 4.33487119153142,
+        "mean_ms": 3.279778640717268,
+        "min_ms": 2.2246860899031162,
+        "stdev_ms": 1.0550925508141518
+      },
+      "query": "MATCH (a:User)-[r]->(b:User) WHERE a.region = $region AND b.active = $active RETURN a.name, r.type, b.name LIMIT 500",
+      "selectivity": "low",
+      "shape": "untyped_relationship_expand",
+      "sqlite_plan_summary": {
+        "detail_count": 7,
+        "edge_property_search_count": 0,
+        "edge_search_count": 1,
+        "index_mentions": [
+          "SEARCH a_anchor USING COVERING INDEX idx_graph_node_props_lookup (key=? AND value_type=? AND value=?)",
+          "SEARCH a_return_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH b_filter_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?)",
+          "SEARCH b_return_2 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH r USING COVERING INDEX idx_graph_edges_from_type_to (from_node_id=?)"
+        ],
+        "node_property_search_count": 3,
+        "node_search_count": 0,
+        "uses_temp_btree": false
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 2.6996973901987076,
+        "mean_ms": 2.4373510386794806,
+        "min_ms": 2.1750046871602535,
+        "stdev_ms": 0.26234635151922703
+      }
+    },
+    "social_mixed_boolean": {
+      "comparison_group": null,
+      "cypher_compile": {
+        "max_ms": 0.10245991870760918,
+        "mean_ms": 0.10108994320034981,
+        "min_ms": 0.09971996769309044,
+        "stdev_ms": 0.001369975507259369
+      },
+      "cypher_features": {
+        "anchors_edge_properties": true,
+        "anchors_node_properties": true,
+        "direct_edge_type_filter": true,
+        "direct_node_label_filter": true,
+        "edge_property_join_count": 0,
+        "family": "edge",
+        "graph_edges_join_count": 1,
+        "graph_nodes_join_count": 1,
+        "has_distinct": false,
+        "has_limit": true,
+        "has_offset": false,
+        "has_order_by": true,
+        "node_property_join_count": 4,
+        "selectivity": "medium",
+        "shape": "mixed_boolean_expand"
+      },
+      "cypher_parse": {
+        "max_ms": 0.080890953540802,
+        "mean_ms": 0.07116538472473621,
+        "min_ms": 0.061439815908670425,
+        "stdev_ms": 0.009725568816065788
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 258.99954698979855,
+        "mean_ms": 253.26139642857015,
+        "min_ms": 247.52324586734176,
+        "stdev_ms": 5.7381505612283945
+      },
+      "family": "edge",
+      "order_variant": null,
+      "params": {
+        "active": true,
+        "name": "user_22500",
+        "since": 2021
+      },
+      "public_cypher": {
+        "max_ms": 495.6999449059367,
+        "mean_ms": 489.52761851251125,
+        "min_ms": 483.3552921190858,
+        "stdev_ms": 6.172326393425465
+      },
+      "query": "MATCH (a:User)-[r:KNOWS]->(b:User) WHERE r.since = $since AND b.active = $active OR a.name = $name RETURN a.name, b.name ORDER BY a.name, b.name LIMIT 250",
+      "selectivity": "medium",
+      "shape": "mixed_boolean_expand",
+      "sqlite_plan_summary": {
+        "detail_count": 14,
+        "edge_property_search_count": 1,
+        "edge_search_count": 1,
+        "index_mentions": [
+          "SEARCH a USING COVERING INDEX idx_graph_nodes_label_id (label=?)",
+          "SEARCH a_order_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH a_return_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH b_order_1 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH b_return_1 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH pf0 USING INDEX sqlite_autoindex_graph_edge_properties_1 (edge_id=? AND key=?)",
+          "SEARCH pf1 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?)",
+          "SEARCH pf100 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?)",
+          "SEARCH r USING COVERING INDEX idx_graph_edges_from_type_to (from_node_id=? AND type=?)"
+        ],
+        "node_property_search_count": 6,
+        "node_search_count": 1,
+        "uses_temp_btree": true
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 499.9962546862662,
+        "mean_ms": 493.6115383170545,
+        "min_ms": 487.22682194784284,
+        "stdev_ms": 6.384716369211674
+      }
+    },
+    "social_reverse_expand_ordered": {
+      "comparison_group": null,
+      "cypher_compile": {
+        "max_ms": 0.07109995931386948,
+        "mean_ms": 0.06444496102631092,
+        "min_ms": 0.057789962738752365,
+        "stdev_ms": 0.006654998287558556
+      },
+      "cypher_features": {
+        "anchors_edge_properties": false,
+        "anchors_node_properties": true,
+        "direct_edge_type_filter": true,
+        "direct_node_label_filter": true,
+        "edge_property_join_count": 2,
+        "family": "edge",
+        "graph_edges_join_count": 1,
+        "graph_nodes_join_count": 2,
+        "has_distinct": false,
+        "has_limit": true,
+        "has_offset": false,
+        "has_order_by": true,
+        "node_property_join_count": 2,
+        "selectivity": "low",
+        "shape": "reverse_relationship_expand"
+      },
+      "cypher_parse": {
+        "max_ms": 0.15995139256119728,
+        "mean_ms": 0.104955630376935,
+        "min_ms": 0.04995986819267273,
+        "stdev_ms": 0.054995762184262276
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 186.52912694960833,
+        "mean_ms": 184.28505095653236,
+        "min_ms": 182.0409749634564,
+        "stdev_ms": 2.244075993075967
+      },
+      "family": "edge",
+      "order_variant": null,
+      "params": {
+        "region": "region_11"
+      },
+      "public_cypher": {
+        "max_ms": 31.15034196525812,
+        "mean_ms": 29.494722140952945,
+        "min_ms": 27.839102316647768,
+        "stdev_ms": 1.6556198243051767
+      },
+      "query": "MATCH (b:User)<-[r:KNOWS]-(a:User) WHERE a.region = $region RETURN a.name, b.name, r.since ORDER BY r.since DESC LIMIT 500",
+      "selectivity": "low",
+      "shape": "reverse_relationship_expand",
+      "sqlite_plan_summary": {
+        "detail_count": 9,
+        "edge_property_search_count": 2,
+        "edge_search_count": 1,
+        "index_mentions": [
+          "SEARCH a_anchor USING COVERING INDEX idx_graph_node_props_lookup (key=? AND value_type=? AND value=?)",
+          "SEARCH a_return_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH b_return_1 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH r USING COVERING INDEX idx_graph_edges_from_type_to (from_node_id=? AND type=?)",
+          "SEARCH r_order_0 USING INDEX sqlite_autoindex_graph_edge_properties_1 (edge_id=? AND key=?) LEFT-JOIN",
+          "SEARCH r_return_2 USING INDEX sqlite_autoindex_graph_edge_properties_1 (edge_id=? AND key=?) LEFT-JOIN"
+        ],
+        "node_property_search_count": 2,
+        "node_search_count": 0,
+        "uses_temp_btree": true
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 27.620352804660797,
+        "mean_ms": 27.37680124118924,
+        "min_ms": 27.133249677717686,
+        "stdev_ms": 0.2435515634715557
+      }
+    },
+    "social_reverse_since_anchor": {
+      "comparison_group": null,
+      "cypher_compile": {
+        "max_ms": 0.0913599506020546,
+        "mean_ms": 0.07639988325536251,
+        "min_ms": 0.061439815908670425,
+        "stdev_ms": 0.014960067346692085
+      },
+      "cypher_features": {
+        "anchors_edge_properties": false,
+        "anchors_node_properties": true,
+        "direct_edge_type_filter": true,
+        "direct_node_label_filter": true,
+        "edge_property_join_count": 1,
+        "family": "edge",
+        "graph_edges_join_count": 1,
+        "graph_nodes_join_count": 2,
+        "has_distinct": false,
+        "has_limit": false,
+        "has_offset": false,
+        "has_order_by": false,
+        "node_property_join_count": 2,
+        "selectivity": "medium",
+        "shape": "relationship_property_anchor"
+      },
+      "cypher_parse": {
+        "max_ms": 0.05308026447892189,
+        "mean_ms": 0.04719500429928303,
+        "min_ms": 0.041309744119644165,
+        "stdev_ms": 0.005885260179638863
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 219.13465205579996,
+        "mean_ms": 217.28699747473001,
+        "min_ms": 215.43934289366007,
+        "stdev_ms": 1.8476545810699463
+      },
+      "family": "edge",
+      "order_variant": null,
+      "params": {
+        "active": true,
+        "since": 2021
+      },
+      "public_cypher": {
+        "max_ms": 115.91990292072296,
+        "mean_ms": 114.82634511776268,
+        "min_ms": 113.73278731480241,
+        "stdev_ms": 1.0935578029602766
+      },
+      "query": "MATCH (b:User)<-[r:KNOWS]-(a:User) WHERE r.since = $since AND b.active = $active RETURN a.name, b.name",
+      "selectivity": "medium",
+      "shape": "relationship_property_anchor",
+      "sqlite_plan_summary": {
+        "detail_count": 7,
+        "edge_property_search_count": 0,
+        "edge_search_count": 0,
+        "index_mentions": [
+          "SEARCH a_return_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH b_anchor USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?)",
+          "SEARCH b_return_1 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH r_filter_0 USING COVERING INDEX idx_graph_edge_props_lookup (key=? AND value_type=? AND value=?)"
+        ],
+        "node_property_search_count": 3,
+        "node_search_count": 0,
+        "uses_temp_btree": false
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 104.80514308437705,
+        "mean_ms": 103.8374260533601,
+        "min_ms": 102.86970902234316,
+        "stdev_ms": 0.9677170310169458
+      }
+    },
+    "social_type_filtered_region_expand": {
+      "comparison_group": null,
+      "cypher_compile": {
+        "max_ms": 0.12937001883983612,
+        "mean_ms": 0.11295056901872158,
+        "min_ms": 0.09653111919760704,
+        "stdev_ms": 0.01641944982111454
+      },
+      "cypher_features": {
+        "anchors_edge_properties": false,
+        "anchors_node_properties": true,
+        "direct_edge_type_filter": true,
+        "direct_node_label_filter": true,
+        "edge_property_join_count": 0,
+        "family": "edge",
+        "graph_edges_join_count": 1,
+        "graph_nodes_join_count": 2,
+        "has_distinct": false,
+        "has_limit": true,
+        "has_offset": false,
+        "has_order_by": true,
+        "node_property_join_count": 5,
+        "selectivity": "medium",
+        "shape": "endpoint_plus_type_filter"
+      },
+      "cypher_parse": {
+        "max_ms": 0.09530968964099884,
+        "mean_ms": 0.08265976794064045,
+        "min_ms": 0.07000984624028206,
+        "stdev_ms": 0.01264992170035839
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 212.67230482771993,
+        "mean_ms": 210.95740073360503,
+        "min_ms": 209.24249663949013,
+        "stdev_ms": 1.7149040941148996
+      },
+      "family": "edge",
+      "order_variant": null,
+      "params": {
+        "active": true,
+        "region": "region_11",
+        "type": "KNOWS"
+      },
+      "public_cypher": {
+        "max_ms": 31.48283204063773,
+        "mean_ms": 30.502464389428496,
+        "min_ms": 29.52209673821926,
+        "stdev_ms": 0.9803676512092352
+      },
+      "query": "MATCH (a:User)-[r]->(b:User) WHERE r.type = $type AND a.region = $region AND b.active = $active RETURN a.name, r.type, b.name ORDER BY a.name, b.name LIMIT 500",
+      "selectivity": "medium",
+      "shape": "endpoint_plus_type_filter",
+      "sqlite_plan_summary": {
+        "detail_count": 10,
+        "edge_property_search_count": 0,
+        "edge_search_count": 1,
+        "index_mentions": [
+          "SEARCH a_anchor USING COVERING INDEX idx_graph_node_props_lookup (key=? AND value_type=? AND value=?)",
+          "SEARCH a_order_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH a_return_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH b_filter_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?)",
+          "SEARCH b_order_1 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH b_return_2 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH r USING COVERING INDEX idx_graph_edges_from_type_to (from_node_id=? AND type=?)"
+        ],
+        "node_property_search_count": 5,
+        "node_search_count": 0,
+        "uses_temp_btree": true
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 30.067017767578363,
+        "mean_ms": 29.883333016186953,
+        "min_ms": 29.69964826479554,
+        "stdev_ms": 0.18368475139141083
+      }
+    },
+    "tagged_expand": {
+      "comparison_group": null,
+      "cypher_compile": {
+        "max_ms": 0.06640981882810593,
+        "mean_ms": 0.061935046687722206,
+        "min_ms": 0.057460274547338486,
+        "stdev_ms": 0.00447477214038372
+      },
+      "cypher_features": {
+        "anchors_edge_properties": false,
+        "anchors_node_properties": true,
+        "direct_edge_type_filter": true,
+        "direct_node_label_filter": true,
+        "edge_property_join_count": 0,
+        "family": "edge",
+        "graph_edges_join_count": 1,
+        "graph_nodes_join_count": 2,
+        "has_distinct": false,
+        "has_limit": false,
+        "has_offset": false,
+        "has_order_by": false,
+        "node_property_join_count": 3,
+        "selectivity": "high",
+        "shape": "selective_relationship_expand"
+      },
+      "cypher_parse": {
+        "max_ms": 0.05363998934626579,
+        "mean_ms": 0.0473950058221817,
+        "min_ms": 0.04115002229809761,
+        "stdev_ms": 0.006244983524084091
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 221.42880875617266,
+        "mean_ms": 203.65083194337785,
+        "min_ms": 185.87285513058305,
+        "stdev_ms": 17.777976812794805
+      },
+      "family": "edge",
+      "order_variant": null,
+      "params": {
+        "category": "category_5",
+        "domain": "domain_3"
+      },
+      "public_cypher": {
+        "max_ms": 9.158413857221603,
+        "mean_ms": 7.520709419623017,
+        "min_ms": 5.883004982024431,
+        "stdev_ms": 1.637704437598586
+      },
+      "query": "MATCH (d:Document)-[:TAGGED]->(t:Topic) WHERE d.category = $category AND t.domain = $domain RETURN d.title, t.slug",
+      "selectivity": "high",
+      "shape": "selective_relationship_expand",
+      "sqlite_plan_summary": {
+        "detail_count": 7,
+        "edge_property_search_count": 0,
+        "edge_search_count": 1,
+        "index_mentions": [
+          "SEARCH d_anchor USING COVERING INDEX idx_graph_node_props_lookup (key=? AND value_type=? AND value=?)",
+          "SEARCH d_return_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH edge_rel USING COVERING INDEX idx_graph_edges_from_type_to (from_node_id=? AND type=?)",
+          "SEARCH t_filter_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?)",
+          "SEARCH t_return_1 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN"
+        ],
+        "node_property_search_count": 3,
+        "node_search_count": 0,
+        "uses_temp_btree": false
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 5.801405292004347,
+        "mean_ms": 5.611744709312916,
+        "min_ms": 5.422084126621485,
+        "stdev_ms": 0.18966058269143105
+      }
+    },
+    "tagged_topic_fanout": {
+      "comparison_group": null,
+      "cypher_compile": {
+        "max_ms": 0.05888007581233978,
+        "mean_ms": 0.05328003317117691,
+        "min_ms": 0.04767999053001404,
+        "stdev_ms": 0.005600042641162872
+      },
+      "cypher_features": {
+        "anchors_edge_properties": false,
+        "anchors_node_properties": true,
+        "direct_edge_type_filter": true,
+        "direct_node_label_filter": true,
+        "edge_property_join_count": 0,
+        "family": "edge",
+        "graph_edges_join_count": 1,
+        "graph_nodes_join_count": 2,
+        "has_distinct": false,
+        "has_limit": false,
+        "has_offset": false,
+        "has_order_by": false,
+        "node_property_join_count": 2,
+        "selectivity": "low",
+        "shape": "topic_fanout_expand"
+      },
+      "cypher_parse": {
+        "max_ms": 0.04475004971027374,
+        "mean_ms": 0.03915000706911087,
+        "min_ms": 0.033549964427948,
+        "stdev_ms": 0.005600042641162872
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 165.65305180847645,
+        "mean_ms": 164.30244385264814,
+        "min_ms": 162.95183589681983,
+        "stdev_ms": 1.350607955828309
+      },
+      "family": "edge",
+      "order_variant": null,
+      "params": {
+        "domain": "domain_3"
+      },
+      "public_cypher": {
+        "max_ms": 19.152650609612465,
+        "mean_ms": 18.200452905148268,
+        "min_ms": 17.24825520068407,
+        "stdev_ms": 0.9521977044641972
+      },
+      "query": "MATCH (d:Document)-[:TAGGED]->(t:Topic) WHERE t.domain = $domain RETURN d.title, t.slug",
+      "selectivity": "low",
+      "shape": "topic_fanout_expand",
+      "sqlite_plan_summary": {
+        "detail_count": 6,
+        "edge_property_search_count": 0,
+        "edge_search_count": 1,
+        "index_mentions": [
+          "SEARCH d_return_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH edge_rel USING COVERING INDEX idx_graph_edges_to_type_from (to_node_id=? AND type=?)",
+          "SEARCH t_anchor USING COVERING INDEX idx_graph_node_props_lookup (key=? AND value_type=? AND value=?)",
+          "SEARCH t_return_1 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN"
+        ],
+        "node_property_search_count": 2,
+        "node_search_count": 0,
+        "uses_temp_btree": false
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 17.83227687701583,
+        "mean_ms": 17.17617502436042,
+        "min_ms": 16.520073171705008,
+        "stdev_ms": 0.6561018526554108
+      }
+    },
+    "tagged_weight_domain": {
+      "comparison_group": "tagged_title_order",
+      "cypher_compile": {
+        "max_ms": 0.10298006236553192,
+        "mean_ms": 0.08889543823897839,
+        "min_ms": 0.07481081411242485,
+        "stdev_ms": 0.014084624126553535
+      },
+      "cypher_features": {
+        "anchors_edge_properties": false,
+        "anchors_node_properties": true,
+        "direct_edge_type_filter": true,
+        "direct_node_label_filter": true,
+        "edge_property_join_count": 2,
+        "family": "edge",
+        "graph_edges_join_count": 1,
+        "graph_nodes_join_count": 2,
+        "has_distinct": false,
+        "has_limit": true,
+        "has_offset": false,
+        "has_order_by": true,
+        "node_property_join_count": 3,
+        "selectivity": "medium",
+        "shape": "edge_property_plus_endpoint_filter"
+      },
+      "cypher_parse": {
+        "max_ms": 0.08777016773819923,
+        "mean_ms": 0.06930017843842506,
+        "min_ms": 0.050830189138650894,
+        "stdev_ms": 0.01846998929977417
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 208.5806541144848,
+        "mean_ms": 207.66757219098508,
+        "min_ms": 206.75449026748538,
+        "stdev_ms": 0.9130819234997034
+      },
+      "family": "edge",
+      "order_variant": "ordered",
+      "params": {
+        "domain": "domain_3",
+        "weight": 17
+      },
+      "public_cypher": {
+        "max_ms": 5.246574059128761,
+        "mean_ms": 3.989190561696887,
+        "min_ms": 2.7318070642650127,
+        "stdev_ms": 1.2573834974318743
+      },
+      "query": "MATCH (d:Document)-[r:TAGGED]->(t:Topic) WHERE r.weight = $weight AND t.domain = $domain RETURN d.title, t.slug, r.weight ORDER BY d.title LIMIT 250",
+      "selectivity": "medium",
+      "shape": "edge_property_plus_endpoint_filter",
+      "sqlite_plan_summary": {
+        "detail_count": 10,
+        "edge_property_search_count": 1,
+        "edge_search_count": 0,
+        "index_mentions": [
+          "SEARCH d_order_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH d_return_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH r_filter_0 USING COVERING INDEX idx_graph_edge_props_lookup (key=? AND value_type=? AND value=?)",
+          "SEARCH r_return_2 USING INDEX sqlite_autoindex_graph_edge_properties_1 (edge_id=? AND key=?) LEFT-JOIN",
+          "SEARCH t_anchor USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?)",
+          "SEARCH t_return_1 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN"
+        ],
+        "node_property_search_count": 4,
+        "node_search_count": 0,
+        "uses_temp_btree": true
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 3.2342583872377872,
+        "mean_ms": 3.145428141579032,
+        "min_ms": 3.0565978959202766,
+        "stdev_ms": 0.0888302456587553
+      }
+    },
+    "tagged_weight_domain_unordered": {
+      "comparison_group": "tagged_title_order",
+      "cypher_compile": {
+        "max_ms": 0.07502967491745949,
+        "mean_ms": 0.07277540862560272,
+        "min_ms": 0.07052114233374596,
+        "stdev_ms": 0.0022542662918567657
+      },
+      "cypher_features": {
+        "anchors_edge_properties": false,
+        "anchors_node_properties": true,
+        "direct_edge_type_filter": true,
+        "direct_node_label_filter": true,
+        "edge_property_join_count": 2,
+        "family": "edge",
+        "graph_edges_join_count": 1,
+        "graph_nodes_join_count": 2,
+        "has_distinct": false,
+        "has_limit": true,
+        "has_offset": false,
+        "has_order_by": false,
+        "node_property_join_count": 2,
+        "selectivity": "medium",
+        "shape": "edge_property_plus_endpoint_filter"
+      },
+      "cypher_parse": {
+        "max_ms": 0.058830250054597855,
+        "mean_ms": 0.0529151875525713,
+        "min_ms": 0.04700012505054474,
+        "stdev_ms": 0.005915062502026558
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 213.19868694990873,
+        "mean_ms": 208.9437753893435,
+        "min_ms": 204.68886382877827,
+        "stdev_ms": 4.254911560565233
+      },
+      "family": "edge",
+      "order_variant": "unordered",
+      "params": {
+        "domain": "domain_3",
+        "weight": 17
+      },
+      "public_cypher": {
+        "max_ms": 4.030060954391956,
+        "mean_ms": 3.099458059296012,
+        "min_ms": 2.1688551642000675,
+        "stdev_ms": 0.9306028950959444
+      },
+      "query": "MATCH (d:Document)-[r:TAGGED]->(t:Topic) WHERE r.weight = $weight AND t.domain = $domain RETURN d.title, t.slug, r.weight LIMIT 250",
+      "selectivity": "medium",
+      "shape": "edge_property_plus_endpoint_filter",
+      "sqlite_plan_summary": {
+        "detail_count": 8,
+        "edge_property_search_count": 1,
+        "edge_search_count": 0,
+        "index_mentions": [
+          "SEARCH d_return_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH r_filter_0 USING COVERING INDEX idx_graph_edge_props_lookup (key=? AND value_type=? AND value=?)",
+          "SEARCH r_return_2 USING INDEX sqlite_autoindex_graph_edge_properties_1 (edge_id=? AND key=?) LEFT-JOIN",
+          "SEARCH t_anchor USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?)",
+          "SEARCH t_return_1 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN"
+        ],
+        "node_property_search_count": 3,
+        "node_search_count": 0,
+        "uses_temp_btree": false
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 3.4417989663779736,
+        "mean_ms": 2.90762260556221,
+        "min_ms": 2.3734462447464466,
+        "stdev_ms": 0.5341763608157635
+      }
+    },
+    "team_lookup": {
+      "comparison_group": null,
+      "cypher_compile": {
+        "max_ms": 0.05128001794219017,
+        "mean_ms": 0.04827510565519333,
+        "min_ms": 0.04527019336819649,
+        "stdev_ms": 0.0030049122869968414
+      },
+      "cypher_features": {
+        "anchors_edge_properties": false,
+        "anchors_node_properties": true,
+        "direct_edge_type_filter": false,
+        "direct_node_label_filter": true,
+        "edge_property_join_count": 0,
+        "family": "node",
+        "graph_edges_join_count": 0,
+        "graph_nodes_join_count": 1,
+        "has_distinct": false,
+        "has_limit": false,
+        "has_offset": false,
+        "has_order_by": false,
+        "node_property_join_count": 3,
+        "selectivity": "high",
+        "shape": "anchored_node_lookup"
+      },
+      "cypher_parse": {
+        "max_ms": 0.04451023414731026,
+        "mean_ms": 0.0407251063734293,
+        "min_ms": 0.03693997859954834,
+        "stdev_ms": 0.0037851277738809586
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 138.04733008146286,
+        "mean_ms": 136.15789054892957,
+        "min_ms": 134.26845101639628,
+        "stdev_ms": 1.889439532533288
+      },
+      "family": "node",
+      "order_variant": null,
+      "params": {
+        "slug": "team_4166"
+      },
+      "public_cypher": {
+        "max_ms": 1.5401639975607395,
+        "mean_ms": 0.8400725200772285,
+        "min_ms": 0.13998104259371758,
+        "stdev_ms": 0.700091477483511
+      },
+      "query": "MATCH (g:Team) WHERE g.slug = $slug RETURN g.slug, g.region, g.size_band",
+      "selectivity": "high",
+      "shape": "anchored_node_lookup",
+      "sqlite_plan_summary": {
+        "detail_count": 5,
+        "edge_property_search_count": 0,
+        "edge_search_count": 0,
+        "index_mentions": [
+          "SEARCH g_anchor USING COVERING INDEX idx_graph_node_props_lookup (key=? AND value_type=? AND value=?)",
+          "SEARCH g_return_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH g_return_1 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH g_return_2 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN"
+        ],
+        "node_property_search_count": 3,
+        "node_search_count": 0,
+        "uses_temp_btree": false
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 0.15575019642710686,
+        "mean_ms": 0.11168001219630241,
+        "min_ms": 0.06760982796549797,
+        "stdev_ms": 0.04407018423080444
+      }
+    },
+    "team_membership_expand": {
+      "comparison_group": null,
+      "cypher_compile": {
+        "max_ms": 0.07366016507148743,
+        "mean_ms": 0.06910506635904312,
+        "min_ms": 0.06454996764659882,
+        "stdev_ms": 0.004555098712444305
+      },
+      "cypher_features": {
+        "anchors_edge_properties": false,
+        "anchors_node_properties": true,
+        "direct_edge_type_filter": true,
+        "direct_node_label_filter": true,
+        "edge_property_join_count": 0,
+        "family": "edge",
+        "graph_edges_join_count": 1,
+        "graph_nodes_join_count": 2,
+        "has_distinct": false,
+        "has_limit": false,
+        "has_offset": false,
+        "has_order_by": false,
+        "node_property_join_count": 3,
+        "selectivity": "medium",
+        "shape": "membership_expand"
+      },
+      "cypher_parse": {
+        "max_ms": 0.06389990448951721,
+        "mean_ms": 0.051819952204823494,
+        "min_ms": 0.039739999920129776,
+        "stdev_ms": 0.012079952284693718
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 192.6324930973351,
+        "mean_ms": 192.384812515229,
+        "min_ms": 192.13713193312287,
+        "stdev_ms": 0.24768058210611343
+      },
+      "family": "edge",
+      "order_variant": null,
+      "params": {
+        "active": true,
+        "region": "region_5"
+      },
+      "public_cypher": {
+        "max_ms": 13.004573993384838,
+        "mean_ms": 12.193601578474045,
+        "min_ms": 11.382629163563251,
+        "stdev_ms": 0.8109724149107933
+      },
+      "query": "MATCH (u:User)-[:MEMBER_OF]->(g:Team) WHERE g.region = $region AND u.active = $active RETURN u.name, g.slug",
+      "selectivity": "medium",
+      "shape": "membership_expand",
+      "sqlite_plan_summary": {
+        "detail_count": 7,
+        "edge_property_search_count": 0,
+        "edge_search_count": 1,
+        "index_mentions": [
+          "SEARCH edge_rel USING COVERING INDEX idx_graph_edges_to_type_from (to_node_id=? AND type=?)",
+          "SEARCH g_anchor USING COVERING INDEX idx_graph_node_props_lookup (key=? AND value_type=? AND value=?)",
+          "SEARCH g_return_1 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH u_filter_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?)",
+          "SEARCH u_return_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN"
+        ],
+        "node_property_search_count": 3,
+        "node_search_count": 0,
+        "uses_temp_btree": false
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 11.552650015801191,
+        "mean_ms": 11.35275955311954,
+        "min_ms": 11.152869090437889,
+        "stdev_ms": 0.19989046268165112
+      }
+    },
+    "team_membership_ordered": {
+      "comparison_group": null,
+      "cypher_compile": {
+        "max_ms": 0.08764117956161499,
+        "mean_ms": 0.07907557301223278,
+        "min_ms": 0.07050996646285057,
+        "stdev_ms": 0.00856560654938221
+      },
+      "cypher_features": {
+        "anchors_edge_properties": false,
+        "anchors_node_properties": true,
+        "direct_edge_type_filter": true,
+        "direct_node_label_filter": true,
+        "edge_property_join_count": 0,
+        "family": "edge",
+        "graph_edges_join_count": 1,
+        "graph_nodes_join_count": 2,
+        "has_distinct": false,
+        "has_limit": true,
+        "has_offset": false,
+        "has_order_by": true,
+        "node_property_join_count": 4,
+        "selectivity": "medium",
+        "shape": "ordered_membership_expand"
+      },
+      "cypher_parse": {
+        "max_ms": 0.0592600554227829,
+        "mean_ms": 0.053099822252988815,
+        "min_ms": 0.04693958908319473,
+        "stdev_ms": 0.006160233169794083
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 217.27229841053486,
+        "mean_ms": 207.4022216256708,
+        "min_ms": 197.53214484080672,
+        "stdev_ms": 9.870076784864068
+      },
+      "family": "edge",
+      "order_variant": null,
+      "params": {
+        "size_band": "band_3"
+      },
+      "public_cypher": {
+        "max_ms": 23.142090067267418,
+        "mean_ms": 22.8434547316283,
+        "min_ms": 22.54481939598918,
+        "stdev_ms": 0.29863533563911915
+      },
+      "query": "MATCH (u:User)-[:MEMBER_OF]->(g:Team) WHERE g.size_band = $size_band RETURN u.name, g.slug, u.reputation ORDER BY u.reputation DESC LIMIT 250",
+      "selectivity": "medium",
+      "shape": "ordered_membership_expand",
+      "sqlite_plan_summary": {
+        "detail_count": 9,
+        "edge_property_search_count": 0,
+        "edge_search_count": 1,
+        "index_mentions": [
+          "SEARCH edge_rel USING COVERING INDEX idx_graph_edges_to_type_from (to_node_id=? AND type=?)",
+          "SEARCH g_anchor USING COVERING INDEX idx_graph_node_props_lookup (key=? AND value_type=? AND value=?)",
+          "SEARCH g_return_1 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH u_order_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH u_return_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH u_return_2 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN"
+        ],
+        "node_property_search_count": 4,
+        "node_search_count": 0,
+        "uses_temp_btree": true
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 22.19110820442438,
+        "mean_ms": 21.887331968173385,
+        "min_ms": 21.583555731922388,
+        "stdev_ms": 0.3037762362509966
+      }
+    },
+    "team_membership_role_region": {
+      "comparison_group": "team_membership_name_order",
+      "cypher_compile": {
+        "max_ms": 0.07544131949543953,
+        "mean_ms": 0.07072067819535732,
+        "min_ms": 0.06600003689527512,
+        "stdev_ms": 0.004720641300082207
+      },
+      "cypher_features": {
+        "anchors_edge_properties": false,
+        "anchors_node_properties": true,
+        "direct_edge_type_filter": true,
+        "direct_node_label_filter": true,
+        "edge_property_join_count": 2,
+        "family": "edge",
+        "graph_edges_join_count": 1,
+        "graph_nodes_join_count": 2,
+        "has_distinct": false,
+        "has_limit": true,
+        "has_offset": false,
+        "has_order_by": true,
+        "node_property_join_count": 3,
+        "selectivity": "medium",
+        "shape": "edge_property_plus_endpoint_filter"
+      },
+      "cypher_parse": {
+        "max_ms": 0.06751017645001411,
+        "mean_ms": 0.05832500755786896,
+        "min_ms": 0.0491398386657238,
+        "stdev_ms": 0.009185168892145157
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 212.67702477052808,
+        "mean_ms": 209.50267696753144,
+        "min_ms": 206.3283291645348,
+        "stdev_ms": 3.1743478029966354
+      },
+      "family": "edge",
+      "order_variant": "ordered",
+      "params": {
+        "region": "region_5",
+        "role": "role_3"
+      },
+      "public_cypher": {
+        "max_ms": 19.129469990730286,
+        "mean_ms": 18.726064125075936,
+        "min_ms": 18.322658259421587,
+        "stdev_ms": 0.4034058656543493
+      },
+      "query": "MATCH (u:User)-[r:MEMBER_OF]->(g:Team) WHERE r.role = $role AND g.region = $region RETURN u.name, g.slug, r.role ORDER BY u.name LIMIT 250",
+      "selectivity": "medium",
+      "shape": "edge_property_plus_endpoint_filter",
+      "sqlite_plan_summary": {
+        "detail_count": 10,
+        "edge_property_search_count": 1,
+        "edge_search_count": 0,
+        "index_mentions": [
+          "SEARCH g_anchor USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?)",
+          "SEARCH g_return_1 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH r_filter_0 USING COVERING INDEX idx_graph_edge_props_lookup (key=? AND value_type=? AND value=?)",
+          "SEARCH r_return_2 USING INDEX sqlite_autoindex_graph_edge_properties_1 (edge_id=? AND key=?) LEFT-JOIN",
+          "SEARCH u_order_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH u_return_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN"
+        ],
+        "node_property_search_count": 4,
+        "node_search_count": 0,
+        "uses_temp_btree": true
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 17.08612497895956,
+        "mean_ms": 16.969234449788928,
+        "min_ms": 16.852343920618296,
+        "stdev_ms": 0.11689052917063236
+      }
+    },
+    "team_membership_role_region_unordered": {
+      "comparison_group": "team_membership_name_order",
+      "cypher_compile": {
+        "max_ms": 0.07514981552958488,
+        "mean_ms": 0.06982474587857723,
+        "min_ms": 0.06449967622756958,
+        "stdev_ms": 0.005325069651007652
+      },
+      "cypher_features": {
+        "anchors_edge_properties": false,
+        "anchors_node_properties": true,
+        "direct_edge_type_filter": true,
+        "direct_node_label_filter": true,
+        "edge_property_join_count": 2,
+        "family": "edge",
+        "graph_edges_join_count": 1,
+        "graph_nodes_join_count": 2,
+        "has_distinct": false,
+        "has_limit": true,
+        "has_offset": false,
+        "has_order_by": false,
+        "node_property_join_count": 2,
+        "selectivity": "medium",
+        "shape": "edge_property_plus_endpoint_filter"
+      },
+      "cypher_parse": {
+        "max_ms": 0.06129033863544464,
+        "mean_ms": 0.05493033677339554,
+        "min_ms": 0.048570334911346436,
+        "stdev_ms": 0.006360001862049103
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 204.40533431246877,
+        "mean_ms": 203.81842204369605,
+        "min_ms": 203.23150977492332,
+        "stdev_ms": 0.5869122687727213
+      },
+      "family": "edge",
+      "order_variant": "unordered",
+      "params": {
+        "region": "region_5",
+        "role": "role_3"
+      },
+      "public_cypher": {
+        "max_ms": 7.9669407568871975,
+        "mean_ms": 6.971202790737152,
+        "min_ms": 5.975464824587107,
+        "stdev_ms": 0.9957379661500454
+      },
+      "query": "MATCH (u:User)-[r:MEMBER_OF]->(g:Team) WHERE r.role = $role AND g.region = $region RETURN u.name, g.slug, r.role LIMIT 250",
+      "selectivity": "medium",
+      "shape": "edge_property_plus_endpoint_filter",
+      "sqlite_plan_summary": {
+        "detail_count": 8,
+        "edge_property_search_count": 1,
+        "edge_search_count": 0,
+        "index_mentions": [
+          "SEARCH g_anchor USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?)",
+          "SEARCH g_return_1 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH r_filter_0 USING COVERING INDEX idx_graph_edge_props_lookup (key=? AND value_type=? AND value=?)",
+          "SEARCH r_return_2 USING INDEX sqlite_autoindex_graph_edge_properties_1 (edge_id=? AND key=?) LEFT-JOIN",
+          "SEARCH u_return_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN"
+        ],
+        "node_property_search_count": 3,
+        "node_search_count": 0,
+        "uses_temp_btree": false
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 6.528936792165041,
+        "mean_ms": 6.460761185735464,
+        "min_ms": 6.392585579305887,
+        "stdev_ms": 0.06817560642957687
+      }
+    },
+    "team_membership_type_band": {
+      "comparison_group": null,
+      "cypher_compile": {
+        "max_ms": 0.12351991608738899,
+        "mean_ms": 0.1051449216902256,
+        "min_ms": 0.08676992729306221,
+        "stdev_ms": 0.01837499439716339
+      },
+      "cypher_features": {
+        "anchors_edge_properties": false,
+        "anchors_node_properties": true,
+        "direct_edge_type_filter": true,
+        "direct_node_label_filter": true,
+        "edge_property_join_count": 0,
+        "family": "edge",
+        "graph_edges_join_count": 1,
+        "graph_nodes_join_count": 2,
+        "has_distinct": false,
+        "has_limit": true,
+        "has_offset": false,
+        "has_order_by": true,
+        "node_property_join_count": 5,
+        "selectivity": "medium",
+        "shape": "endpoint_plus_type_filter"
+      },
+      "cypher_parse": {
+        "max_ms": 0.0876300036907196,
+        "mean_ms": 0.07756543345749378,
+        "min_ms": 0.06750086322426796,
+        "stdev_ms": 0.010064570233225822
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 232.28073678910732,
+        "mean_ms": 230.37256649695337,
+        "min_ms": 228.4643962047994,
+        "stdev_ms": 1.9081702921539545
+      },
+      "family": "edge",
+      "order_variant": null,
+      "params": {
+        "active": true,
+        "size_band": "band_3",
+        "type": "MEMBER_OF"
+      },
+      "public_cypher": {
+        "max_ms": 23.608350660651922,
+        "mean_ms": 23.34011089988053,
+        "min_ms": 23.071871139109135,
+        "stdev_ms": 0.2682397607713938
+      },
+      "query": "MATCH (u:User)-[r]->(g:Team) WHERE r.type = $type AND g.size_band = $size_band AND u.active = $active RETURN u.name, g.slug, u.reputation ORDER BY u.reputation DESC LIMIT 250",
+      "selectivity": "medium",
+      "shape": "endpoint_plus_type_filter",
+      "sqlite_plan_summary": {
+        "detail_count": 10,
+        "edge_property_search_count": 0,
+        "edge_search_count": 1,
+        "index_mentions": [
+          "SEARCH g_anchor USING COVERING INDEX idx_graph_node_props_lookup (key=? AND value_type=? AND value=?)",
+          "SEARCH g_return_1 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH r USING COVERING INDEX idx_graph_edges_to_type_from (to_node_id=? AND type=?)",
+          "SEARCH u_filter_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?)",
+          "SEARCH u_order_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH u_return_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH u_return_2 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN"
+        ],
+        "node_property_search_count": 5,
+        "node_search_count": 0,
+        "uses_temp_btree": true
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 23.716730996966362,
+        "mean_ms": 22.73259893991053,
+        "min_ms": 21.7484668828547,
+        "stdev_ms": 0.984132057055831
+      }
+    },
+    "topic_lookup": {
+      "comparison_group": null,
+      "cypher_compile": {
+        "max_ms": 0.054139643907547,
+        "mean_ms": 0.050404807552695274,
+        "min_ms": 0.04666997119784355,
+        "stdev_ms": 0.0037348363548517227
+      },
+      "cypher_features": {
+        "anchors_edge_properties": false,
+        "anchors_node_properties": true,
+        "direct_edge_type_filter": false,
+        "direct_node_label_filter": true,
+        "edge_property_join_count": 0,
+        "family": "node",
+        "graph_edges_join_count": 0,
+        "graph_nodes_join_count": 1,
+        "has_distinct": false,
+        "has_limit": false,
+        "has_offset": false,
+        "has_order_by": false,
+        "node_property_join_count": 3,
+        "selectivity": "high",
+        "shape": "anchored_node_lookup"
+      },
+      "cypher_parse": {
+        "max_ms": 0.05589006468653679,
+        "mean_ms": 0.0435051042586565,
+        "min_ms": 0.031120143830776215,
+        "stdev_ms": 0.012384960427880287
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 128.58420610427856,
+        "mean_ms": 128.12629947438836,
+        "min_ms": 127.66839284449816,
+        "stdev_ms": 0.4579066298902035
+      },
+      "family": "node",
+      "order_variant": null,
+      "params": {
+        "slug": "topic_8333"
+      },
+      "public_cypher": {
+        "max_ms": 1.5514539554715157,
+        "mean_ms": 0.8295373991131783,
+        "min_ms": 0.10762084275484085,
+        "stdev_ms": 0.7219165563583374
+      },
+      "query": "MATCH (t:Topic) WHERE t.slug = $slug RETURN t.slug, t.domain, t.trending",
+      "selectivity": "high",
+      "shape": "anchored_node_lookup",
+      "sqlite_plan_summary": {
+        "detail_count": 5,
+        "edge_property_search_count": 0,
+        "edge_search_count": 0,
+        "index_mentions": [
+          "SEARCH t_anchor USING COVERING INDEX idx_graph_node_props_lookup (key=? AND value_type=? AND value=?)",
+          "SEARCH t_return_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH t_return_1 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH t_return_2 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN"
+        ],
+        "node_property_search_count": 3,
+        "node_search_count": 0,
+        "uses_temp_btree": false
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 0.16643106937408447,
+        "mean_ms": 0.1145706046372652,
+        "min_ms": 0.06271013990044594,
+        "stdev_ms": 0.05186046473681927
+      }
+    },
+    "user_distinct_region_offset": {
+      "comparison_group": null,
+      "cypher_compile": {
+        "max_ms": 0.03582006320357323,
+        "mean_ms": 0.03181048668920994,
+        "min_ms": 0.02780091017484665,
+        "stdev_ms": 0.004009576514363289
+      },
+      "cypher_features": {
+        "anchors_edge_properties": false,
+        "anchors_node_properties": false,
+        "direct_edge_type_filter": false,
+        "direct_node_label_filter": true,
+        "edge_property_join_count": 0,
+        "family": "node",
+        "graph_edges_join_count": 0,
+        "graph_nodes_join_count": 0,
+        "has_distinct": true,
+        "has_limit": true,
+        "has_offset": true,
+        "has_order_by": true,
+        "node_property_join_count": 2,
+        "selectivity": "medium",
+        "shape": "distinct_paginated_projection"
+      },
+      "cypher_parse": {
+        "max_ms": 0.0897599384188652,
+        "mean_ms": 0.0575000885874033,
+        "min_ms": 0.02524023875594139,
+        "stdev_ms": 0.032259849831461906
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 82.89659675210714,
+        "mean_ms": 82.68553600646555,
+        "min_ms": 82.47447526082397,
+        "stdev_ms": 0.21106074564158916
+      },
+      "family": "node",
+      "order_variant": null,
+      "params": {},
+      "public_cypher": {
+        "max_ms": 61.77198141813278,
+        "mean_ms": 59.46101061999798,
+        "min_ms": 57.150039821863174,
+        "stdev_ms": 2.3109707981348038
+      },
+      "query": "MATCH (u:User) RETURN DISTINCT u.region ORDER BY u.region OFFSET 5 LIMIT 10",
+      "selectivity": "medium",
+      "shape": "distinct_paginated_projection",
+      "sqlite_plan_summary": {
+        "detail_count": 5,
+        "edge_property_search_count": 0,
+        "edge_search_count": 0,
+        "index_mentions": [
+          "SEARCH u USING COVERING INDEX idx_graph_nodes_label_id (label=?)",
+          "SEARCH u_order_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH u_return_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN"
+        ],
+        "node_property_search_count": 2,
+        "node_search_count": 1,
+        "uses_temp_btree": true
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 56.97707878425717,
+        "mean_ms": 56.89622322097421,
+        "min_ms": 56.81536765769124,
+        "stdev_ms": 0.08085556328296661
+      }
+    },
+    "user_lookup": {
+      "comparison_group": null,
+      "cypher_compile": {
+        "max_ms": 0.09592995047569275,
+        "mean_ms": 0.07578544318675995,
+        "min_ms": 0.05564093589782715,
+        "stdev_ms": 0.0201445072889328
+      },
+      "cypher_features": {
+        "anchors_edge_properties": false,
+        "anchors_node_properties": true,
+        "direct_edge_type_filter": false,
+        "direct_node_label_filter": true,
+        "edge_property_join_count": 0,
+        "family": "node",
+        "graph_edges_join_count": 0,
+        "graph_nodes_join_count": 1,
+        "has_distinct": false,
+        "has_limit": false,
+        "has_offset": false,
+        "has_order_by": false,
+        "node_property_join_count": 4,
+        "selectivity": "high",
+        "shape": "anchored_node_lookup"
+      },
+      "cypher_parse": {
+        "max_ms": 0.36241114139556885,
+        "mean_ms": 0.20239572040736675,
+        "min_ms": 0.04238029941916466,
+        "stdev_ms": 0.1600154209882021
+      },
+      "duckdb_raw_sql": {
+        "max_ms": 159.98272690922022,
+        "mean_ms": 156.35712281800807,
+        "min_ms": 152.7315187267959,
+        "stdev_ms": 3.6256040912121534
+      },
+      "family": "node",
+      "order_variant": null,
+      "params": {
+        "name": "user_22500"
+      },
+      "public_cypher": {
+        "max_ms": 48.883677925914526,
+        "mean_ms": 24.513778975233436,
+        "min_ms": 0.14388002455234528,
+        "stdev_ms": 24.36989895068109
+      },
+      "query": "MATCH (u:User) WHERE u.name = $name RETURN u.name, u.region, u.active, u.reputation",
+      "selectivity": "high",
+      "shape": "anchored_node_lookup",
+      "sqlite_plan_summary": {
+        "detail_count": 6,
+        "edge_property_search_count": 0,
+        "edge_search_count": 0,
+        "index_mentions": [
+          "SEARCH u_anchor USING COVERING INDEX idx_graph_node_props_lookup (key=? AND value_type=? AND value=?)",
+          "SEARCH u_return_0 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH u_return_1 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH u_return_2 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN",
+          "SEARCH u_return_3 USING INDEX sqlite_autoindex_graph_node_properties_1 (node_id=? AND key=?) LEFT-JOIN"
+        ],
+        "node_property_search_count": 4,
+        "node_search_count": 0,
+        "uses_temp_btree": false
+      },
+      "sqlite_raw_sql": {
+        "max_ms": 0.23364974185824394,
+        "mean_ms": 0.15155039727687836,
+        "min_ms": 0.06945105269551277,
+        "stdev_ms": 0.08209934458136559
+      }
+    }
+  }
+}

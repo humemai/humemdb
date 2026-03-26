@@ -17,6 +17,14 @@ if TYPE_CHECKING:
     from humemdb.db import HumemDB
 
 
+def _sqlite_engine(db: HumemDB):
+    return getattr(db, "_sqlite")
+
+
+def _duckdb_engine(db: HumemDB):
+    return getattr(db, "_duckdb")
+
+
 @dataclass(frozen=True, slots=True)
 class QueryWorkload:
     """Benchmark workload definition for one SQL query shape."""
@@ -588,7 +596,7 @@ def _create_indexes(db: HumemDB) -> None:
         "CREATE INDEX idx_users_region_active ON users (region, is_active)",
     ]
     for statement in index_statements:
-        db.sqlite.execute(statement)
+        _sqlite_engine(db).execute(statement)
 
 
 def _summarize(timings: list[float]) -> TimingSummary:
@@ -610,18 +618,18 @@ def _time_query(
     for _ in range(warmup):
         translated = translate_sql(query, target=route)
         if route == "sqlite":
-            db.sqlite.execute(translated, query_type="sql")
+            _sqlite_engine(db).execute(translated, query_type="sql")
         else:
-            db.duckdb.execute(translated, query_type="sql")
+            _duckdb_engine(db).execute(translated, query_type="sql")
 
     timings: list[float] = []
     for _ in range(repetitions):
         started = time.perf_counter()
         translated = translate_sql(query, target=route)
         if route == "sqlite":
-            db.sqlite.execute(translated, query_type="sql")
+            _sqlite_engine(db).execute(translated, query_type="sql")
         else:
-            db.duckdb.execute(translated, query_type="sql")
+            _duckdb_engine(db).execute(translated, query_type="sql")
         timings.append(time.perf_counter() - started)
 
     return _summarize(timings)

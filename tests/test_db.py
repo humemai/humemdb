@@ -23,6 +23,10 @@ def _runtime_module():
     return importlib.import_module("humemdb.runtime")
 
 
+def _duckdb_engine(db):
+    return getattr(db, "_duckdb")
+
+
 class HumemDBTest(unittest.TestCase):
     def test_translate_sql_rewrites_postgres_cast_for_sqlite(self) -> None:
         translate_sql = _translate_sql()
@@ -42,6 +46,25 @@ class HumemDBTest(unittest.TestCase):
         self.assertEqual(
             translated,
             "SELECT LOWER('Alice') LIKE LOWER('aLiCe') AS matched",
+        )
+
+    def test_translate_sql_keeps_sqlite_create_index_columns_plain(self) -> None:
+        translate_sql = _translate_sql()
+
+        translated = translate_sql(
+            (
+                "CREATE INDEX IF NOT EXISTS idx_docs_project_status "
+                "ON docs(project_slug, status)"
+            ),
+            target="sqlite",
+        )
+
+        self.assertEqual(
+            translated,
+            (
+                "CREATE INDEX IF NOT EXISTS idx_docs_project_status "
+                "ON docs(project_slug, status)"
+            ),
         )
 
     def test_translate_sql_rejects_invalid_postgres_like_sql(self) -> None:
@@ -455,7 +478,7 @@ class HumemDBTest(unittest.TestCase):
 
             with mock.patch.dict(os.environ, {"HUMEMDB_THREADS": "8"}):
                 with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
-                    threads = db.duckdb.connection.execute(
+                    threads = _duckdb_engine(db).connection.execute(
                         "SELECT current_setting('threads')"
                     ).fetchone()[0]
 
@@ -595,6 +618,42 @@ class HumemDBTest(unittest.TestCase):
 
                 self.assertEqual(result.rows, ((1, "Alice"), (2, "Bob")))
                 self.assertEqual(result.route, "sqlite")
+
+    def test_query_allows_create_index_through_public_sql_surface(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+
+            with HumemDB(str(sqlite_path)) as db:
+                db.query(
+                    (
+                        "CREATE TABLE docs ("
+                        "id INTEGER PRIMARY KEY, "
+                        "project_slug TEXT NOT NULL, "
+                        "status TEXT NOT NULL)"
+                    )
+                )
+
+                result = db.query(
+                    (
+                        "CREATE INDEX IF NOT EXISTS idx_docs_project_status "
+                        "ON docs(project_slug, status)"
+                    )
+                )
+
+                self.assertEqual(result.route, "sqlite")
+                self.assertEqual(result.query_type, "sql")
+
+                indexes = db.query(
+                    (
+                        "SELECT name FROM sqlite_master "
+                        "WHERE type = 'index' AND name = $name"
+                    ),
+                    params={"name": "idx_docs_project_status"},
+                )
+
+                self.assertEqual(indexes.rows, (("idx_docs_project_status",),))
 
     def test_query_auto_routes_broad_sql_read_to_duckdb(self) -> None:
         HumemDB = _humemdb_class()
@@ -2265,8 +2324,10 @@ class HumemDBTest(unittest.TestCase):
             duckdb_path = Path(tmpdir) / "humem.duckdb"
 
             with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
-                db.duckdb.execute("CREATE TABLE metrics (name VARCHAR, value INTEGER)")
-                db.duckdb.execute(
+                _duckdb_engine(db).execute(
+                    "CREATE TABLE metrics (name VARCHAR, value INTEGER)"
+                )
+                _duckdb_engine(db).execute(
                     "INSERT INTO metrics VALUES (?, ?)",
                     params=("queries", 1),
                 )
@@ -2282,6 +2343,16 @@ class HumemDBTest(unittest.TestCase):
                 result = getattr(db, "_execute_sql_query_plan")(plan)
 
                 self.assertEqual(result.rows, (("queries", 1),))
+
+    def test_humemdb_does_not_expose_engine_attributes_publicly(self) -> None:
+        HumemDB = _humemdb_class()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+
+            with HumemDB(str(sqlite_path)) as db:
+                self.assertFalse(hasattr(db, "sqlite"))
+                self.assertFalse(hasattr(db, "duckdb"))
 
     def test_duckdb_rejects_data_modifying_cte_queries(self) -> None:
         HumemDB = _humemdb_class()

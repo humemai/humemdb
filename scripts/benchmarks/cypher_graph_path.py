@@ -8,15 +8,44 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 from typing import Callable
 
-from humemdb import HumemDB
+from humemdb import HumemDB as _HumemDB
 from humemdb.cypher import MatchNodePlan
 from humemdb.cypher import MatchRelationshipPlan
 from humemdb.cypher import _bind_plan_values
 from humemdb.cypher import _compile_match_plan
 from humemdb.cypher import ensure_graph_schema
 from humemdb.cypher import parse_cypher
+
+if TYPE_CHECKING:
+    from humemdb.db import HumemDB
+
+
+def _sqlite_engine(db: HumemDB):
+    return getattr(db, "_sqlite")
+
+
+def _duckdb_engine(db: HumemDB):
+    return getattr(db, "_duckdb")
+
+
+_GRAPH_INDEX_SET_SQL: dict[str, tuple[str, ...]] = {
+    "baseline": (),
+    "phase11-node-prop-covering": (
+        "CREATE INDEX IF NOT EXISTS idx_graph_node_props_node_key_value_type_value "
+        "ON graph_node_properties(node_id, key, value_type, value)",
+    ),
+    "phase11-edge-prop-covering": (
+        "CREATE INDEX IF NOT EXISTS idx_graph_edge_props_edge_key_value_type_value "
+        "ON graph_edge_properties(edge_id, key, value_type, value)",
+    ),
+    "phase11-targeted": (
+        "CREATE INDEX IF NOT EXISTS idx_graph_node_props_node_key_value_type_value "
+        "ON graph_node_properties(node_id, key, value_type, value)",
+    ),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +57,8 @@ class QueryWorkload:
     selectivity: str
     query: str
     params: dict[str, str | int | float | bool | None]
+    comparison_group: str | None = None
+    order_variant: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,7 +136,25 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Optional path to write machine-readable benchmark results as JSON.",
     )
+    parser.add_argument(
+        "--index-set",
+        choices=tuple(_GRAPH_INDEX_SET_SQL),
+        default="baseline",
+        help="Named extra graph-index set to apply after seeding.",
+    )
     return parser.parse_args()
+
+
+def _apply_graph_index_set(db: HumemDB, *, index_set: str) -> None:
+    """Apply one named graph-index experiment to the seeded SQLite graph tables."""
+
+    try:
+        statements = _GRAPH_INDEX_SET_SQL[index_set]
+    except KeyError as exc:
+        raise ValueError(f"Unknown graph index set {index_set!r}.") from exc
+
+    for statement in statements:
+        _sqlite_engine(db).execute(statement)
 
 
 def _workloads(dataset: GraphDataset) -> dict[str, QueryWorkload]:
@@ -240,6 +289,18 @@ def _workloads(dataset: GraphDataset) -> dict[str, QueryWorkload]:
             ),
             params={"region": "region_11", "active": True},
         ),
+        "social_type_filtered_region_expand": QueryWorkload(
+            family="edge",
+            shape="endpoint_plus_type_filter",
+            selectivity="medium",
+            query=(
+                "MATCH (a:User)-[r]->(b:User) "
+                "WHERE r.type = $type AND a.region = $region AND b.active = $active "
+                "RETURN a.name, r.type, b.name "
+                "ORDER BY a.name, b.name LIMIT 500"
+            ),
+            params={"type": "KNOWS", "region": "region_11", "active": True},
+        ),
         "social_reverse_expand_ordered": QueryWorkload(
             family="edge",
             shape="reverse_relationship_expand",
@@ -298,6 +359,22 @@ def _workloads(dataset: GraphDataset) -> dict[str, QueryWorkload]:
                 "LIMIT 100"
             ),
             params={"published": True},
+            comparison_group="author_expand_score_order",
+            order_variant="ordered",
+        ),
+        "author_expand_unordered": QueryWorkload(
+            family="edge",
+            shape="unordered_relationship_expand",
+            selectivity="medium",
+            query=(
+                "MATCH (u:User)-[:AUTHORED]->(d:Document) "
+                "WHERE d.published = $published "
+                "RETURN u.name, d.title, d.score "
+                "LIMIT 100"
+            ),
+            params={"published": True},
+            comparison_group="author_expand_score_order",
+            order_variant="unordered",
         ),
         "tagged_expand": QueryWorkload(
             family="edge",
@@ -343,6 +420,48 @@ def _workloads(dataset: GraphDataset) -> dict[str, QueryWorkload]:
             ),
             params={"region": "region_5", "active": True},
         ),
+        "team_membership_role_region": QueryWorkload(
+            family="edge",
+            shape="edge_property_plus_endpoint_filter",
+            selectivity="medium",
+            query=(
+                "MATCH (u:User)-[r:MEMBER_OF]->(g:Team) "
+                "WHERE r.role = $role AND g.region = $region "
+                "RETURN u.name, g.slug, r.role "
+                "ORDER BY u.name LIMIT 250"
+            ),
+            params={"role": "role_3", "region": "region_5"},
+            comparison_group="team_membership_name_order",
+            order_variant="ordered",
+        ),
+        "team_membership_role_region_unordered": QueryWorkload(
+            family="edge",
+            shape="edge_property_plus_endpoint_filter",
+            selectivity="medium",
+            query=(
+                "MATCH (u:User)-[r:MEMBER_OF]->(g:Team) "
+                "WHERE r.role = $role AND g.region = $region "
+                "RETURN u.name, g.slug, r.role "
+                "LIMIT 250"
+            ),
+            params={"role": "role_3", "region": "region_5"},
+            comparison_group="team_membership_name_order",
+            order_variant="unordered",
+        ),
+        "team_membership_type_band": QueryWorkload(
+            family="edge",
+            shape="endpoint_plus_type_filter",
+            selectivity="medium",
+            query=(
+                "MATCH (u:User)-[r]->(g:Team) "
+                "WHERE r.type = $type AND g.size_band = $size_band "
+                "AND u.active = $active "
+                "RETURN u.name, g.slug, u.reputation "
+                "ORDER BY u.reputation DESC "
+                "LIMIT 250"
+            ),
+            params={"type": "MEMBER_OF", "size_band": "band_3", "active": True},
+        ),
         "team_membership_ordered": QueryWorkload(
             family="edge",
             shape="ordered_membership_expand",
@@ -355,6 +474,34 @@ def _workloads(dataset: GraphDataset) -> dict[str, QueryWorkload]:
                 "LIMIT 250"
             ),
             params={"size_band": "band_3"},
+        ),
+        "tagged_weight_domain": QueryWorkload(
+            family="edge",
+            shape="edge_property_plus_endpoint_filter",
+            selectivity="medium",
+            query=(
+                "MATCH (d:Document)-[r:TAGGED]->(t:Topic) "
+                "WHERE r.weight = $weight AND t.domain = $domain "
+                "RETURN d.title, t.slug, r.weight "
+                "ORDER BY d.title LIMIT 250"
+            ),
+            params={"weight": 17, "domain": "domain_3"},
+            comparison_group="tagged_title_order",
+            order_variant="ordered",
+        ),
+        "tagged_weight_domain_unordered": QueryWorkload(
+            family="edge",
+            shape="edge_property_plus_endpoint_filter",
+            selectivity="medium",
+            query=(
+                "MATCH (d:Document)-[r:TAGGED]->(t:Topic) "
+                "WHERE r.weight = $weight AND t.domain = $domain "
+                "RETURN d.title, t.slug, r.weight "
+                "LIMIT 250"
+            ),
+            params={"weight": 17, "domain": "domain_3"},
+            comparison_group="tagged_title_order",
+            order_variant="unordered",
         ),
     }
 
@@ -409,7 +556,7 @@ def _seed_graph(
     tag_fanout: int,
     batch_size: int,
 ) -> tuple[GraphDataset, float]:
-    ensure_graph_schema(db.sqlite)
+    ensure_graph_schema(_sqlite_engine(db))
     dataset = _dataset_counts(nodes, fanout, tag_fanout)
 
     started = time.perf_counter()
@@ -607,11 +754,11 @@ def _insert_nodes(
     node_rows: list[tuple[int, str]],
     property_rows: list[tuple[int, str, str | None, str]],
 ) -> None:
-    db.sqlite.executemany(
+    _sqlite_engine(db).executemany(
         "INSERT INTO graph_nodes (id, label) VALUES (?, ?)",
         node_rows,
     )
-    db.sqlite.executemany(
+    _sqlite_engine(db).executemany(
         (
             "INSERT INTO graph_node_properties (node_id, key, value, value_type) "
             "VALUES (?, ?, ?, ?)"
@@ -741,14 +888,14 @@ def _flush_edge_batches(
     edge_rows: list[tuple[int, str, int, int]],
     property_rows: list[tuple[int, str, str | None, str]],
 ) -> None:
-    db.sqlite.executemany(
+    _sqlite_engine(db).executemany(
         (
             "INSERT INTO graph_edges (id, type, from_node_id, to_node_id) "
             "VALUES (?, ?, ?, ?)"
         ),
         edge_rows,
     )
-    db.sqlite.executemany(
+    _sqlite_engine(db).executemany(
         (
             "INSERT INTO graph_edge_properties (edge_id, key, value, value_type) "
             "VALUES (?, ?, ?, ?)"
@@ -791,6 +938,74 @@ def _compile_workload(workload: QueryWorkload):
     return _compile_match_plan(plan)
 
 
+def _cypher_feature_dict(workload: QueryWorkload) -> dict[str, int | bool | str]:
+    """Return lightweight graph-planning features for one admitted Cypher workload."""
+
+    compiled = _compile_workload(workload)
+    sql = compiled.sql
+    return {
+        "family": workload.family,
+        "shape": workload.shape,
+        "selectivity": workload.selectivity,
+        "graph_nodes_join_count": sql.count("JOIN graph_nodes AS"),
+        "graph_edges_join_count": sql.count("JOIN graph_edges AS"),
+        "node_property_join_count": sql.count("JOIN graph_node_properties AS"),
+        "edge_property_join_count": sql.count("JOIN graph_edge_properties AS"),
+        "anchors_node_properties": "FROM graph_node_properties AS" in sql,
+        "anchors_edge_properties": "FROM graph_edge_properties AS" in sql,
+        "direct_node_label_filter": ".label " in sql,
+        "direct_edge_type_filter": ".type " in sql,
+        "has_distinct": "SELECT DISTINCT" in sql,
+        "has_order_by": " ORDER BY " in sql,
+        "has_offset": " OFFSET " in sql,
+        "has_limit": " LIMIT " in sql,
+    }
+
+
+def _sqlite_plan_summary_from_details(
+    details: list[str],
+) -> dict[str, int | bool | list[str]]:
+    """Summarize SQLite EXPLAIN QUERY PLAN detail lines for machine-readable output."""
+
+    upper_details = [detail.upper() for detail in details]
+    index_mentions = sorted(
+        {
+            detail
+            for detail, upper in zip(details, upper_details, strict=False)
+            if "USING INDEX" in upper or "USING COVERING INDEX" in upper
+        }
+    )
+    return {
+        "detail_count": len(details),
+        "node_search_count": sum("GRAPH_NODES" in detail for detail in upper_details),
+        "edge_search_count": sum("GRAPH_EDGES" in detail for detail in upper_details),
+        "node_property_search_count": sum(
+            "GRAPH_NODE_PROPERTIES" in detail for detail in upper_details
+        ),
+        "edge_property_search_count": sum(
+            "GRAPH_EDGE_PROPERTIES" in detail for detail in upper_details
+        ),
+        "uses_temp_btree": any("USE TEMP B-TREE" in detail for detail in upper_details),
+        "index_mentions": index_mentions,
+    }
+
+
+def _sqlite_plan_summary(
+    db: HumemDB,
+    *,
+    sql: str,
+    params: tuple[object, ...],
+) -> dict[str, int | bool | list[str]]:
+    """Return a summarized SQLite EXPLAIN QUERY PLAN payload for one compiled query."""
+
+    explain_rows = _sqlite_engine(db).execute(
+        f"EXPLAIN QUERY PLAN {sql}",
+        params,
+    ).rows
+    details = [str(row[3]) for row in explain_rows]
+    return _sqlite_plan_summary_from_details(details)
+
+
 def _format_seconds(seconds: float) -> str:
     return f"{seconds * 1_000:.2f} ms"
 
@@ -819,6 +1034,7 @@ def main() -> None:
     args = _parse_args()
     json_results: dict[str, object] = {
         "benchmark": "cypher_graph_path",
+        "index_set": args.index_set,
         "thread_limit": os.environ.get("HUMEMDB_THREADS", "default"),
         "warmup": args.warmup,
         "repetitions": args.repetitions,
@@ -832,7 +1048,7 @@ def main() -> None:
         sqlite_path = Path(tmpdir) / "graph.sqlite3"
         duckdb_path = Path(tmpdir) / "graph.duckdb"
 
-        with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+        with _HumemDB(str(sqlite_path), str(duckdb_path)) as db:
             dataset, seed_seconds = _seed_graph(
                 db,
                 nodes=args.nodes,
@@ -840,9 +1056,11 @@ def main() -> None:
                 tag_fanout=args.tag_fanout,
                 batch_size=args.batch_size,
             )
+            _apply_graph_index_set(db, index_set=args.index_set)
             workloads = _workloads(dataset)
 
             print(f"Thread limit: {os.environ.get('HUMEMDB_THREADS', 'default')}")
+            print(f"Index set: {args.index_set}")
             print(f"Total nodes: {dataset.total_nodes}")
             print(f"Users: {dataset.user_count}")
             print(f"Documents: {dataset.document_count}")
@@ -888,7 +1106,7 @@ def main() -> None:
                 compiled = _compile_workload(workload)
 
                 sqlite_sql_summary = _time_callable(
-                    lambda compiled=compiled: db.sqlite.execute(
+                    lambda compiled=compiled: _sqlite_engine(db).execute(
                         compiled.sql,
                         compiled.params,
                     ),
@@ -896,7 +1114,7 @@ def main() -> None:
                     repetitions=args.repetitions,
                 )
                 duckdb_sql_summary = _time_callable(
-                    lambda compiled=compiled: db.duckdb.execute(
+                    lambda compiled=compiled: _duckdb_engine(db).execute(
                         compiled.sql,
                         compiled.params,
                     ),
@@ -928,8 +1146,16 @@ def main() -> None:
                     "family": workload.family,
                     "shape": workload.shape,
                     "selectivity": workload.selectivity,
+                    "comparison_group": workload.comparison_group,
+                    "order_variant": workload.order_variant,
                     "query": workload.query,
                     "params": workload.params,
+                    "cypher_features": _cypher_feature_dict(workload),
+                    "sqlite_plan_summary": _sqlite_plan_summary(
+                        db,
+                        sql=compiled.sql,
+                        params=compiled.params,
+                    ),
                     "cypher_parse": _summary_dict(parse_summary),
                     "cypher_compile": _summary_dict(compile_summary),
                     "sqlite_raw_sql": _summary_dict(sqlite_sql_summary),

@@ -17,6 +17,11 @@ cypher_module = import_module("humemdb.cypher")
 sql_module = import_module("humemdb.sql")
 vector_module = import_module("humemdb.vector")
 
+
+def _sqlite_engine(db):
+    return getattr(db, "_sqlite")
+
+
 MatchNodePlan = cypher_module.MatchNodePlan
 MatchRelationshipPlan = cypher_module.MatchRelationshipPlan
 _bind_plan_values = getattr(cypher_module, "_bind_plan_values")
@@ -308,7 +313,9 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
                 time.perf_counter() - started
             ) * 1_000.0
 
-            direct_item_ids, direct_matrix = load_vector_matrix(direct_db.sqlite)
+            direct_item_ids, direct_matrix = load_vector_matrix(
+                _sqlite_engine(direct_db)
+            )
             direct_index = ExactVectorIndex(
                 item_ids=direct_item_ids,
                 matrix=direct_matrix,
@@ -368,7 +375,7 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
                 time.perf_counter() - started
             ) * 1_000.0
 
-            sql_item_ids, sql_matrix = load_vector_matrix(sql_db.sqlite)
+            sql_item_ids, sql_matrix = load_vector_matrix(_sqlite_engine(sql_db))
             sql_index = ExactVectorIndex(
                 item_ids=sql_item_ids,
                 matrix=sql_matrix,
@@ -451,7 +458,9 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
                 time.perf_counter() - started
             ) * 1_000.0
 
-            cypher_item_ids, cypher_matrix = load_vector_matrix(cypher_db.sqlite)
+            cypher_item_ids, cypher_matrix = load_vector_matrix(
+                _sqlite_engine(cypher_db)
+            )
             cypher_index = ExactVectorIndex(
                 item_ids=cypher_item_ids,
                 matrix=cypher_matrix,

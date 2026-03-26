@@ -22,6 +22,12 @@ pa = import_module("pyarrow")
 
 HumemDB = import_module("humemdb").HumemDB
 _vector_module = import_module("humemdb.vector")
+
+
+def _sqlite_engine(db):
+    return getattr(db, "_sqlite")
+
+
 ExactVectorIndex = _vector_module.ExactVectorIndex
 ScalarQuantizedVectorIndex = _vector_module.ScalarQuantizedVectorIndex
 ensure_vector_schema = _vector_module.ensure_vector_schema
@@ -239,7 +245,7 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
             sqlite_seed_ms = (time.perf_counter() - started) * 1000.0
 
             started = time.perf_counter()
-            item_ids, matrix = load_vector_matrix(db.sqlite)
+            item_ids, matrix = load_vector_matrix(_sqlite_engine(db))
             sqlite_load_ms = (time.perf_counter() - started) * 1000.0
 
         queries = _make_queries(
@@ -527,10 +533,10 @@ def _seed_sqlite_vectors(
     matrix = rng.normal(size=(rows, dimensions)).astype(np.float32)
     matrix = matrix / np.linalg.norm(matrix, axis=1, keepdims=True)
 
-    ensure_vector_schema(db.sqlite)
+    ensure_vector_schema(_sqlite_engine(db))
     with db.transaction():
         insert_vectors(
-            db.sqlite,
+            _sqlite_engine(db),
             [(index + 1, matrix[index]) for index in range(rows)],
         )
     return rows

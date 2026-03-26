@@ -24,3 +24,7 @@ Current examples:
   edges across multiple labels and relationship families, plus per-step timing.
 - `03_vector_search.py`: more than 60,000 direct vectors plus SQL-owned and graph-owned
   vector flows, with metadata filters, invalidation checks, and per-step timing.
+- `04_mixed_memory_workflow.py`: one shared database with 12 relational tables,
+  151,056 SQL rows, a 105,832-node and 253,524-edge graph, 100,000 direct
+  vectors, 128-dimensional embeddings, mixed SQL and graph vector recall, and
+  per-step timing.

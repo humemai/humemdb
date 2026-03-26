@@ -36,6 +36,11 @@ def _parse_args() -> argparse.Namespace:
         help="Comma-separated node-count scales for the Cypher benchmark.",
     )
     parser.add_argument(
+        "--cypher-index-set",
+        default="baseline",
+        help="Named extra graph-index set to pass to the Cypher benchmark.",
+    )
+    parser.add_argument(
         "--vector-scales",
         default="2000,10000,50000",
         help="Comma-separated row-count scales for the vector benchmark.",
@@ -163,6 +168,7 @@ def _run_sql_sweep(
 def _run_cypher_sweep(
     *,
     scales: tuple[int, ...],
+    index_set: str,
     warmup: int,
     repetitions: int,
     output_dir: Path,
@@ -182,6 +188,8 @@ def _run_cypher_sweep(
             str(config["fanout"]),
             "--tag-fanout",
             str(config["tag_fanout"]),
+            "--index-set",
+            index_set,
             "--warmup",
             str(warmup),
             "--repetitions",
@@ -198,6 +206,7 @@ def _run_cypher_sweep(
         runs.append(run)
     summary = {
         "benchmark": "cypher_routing_sweep",
+        "index_set": index_set,
         "scales": list(scales),
         "warmup": warmup,
         "repetitions": repetitions,
@@ -286,6 +295,7 @@ def main() -> None:
     if args.benchmark in {"all", "cypher"}:
         merged["cypher"] = _run_cypher_sweep(
             scales=cypher_scales,
+            index_set=args.cypher_index_set,
             warmup=args.warmup,
             repetitions=args.repetitions,
             output_dir=output_dir,

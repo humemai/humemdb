@@ -21,6 +21,7 @@ frontend surfaces will expand.
 
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass
 from functools import lru_cache
 import json
@@ -29,7 +30,17 @@ import os
 import re
 from numbers import Integral
 from pathlib import Path
-from typing import Any, Literal, Mapping, Protocol, Sequence, TypeAlias, cast
+from typing import (
+    Any,
+    Iterable,
+    Iterator,
+    Literal,
+    Mapping,
+    Protocol,
+    Sequence,
+    TypeAlias,
+    cast,
+)
 
 from ._vector_runtime import (
     DirectVectorSearchPlan as _DirectVectorSearchPlan,
@@ -50,6 +61,7 @@ from ._vector_runtime import (
 from .cypher import (
     CypherPlanShape as _CypherPlanShape,
     GraphPlan as _GraphPlan,
+    _encode_property_value,
     analyze_cypher_plan,
     ensure_graph_schema,
     execute_cypher,
@@ -99,6 +111,7 @@ DirectVectorRow: TypeAlias = (
     | tuple[int, Sequence[float]]
     | Mapping[str, object]
 )
+GraphImportPropertyType: TypeAlias = Literal["string", "integer", "real", "boolean"]
 WorkloadKind: TypeAlias = Literal[
     "transactional_read",
     "transactional_write",
@@ -1081,6 +1094,326 @@ class HumemDB:
         )
         return self._execute_batch_query_plan(plan)
 
+    def import_table(
+        self,
+        table: str,
+        path: str | Path,
+        *,
+        columns: Sequence[str] | None = None,
+        header: bool = True,
+        delimiter: str = ",",
+        chunk_size: int = 1000,
+        encoding: str = "utf-8",
+    ) -> int:
+        """Import one CSV file into a relational table on the canonical SQLite store.
+
+        Args:
+            table: Destination relational table name.
+            path: Path to the CSV file to import.
+            columns: Optional destination column order. When omitted and `header=True`,
+                the CSV header defines the imported columns.
+            header: Whether the CSV file includes a header row.
+            delimiter: Field delimiter used by the CSV file.
+            chunk_size: Number of rows to batch per SQLite `executemany(...)` call.
+            encoding: Text encoding used when reading the CSV file.
+
+        Returns:
+            Number of imported rows.
+
+        Raises:
+            ValueError: If configuration is invalid or the CSV rows do not match the
+                expected column shape.
+        """
+
+        if not table:
+            raise ValueError("import_table(...) requires a non-empty table name.")
+        if chunk_size <= 0:
+            raise ValueError("import_table(...) requires chunk_size >= 1.")
+        if not header and columns is None:
+            raise ValueError(
+                "import_table(...) requires explicit columns when header=False."
+            )
+
+        normalized_columns = _normalize_import_columns(columns)
+        import_path = Path(path)
+        rows_imported = 0
+        owns_transaction = not self._sqlite.in_transaction
+
+        def import_rows() -> None:
+            nonlocal rows_imported
+
+            with import_path.open("r", encoding=encoding, newline="") as csv_file:
+                resolved_columns, row_iter = _prepare_csv_import_reader(
+                    csv_file,
+                    columns=normalized_columns,
+                    header=header,
+                    delimiter=delimiter,
+                )
+                insert_sql = _build_import_insert_sql(
+                    table=table,
+                    columns=resolved_columns,
+                )
+                chunk: list[tuple[object, ...]] = []
+                for row in row_iter:
+                    chunk.append(row)
+                    if len(chunk) >= chunk_size:
+                        self._sqlite.executemany(insert_sql, chunk, query_type="sql")
+                        rows_imported += len(chunk)
+                        chunk = []
+                if chunk:
+                    self._sqlite.executemany(insert_sql, chunk, query_type="sql")
+                    rows_imported += len(chunk)
+
+        if owns_transaction:
+            with self.transaction():
+                import_rows()
+        else:
+            import_rows()
+
+        return rows_imported
+
+    def import_nodes(
+        self,
+        label: str,
+        path: str | Path,
+        *,
+        id_column: str,
+        property_columns: Sequence[str] | None = None,
+        property_types: Mapping[str, GraphImportPropertyType] | None = None,
+        header: bool = True,
+        delimiter: str = ",",
+        chunk_size: int = 1000,
+        encoding: str = "utf-8",
+    ) -> int:
+        """Import one CSV file into the SQLite-backed graph node store.
+
+        Args:
+            label: Label to assign to every imported node.
+            path: Path to the CSV file to import.
+            id_column: CSV column that provides the graph node id.
+            property_columns: Optional node property columns. When omitted and
+                `header=True`, all non-id columns are imported as properties.
+            property_types: Optional per-property type mapping. Unspecified columns
+                import as strings.
+            header: Whether the CSV file includes a header row.
+            delimiter: Field delimiter used by the CSV file.
+            chunk_size: Number of rows to batch per SQLite write chunk.
+            encoding: Text encoding used when reading the CSV file.
+
+        Returns:
+            Number of imported nodes.
+        """
+
+        if not label:
+            raise ValueError("import_nodes(...) requires a non-empty label.")
+        if not id_column:
+            raise ValueError("import_nodes(...) requires a non-empty id_column.")
+        if chunk_size <= 0:
+            raise ValueError("import_nodes(...) requires chunk_size >= 1.")
+        if not header and property_columns is None:
+            raise ValueError(
+                "import_nodes(...) requires explicit property_columns when "
+                "header=False."
+            )
+
+        self._ensure_graph_schema()
+        import_path = Path(path)
+        normalized_property_columns = _normalize_graph_import_columns(
+            property_columns
+        )
+        normalized_property_types = _normalize_graph_import_property_types(
+            property_types
+        )
+        rows_imported = 0
+        owns_transaction = not self._sqlite.in_transaction
+
+        def import_rows() -> None:
+            nonlocal rows_imported
+
+            with import_path.open("r", encoding=encoding, newline="") as csv_file:
+                resolved_columns, row_iter = _prepare_named_csv_import_reader(
+                    csv_file,
+                    columns=None if header else _node_import_columns(
+                        id_column,
+                        normalized_property_columns,
+                    ),
+                    header=header,
+                    delimiter=delimiter,
+                )
+                resolved_property_columns = _resolve_graph_property_columns(
+                    available_columns=resolved_columns,
+                    required_columns=(id_column,),
+                    property_columns=normalized_property_columns,
+                    method_name="import_nodes",
+                )
+
+                node_rows: list[tuple[int, str]] = []
+                property_rows: list[tuple[int, str, object, str]] = []
+                for row in row_iter:
+                    node_id = int(row[id_column])
+                    node_rows.append((node_id, label))
+                    property_rows.extend(
+                        _build_graph_property_rows(
+                            owner_id=node_id,
+                            columns=resolved_property_columns,
+                            row=row,
+                            property_types=normalized_property_types,
+                        )
+                    )
+                    if len(node_rows) >= chunk_size:
+                        _write_imported_graph_nodes(
+                            self._sqlite,
+                            node_rows=node_rows,
+                            property_rows=property_rows,
+                        )
+                        rows_imported += len(node_rows)
+                        node_rows = []
+                        property_rows = []
+
+                if node_rows:
+                    _write_imported_graph_nodes(
+                        self._sqlite,
+                        node_rows=node_rows,
+                        property_rows=property_rows,
+                    )
+                    rows_imported += len(node_rows)
+
+        if owns_transaction:
+            with self.transaction():
+                import_rows()
+        else:
+            import_rows()
+
+        return rows_imported
+
+    def import_edges(
+        self,
+        rel_type: str,
+        path: str | Path,
+        *,
+        source_id_column: str,
+        target_id_column: str,
+        property_columns: Sequence[str] | None = None,
+        property_types: Mapping[str, GraphImportPropertyType] | None = None,
+        header: bool = True,
+        delimiter: str = ",",
+        chunk_size: int = 1000,
+        encoding: str = "utf-8",
+    ) -> int:
+        """Import one CSV file into the SQLite-backed graph edge store.
+
+        Args:
+            rel_type: Relationship type to assign to every imported edge.
+            path: Path to the CSV file to import.
+            source_id_column: CSV column that provides the source node id.
+            target_id_column: CSV column that provides the target node id.
+            property_columns: Optional edge property columns. When omitted and
+                `header=True`, all non-endpoint columns are imported as properties.
+            property_types: Optional per-property type mapping. Unspecified columns
+                import as strings.
+            header: Whether the CSV file includes a header row.
+            delimiter: Field delimiter used by the CSV file.
+            chunk_size: Number of rows to batch per SQLite write chunk.
+            encoding: Text encoding used when reading the CSV file.
+
+        Returns:
+            Number of imported edges.
+        """
+
+        if not rel_type:
+            raise ValueError("import_edges(...) requires a non-empty rel_type.")
+        if not source_id_column or not target_id_column:
+            raise ValueError(
+                "import_edges(...) requires non-empty source and target id columns."
+            )
+        if chunk_size <= 0:
+            raise ValueError("import_edges(...) requires chunk_size >= 1.")
+        if not header and property_columns is None:
+            raise ValueError(
+                "import_edges(...) requires explicit property_columns when "
+                "header=False."
+            )
+
+        self._ensure_graph_schema()
+        import_path = Path(path)
+        normalized_property_columns = _normalize_graph_import_columns(
+            property_columns
+        )
+        normalized_property_types = _normalize_graph_import_property_types(
+            property_types
+        )
+        rows_imported = 0
+        owns_transaction = not self._sqlite.in_transaction
+
+        def import_rows() -> None:
+            nonlocal rows_imported
+
+            next_edge_id = _next_graph_edge_id(self._sqlite)
+            with import_path.open("r", encoding=encoding, newline="") as csv_file:
+                resolved_columns, row_iter = _prepare_named_csv_import_reader(
+                    csv_file,
+                    columns=None if header else _edge_import_columns(
+                        source_id_column,
+                        target_id_column,
+                        normalized_property_columns,
+                    ),
+                    header=header,
+                    delimiter=delimiter,
+                )
+                resolved_property_columns = _resolve_graph_property_columns(
+                    available_columns=resolved_columns,
+                    required_columns=(source_id_column, target_id_column),
+                    property_columns=normalized_property_columns,
+                    method_name="import_edges",
+                )
+
+                edge_rows: list[tuple[int, str, int, int]] = []
+                property_rows: list[tuple[int, str, object, str]] = []
+                for row in row_iter:
+                    edge_id = next_edge_id
+                    next_edge_id += 1
+                    edge_rows.append(
+                        (
+                            edge_id,
+                            rel_type,
+                            int(row[source_id_column]),
+                            int(row[target_id_column]),
+                        )
+                    )
+                    property_rows.extend(
+                        _build_graph_property_rows(
+                            owner_id=edge_id,
+                            columns=resolved_property_columns,
+                            row=row,
+                            property_types=normalized_property_types,
+                        )
+                    )
+                    if len(edge_rows) >= chunk_size:
+                        _write_imported_graph_edges(
+                            self._sqlite,
+                            edge_rows=edge_rows,
+                            property_rows=property_rows,
+                        )
+                        rows_imported += len(edge_rows)
+                        edge_rows = []
+                        property_rows = []
+
+                if edge_rows:
+                    _write_imported_graph_edges(
+                        self._sqlite,
+                        edge_rows=edge_rows,
+                        property_rows=property_rows,
+                    )
+                    rows_imported += len(edge_rows)
+
+        if owns_transaction:
+            with self.transaction():
+                import_rows()
+        else:
+            import_rows()
+
+        return rows_imported
+
     def close(self) -> None:
         """Close both embedded database connections.
 
@@ -1623,6 +1956,389 @@ def _validate_public_batch_params(params_seq: BatchParameters) -> None:
             "HumemDB SQL batch writes now require mapping params with $placeholders; "
             "positional SQL params are no longer supported through executemany(...)."
         )
+
+
+def _normalize_import_columns(
+    columns: Sequence[str] | None,
+) -> tuple[str, ...] | None:
+    """Normalize public import columns into one validated identifier tuple."""
+
+    if columns is None:
+        return None
+    normalized = tuple(str(column) for column in columns)
+    if not normalized:
+        raise ValueError("import_table(...) requires at least one column when set.")
+    if any(not column for column in normalized):
+        raise ValueError("import_table(...) does not allow empty column names.")
+    if len(set(normalized)) != len(normalized):
+        raise ValueError("import_table(...) does not allow duplicate column names.")
+    return normalized
+
+
+def _normalize_graph_import_columns(
+    columns: Sequence[str] | None,
+) -> tuple[str, ...] | None:
+    """Normalize graph import property columns into one validated identifier tuple."""
+
+    return _normalize_import_columns(columns)
+
+
+def _normalize_graph_import_property_types(
+    property_types: Mapping[str, GraphImportPropertyType] | None,
+) -> dict[str, GraphImportPropertyType]:
+    """Normalize graph import property type overrides."""
+
+    if property_types is None:
+        return {}
+
+    normalized: dict[str, GraphImportPropertyType] = {}
+    for key, value in property_types.items():
+        if not key:
+            raise ValueError(
+                "graph import property type mappings do not allow empty keys."
+            )
+        if value not in {"string", "integer", "real", "boolean"}:
+            raise ValueError(
+                "graph import property types must be one of string, integer, "
+                "real, or boolean."
+            )
+        normalized[str(key)] = value
+    return normalized
+
+
+def _prepare_csv_import_reader(
+    csv_file,
+    *,
+    columns: tuple[str, ...] | None,
+    header: bool,
+    delimiter: str,
+) -> tuple[tuple[str, ...], Iterator[tuple[object, ...]]]:
+    """Resolve CSV columns and return one normalized row iterator."""
+
+    resolved_columns = columns
+
+    if header:
+        reader = csv.reader(csv_file, delimiter=delimiter)
+        header_row = next(reader, None)
+        if header_row is None:
+            raise ValueError(
+                "import_table(...) expected a CSV header row but the file is empty."
+            )
+        header_columns = tuple(header_row)
+        if resolved_columns is None:
+            resolved_columns = header_columns
+        else:
+            missing = [
+                column for column in resolved_columns if column not in header_columns
+            ]
+            if missing:
+                raise ValueError(
+                    "import_table(...) CSV header is missing required columns: "
+                    + ", ".join(missing)
+                )
+
+        assert resolved_columns is not None
+        column_indexes = tuple(
+            header_columns.index(column) for column in resolved_columns
+        )
+
+        def iter_header_rows() -> Iterator[tuple[object, ...]]:
+            for row in reader:
+                if len(row) > len(header_columns):
+                    raise ValueError(
+                        "import_table(...) found a CSV row with more fields "
+                        "than the header."
+                    )
+                if _row_is_empty(row):
+                    continue
+                if len(row) < len(header_columns):
+                    raise ValueError(
+                        "import_table(...) found a CSV row with missing fields."
+                    )
+                yield tuple(row[index] for index in column_indexes)
+
+        return resolved_columns, iter_header_rows()
+
+    assert resolved_columns is not None
+    reader = csv.reader(csv_file, delimiter=delimiter)
+
+    def iter_body_rows() -> Iterator[tuple[object, ...]]:
+        for row in reader:
+            if _row_is_empty(row):
+                continue
+            if len(row) != len(resolved_columns):
+                raise ValueError(
+                    "import_table(...) found a CSV row whose field count does not "
+                    "match the provided columns."
+                )
+            yield tuple(row)
+
+    return resolved_columns, iter_body_rows()
+
+
+def _prepare_named_csv_import_reader(
+    csv_file,
+    *,
+    columns: tuple[str, ...] | None,
+    header: bool,
+    delimiter: str,
+) -> tuple[tuple[str, ...], Iterator[dict[str, str]]]:
+    """Resolve CSV columns and return rows keyed by their real column names."""
+
+    resolved_columns = columns
+
+    if header:
+        reader = csv.DictReader(csv_file, delimiter=delimiter)
+        if reader.fieldnames is None:
+            raise ValueError(
+                "CSV import expected a header row but the file is empty."
+            )
+        header_columns = tuple(reader.fieldnames)
+        if resolved_columns is None:
+            resolved_columns = header_columns
+        else:
+            missing = [
+                column for column in resolved_columns if column not in header_columns
+            ]
+            if missing:
+                raise ValueError(
+                    "CSV header is missing required columns: " + ", ".join(missing)
+                )
+
+        assert resolved_columns is not None
+
+        def iter_header_rows() -> Iterator[dict[str, str]]:
+            for row in reader:
+                if row is None:
+                    continue
+                if None in row:
+                    raise ValueError(
+                        "CSV import found a row with more fields than the header."
+                    )
+                if _row_is_empty(row.get(column, "") for column in resolved_columns):
+                    continue
+                normalized_row: dict[str, str] = {}
+                for column in resolved_columns:
+                    value = row[column]
+                    if value is None:
+                        raise ValueError(
+                            "CSV import found a row with missing fields."
+                        )
+                    normalized_row[column] = value
+                yield normalized_row
+
+        return resolved_columns, iter_header_rows()
+
+    assert resolved_columns is not None
+    reader = csv.reader(csv_file, delimiter=delimiter)
+
+    def iter_body_rows() -> Iterator[dict[str, str]]:
+        for row in reader:
+            if _row_is_empty(row):
+                continue
+            if len(row) != len(resolved_columns):
+                raise ValueError(
+                    "CSV import found a row whose field count does not match the "
+                    "provided columns."
+                )
+            yield {column: value for column, value in zip(resolved_columns, row)}
+
+    return resolved_columns, iter_body_rows()
+
+
+def _node_import_columns(
+    id_column: str,
+    property_columns: tuple[str, ...] | None,
+) -> tuple[str, ...] | None:
+    """Return the required headerless column order for node import."""
+
+    if property_columns is None:
+        return None
+    return (id_column, *property_columns)
+
+
+def _edge_import_columns(
+    source_id_column: str,
+    target_id_column: str,
+    property_columns: tuple[str, ...] | None,
+) -> tuple[str, ...] | None:
+    """Return the required headerless column order for edge import."""
+
+    if property_columns is None:
+        return None
+    return (source_id_column, target_id_column, *property_columns)
+
+
+def _resolve_graph_property_columns(
+    *,
+    available_columns: Sequence[str],
+    required_columns: Sequence[str],
+    property_columns: tuple[str, ...] | None,
+    method_name: str,
+) -> tuple[str, ...]:
+    """Resolve graph property columns from CSV columns plus required id fields."""
+
+    missing_required = [
+        column for column in required_columns if column not in available_columns
+    ]
+    if missing_required:
+        raise ValueError(
+            f"{method_name}(...) CSV data is missing required columns: "
+            + ", ".join(missing_required)
+        )
+
+    if property_columns is None:
+        return tuple(
+            column for column in available_columns if column not in required_columns
+        )
+
+    missing = [column for column in property_columns if column not in available_columns]
+    if missing:
+        raise ValueError(
+            f"{method_name}(...) CSV data is missing property columns: "
+            + ", ".join(missing)
+        )
+    disallowed = [column for column in property_columns if column in required_columns]
+    if disallowed:
+        raise ValueError(
+            f"{method_name}(...) property columns cannot reuse required id columns: "
+            + ", ".join(disallowed)
+        )
+    return property_columns
+
+
+def _build_graph_property_rows(
+    *,
+    owner_id: int,
+    columns: Sequence[str],
+    row: Mapping[str, str],
+    property_types: Mapping[str, GraphImportPropertyType],
+) -> list[tuple[int, str, object, str]]:
+    """Encode one CSV row into graph property-table writes."""
+
+    property_rows: list[tuple[int, str, object, str]] = []
+    for column in columns:
+        property_value = _coerce_graph_import_value(
+            row[column],
+            property_types.get(column, "string"),
+        )
+        encoded_value, value_type = _encode_property_value(property_value)
+        property_rows.append((owner_id, column, encoded_value, value_type))
+    return property_rows
+
+
+def _coerce_graph_import_value(
+    raw_value: str,
+    value_type: GraphImportPropertyType,
+) -> str | int | float | bool | None:
+    """Coerce one CSV field into the typed graph property value model."""
+
+    if value_type == "string":
+        return raw_value
+    if value_type == "integer":
+        return int(raw_value)
+    if value_type == "real":
+        return float(raw_value)
+    lowered = raw_value.strip().casefold()
+    if lowered in {"true", "1", "yes"}:
+        return True
+    if lowered in {"false", "0", "no"}:
+        return False
+    raise ValueError(
+        "graph boolean CSV fields must be one of true/false/1/0/yes/no."
+    )
+
+
+def _write_imported_graph_nodes(
+    sqlite: SQLiteEngine,
+    *,
+    node_rows: Sequence[tuple[int, str]],
+    property_rows: Sequence[tuple[int, str, object, str]],
+) -> None:
+    """Write one node-import batch into the graph node tables."""
+
+    sqlite.executemany(
+        "INSERT INTO graph_nodes (id, label) VALUES (?, ?)",
+        node_rows,
+        query_type="cypher",
+    )
+    if property_rows:
+        sqlite.executemany(
+            (
+                "INSERT INTO graph_node_properties "
+                "(node_id, key, value, value_type) VALUES (?, ?, ?, ?)"
+            ),
+            property_rows,
+            query_type="cypher",
+        )
+
+
+def _next_graph_edge_id(sqlite: SQLiteEngine) -> int:
+    """Return the next explicit edge id for graph edge import."""
+
+    row = sqlite.execute(
+        "SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM graph_edges",
+        query_type="cypher",
+    ).first()
+    if row is None:
+        return 1
+    return int(row[0])
+
+
+def _write_imported_graph_edges(
+    sqlite: SQLiteEngine,
+    *,
+    edge_rows: Sequence[tuple[int, str, int, int]],
+    property_rows: Sequence[tuple[int, str, object, str]],
+) -> None:
+    """Write one edge-import batch into the graph edge tables."""
+
+    sqlite.executemany(
+        (
+            "INSERT INTO graph_edges (id, type, from_node_id, to_node_id) "
+            "VALUES (?, ?, ?, ?)"
+        ),
+        edge_rows,
+        query_type="cypher",
+    )
+    if property_rows:
+        sqlite.executemany(
+            (
+                "INSERT INTO graph_edge_properties "
+                "(edge_id, key, value, value_type) VALUES (?, ?, ?, ?)"
+            ),
+            property_rows,
+            query_type="cypher",
+        )
+
+
+def _build_import_insert_sql(
+    *,
+    table: str,
+    columns: Sequence[str],
+) -> str:
+    """Build one identifier-safe SQL insert statement for CSV import batches."""
+
+    quoted_columns = ", ".join(_quote_sql_identifier(column) for column in columns)
+    placeholders = ", ".join("?" for _ in columns)
+    return (
+        f"INSERT INTO {_quote_sql_identifier(table)} ({quoted_columns}) "
+        f"VALUES ({placeholders})"
+    )
+
+
+def _quote_sql_identifier(identifier: str) -> str:
+    """Return one SQLite-safe quoted identifier for dynamic import SQL."""
+
+    if not identifier:
+        raise ValueError("import_table(...) does not allow empty identifiers.")
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+def _row_is_empty(values: Iterable[object]) -> bool:
+    """Return whether one parsed CSV row is effectively blank."""
+
+    return all(str(value).strip() == "" for value in values)
 
 
 def _write_target_namespaced_vector_rows(

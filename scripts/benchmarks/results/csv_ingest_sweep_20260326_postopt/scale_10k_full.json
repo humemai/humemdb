@@ -1,0 +1,150 @@
+{
+  "config": {
+    "chunk_size": 1000,
+    "edge_fanout": 2,
+    "graph_methods": [
+      "import_api",
+      "public_cypher_query",
+      "internal_sqlite"
+    ],
+    "node_rows": 10000,
+    "repetitions": 1,
+    "table_methods": [
+      "import_table",
+      "public_executemany",
+      "internal_sqlite"
+    ],
+    "table_rows": 10000,
+    "warmup": 0
+  },
+  "edge_rows": 20000,
+  "freshness_timings_ms": {
+    "edge_count_query": {
+      "import_api": {
+        "maximum_ms": 21.24701300635934,
+        "mean_ms": 21.24701300635934,
+        "minimum_ms": 21.24701300635934,
+        "stdev_ms": 0.0
+      },
+      "internal_sqlite": {
+        "maximum_ms": 16.009157057851553,
+        "mean_ms": 16.009157057851553,
+        "minimum_ms": 16.009157057851553,
+        "stdev_ms": 0.0
+      },
+      "public_cypher_query": {
+        "maximum_ms": 15.623716171830893,
+        "mean_ms": 15.623716171830893,
+        "minimum_ms": 15.623716171830893,
+        "stdev_ms": 0.0
+      }
+    },
+    "node_count_query": {
+      "import_api": {
+        "maximum_ms": 50.94819003716111,
+        "mean_ms": 50.94819003716111,
+        "minimum_ms": 50.94819003716111,
+        "stdev_ms": 0.0
+      },
+      "internal_sqlite": {
+        "maximum_ms": 4.134492017328739,
+        "mean_ms": 4.134492017328739,
+        "minimum_ms": 4.134492017328739,
+        "stdev_ms": 0.0
+      },
+      "public_cypher_query": {
+        "maximum_ms": 4.879235289990902,
+        "mean_ms": 4.879235289990902,
+        "minimum_ms": 4.879235289990902,
+        "stdev_ms": 0.0
+      }
+    },
+    "table_count_query": {
+      "import_table": {
+        "maximum_ms": 0.7177419029176235,
+        "mean_ms": 0.7177419029176235,
+        "minimum_ms": 0.7177419029176235,
+        "stdev_ms": 0.0
+      },
+      "internal_sqlite": {
+        "maximum_ms": 0.16042077913880348,
+        "mean_ms": 0.16042077913880348,
+        "minimum_ms": 0.16042077913880348,
+        "stdev_ms": 0.0
+      },
+      "public_executemany": {
+        "maximum_ms": 0.1422809436917305,
+        "mean_ms": 0.1422809436917305,
+        "minimum_ms": 0.1422809436917305,
+        "stdev_ms": 0.0
+      }
+    }
+  },
+  "imported_counts": {
+    "edge_rows": 20000,
+    "node_rows": 10000,
+    "table_rows": 10000
+  },
+  "stage_timings_ms": {
+    "edge_ingest": {
+      "import_api": {
+        "maximum_ms": 264.64267959818244,
+        "mean_ms": 264.64267959818244,
+        "minimum_ms": 264.64267959818244,
+        "stdev_ms": 0.0
+      },
+      "internal_sqlite": {
+        "maximum_ms": 244.70437178388238,
+        "mean_ms": 244.70437178388238,
+        "minimum_ms": 244.70437178388238,
+        "stdev_ms": 0.0
+      },
+      "public_cypher_query": {
+        "maximum_ms": 1543.895693961531,
+        "mean_ms": 1543.895693961531,
+        "minimum_ms": 1543.895693961531,
+        "stdev_ms": 0.0
+      }
+    },
+    "node_ingest": {
+      "import_api": {
+        "maximum_ms": 467.348569072783,
+        "mean_ms": 467.348569072783,
+        "minimum_ms": 467.348569072783,
+        "stdev_ms": 0.0
+      },
+      "internal_sqlite": {
+        "maximum_ms": 440.08147809654474,
+        "mean_ms": 440.08147809654474,
+        "minimum_ms": 440.08147809654474,
+        "stdev_ms": 0.0
+      },
+      "public_cypher_query": {
+        "maximum_ms": 403.239618986845,
+        "mean_ms": 403.239618986845,
+        "minimum_ms": 403.239618986845,
+        "stdev_ms": 0.0
+      }
+    },
+    "table_ingest": {
+      "import_table": {
+        "maximum_ms": 46.53011681511998,
+        "mean_ms": 46.53011681511998,
+        "minimum_ms": 46.53011681511998,
+        "stdev_ms": 0.0
+      },
+      "internal_sqlite": {
+        "maximum_ms": 53.54363797232509,
+        "mean_ms": 53.54363797232509,
+        "minimum_ms": 53.54363797232509,
+        "stdev_ms": 0.0
+      },
+      "public_executemany": {
+        "maximum_ms": 64.90698084235191,
+        "mean_ms": 64.90698084235191,
+        "minimum_ms": 64.90698084235191,
+        "stdev_ms": 0.0
+      }
+    }
+  }
+}

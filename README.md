@@ -37,6 +37,7 @@ frontends plus a separate direct-vector API:
 
 - `HumemSQL v0`
 - `HumemCypher v0`
+- CSV-backed `import_table(...)`, `import_nodes(...)`, and `import_edges(...)`
 - direct vector methods for vector-only workflows
 
 Current behavior is intentionally explicit:
@@ -177,7 +178,23 @@ with HumemDB.open("app") as db:
     print(result.rows)
 ```
 
-More examples live in [examples/](examples/) and in the docs site.
+## 📥 Quick ingest example
+
+```python
+from humemdb import HumemDB
+
+with HumemDB.open("ingest") as db:
+    db.query(
+        "CREATE TABLE accounts (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
+    )
+
+    imported_rows = db.import_table("accounts", "accounts.csv")
+    print(imported_rows)
+```
+
+More examples live in [examples/](examples/) and in the docs site, including
+[`examples/05_csv_ingest.py`](examples/05_csv_ingest.py) for the full relational plus
+graph ingestion flow.
 
 ## 🔗 Quick links
 

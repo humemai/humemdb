@@ -28,3 +28,7 @@ Current examples:
   151,056 SQL rows, a 105,832-node and 253,524-edge graph, 100,000 direct
   vectors, 128-dimensional embeddings, mixed SQL and graph vector recall, and
   per-step timing.
+- `05_csv_ingest.py`: 20,000 accounts, 80,000 account events, 10,000 service nodes,
+  and 20,000 dependency edges loaded through `import_table(...)`,
+  `import_nodes(...)`, and `import_edges(...)`, followed by representative SQL and
+  Cypher reads over the imported state.

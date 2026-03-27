@@ -15,6 +15,7 @@ accelerated variants remain benchmark tools until routing policy broadens.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal, Mapping, Sequence, TypeAlias
 
 import numpy as np
@@ -620,6 +621,196 @@ class ScalarQuantizedVectorIndex:
         return _build_matches(item_ids, scores, top_k)
 
 
+@dataclass(frozen=True, slots=True)
+class LanceDBIndexConfig:
+    """Configuration for one LanceDB-backed indexed vector path.
+
+    These settings intentionally mirror the current benchmark knobs so the first
+    indexed runtime can be tuned and compared against the benchmark evidence instead
+    of introducing an unrelated configuration model.
+    """
+
+    index_type: str = "IVF_PQ"
+    num_partitions: int | None = None
+    num_sub_vectors: int | None = None
+    num_bits: int = 8
+    m: int = 20
+    ef_construction: int = 300
+    sample_rate: int = 256
+    max_iterations: int = 50
+    target_partition_size: int | None = None
+    nprobes: int | None = None
+    refine_factor: int | None = None
+    ef: int | None = None
+    table_name: str = "vectors"
+
+    def index_kwargs(self, *, metric: VectorMetric) -> dict[str, Any]:
+        """Return LanceDB `create_index(...)` kwargs for this config."""
+
+        kwargs: dict[str, Any] = {
+            "metric": metric,
+            "vector_column_name": "vector",
+            "index_type": self.index_type,
+            "num_bits": self.num_bits,
+            "max_iterations": self.max_iterations,
+            "sample_rate": self.sample_rate,
+            "m": self.m,
+            "ef_construction": self.ef_construction,
+        }
+        if self.num_partitions is not None:
+            kwargs["num_partitions"] = self.num_partitions
+        if self.num_sub_vectors is not None:
+            kwargs["num_sub_vectors"] = self.num_sub_vectors
+        if self.target_partition_size is not None:
+            kwargs["target_partition_size"] = self.target_partition_size
+        return kwargs
+
+    def search_kwargs(self) -> dict[str, int]:
+        """Return non-null LanceDB indexed-search tuning kwargs."""
+
+        kwargs: dict[str, int] = {}
+        if self.nprobes is not None:
+            kwargs["nprobes"] = self.nprobes
+        if self.refine_factor is not None:
+            kwargs["refine_factor"] = self.refine_factor
+        if self.ef is not None:
+            kwargs["ef"] = self.ef
+        return kwargs
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-serializable view of the current index config."""
+
+        return {
+            "index_type": self.index_type,
+            "num_partitions": self.num_partitions,
+            "num_sub_vectors": self.num_sub_vectors,
+            "num_bits": self.num_bits,
+            "m": self.m,
+            "ef_construction": self.ef_construction,
+            "sample_rate": self.sample_rate,
+            "max_iterations": self.max_iterations,
+            "target_partition_size": self.target_partition_size,
+            "nprobes": self.nprobes,
+            "refine_factor": self.refine_factor,
+            "ef": self.ef,
+            "table_name": self.table_name,
+        }
+
+
+@dataclass(slots=True)
+class LanceDBVectorIndex:
+    """LanceDB-backed indexed vector search over the current vector set.
+
+    This is the first large-scale indexed path for HumemVector. It keeps the same
+    logical `(target, namespace, target_id)` identifiers as the exact NumPy path, but
+    stores the backing vectors in a local LanceDB table and builds one ANN index over
+    the `vector` column.
+    """
+
+    item_ids: np.ndarray
+    metric: VectorMetric
+    dimensions: int
+    lance_path: Path
+    config: LanceDBIndexConfig
+    _table: Any
+
+    @classmethod
+    def from_matrix(
+        cls,
+        *,
+        item_ids: Sequence[Any],
+        matrix: np.ndarray,
+        metric: VectorMetric = "cosine",
+        lance_path: str | Path,
+        config: LanceDBIndexConfig | None = None,
+    ) -> LanceDBVectorIndex:
+        """Create one LanceDB table and build an index from a float32 matrix."""
+
+        normalized_item_ids = _coerce_identifier_array(item_ids)
+        normalized_matrix = _coerce_matrix(matrix)
+        if normalized_item_ids.size != normalized_matrix.shape[0]:
+            raise ValueError(
+                "HumemVector v0 expected one item id per matrix row; got "
+                f"{normalized_item_ids.size} ids and {normalized_matrix.shape[0]} rows."
+            )
+
+        resolved_config = config or LanceDBIndexConfig()
+        table = _create_lancedb_table(
+            item_ids=normalized_item_ids,
+            matrix=normalized_matrix,
+            lance_path=Path(lance_path),
+            table_name=resolved_config.table_name,
+        )
+        table.create_index(**resolved_config.index_kwargs(metric=metric))
+        return cls(
+            item_ids=normalized_item_ids,
+            metric=metric,
+            dimensions=int(normalized_matrix.shape[1]),
+            lance_path=Path(lance_path),
+            config=resolved_config,
+            _table=table,
+        )
+
+    def search(
+        self,
+        query: Sequence[float],
+        *,
+        top_k: int,
+        candidate_indexes: Sequence[int] | np.ndarray | None = None,
+    ) -> tuple[VectorSearchMatch, ...]:
+        """Return indexed nearest-neighbor matches for one query vector."""
+
+        query_array = _coerce_query(query, dimension=self.dimensions)
+        row_count = int(self.item_ids.size)
+        if row_count == 0:
+            return ()
+
+        builder = (
+            self._table.search(query_array.tolist())
+            .distance_type(self.metric)
+            .limit(_validated_top_k(top_k, total=row_count))
+        )
+        for name, value in self.config.search_kwargs().items():
+            builder = getattr(builder, name)(value)
+
+        if candidate_indexes is not None:
+            indexes = _coerce_candidate_indexes(candidate_indexes, total=row_count)
+            if indexes.size == 0:
+                return ()
+            if indexes.size != row_count:
+                builder = builder.where(
+                    _lancedb_item_filter_expression(self.item_ids[indexes]),
+                    prefilter=True,
+                )
+
+        rows = builder.select(
+            ["target", "namespace", "target_id", "_distance"]
+        ).to_list()
+        return tuple(
+            VectorSearchMatch(
+                target=str(row["target"]),
+                namespace=str(row["namespace"]),
+                target_id=int(row["target_id"]),
+                score=_lancedb_score_to_similarity(
+                    self.metric,
+                    float(row["_distance"]),
+                ),
+            )
+            for row in rows
+        )
+
+    def describe(self) -> dict[str, Any]:
+        """Return a serializable summary of this indexed vector path."""
+
+        return {
+            "metric": self.metric,
+            "dimensions": self.dimensions,
+            "row_count": int(self.item_ids.size),
+            "lance_path": str(self.lance_path),
+            "config": self.config.to_dict(),
+        }
+
+
 def _build_matches(
     item_ids: np.ndarray,
     scores: np.ndarray,
@@ -768,3 +959,101 @@ def _coerce_candidate_indexes(
     if np.any(indexes < 0) or np.any(indexes >= total):
         raise ValueError("HumemVector v0 candidate indexes are out of range.")
     return indexes
+
+
+def _create_lancedb_table(
+    *,
+    item_ids: np.ndarray,
+    matrix: np.ndarray,
+    lance_path: Path,
+    table_name: str,
+):
+    """Create one local LanceDB table from the current logical vector set."""
+
+    lancedb, pa = _load_lancedb_dependencies()
+    lance_path.parent.mkdir(parents=True, exist_ok=True)
+    db = lancedb.connect(str(lance_path))
+    schema = pa.schema(
+        [
+            pa.field("target", pa.string()),
+            pa.field("namespace", pa.string()),
+            pa.field("target_id", pa.int64()),
+            pa.field("vector", pa.list_(pa.float32(), matrix.shape[1])),
+        ]
+    )
+    table = pa.table(
+        {
+            "target": pa.array(
+                [item_id[0] for item_id in item_ids.tolist()],
+                type=pa.string(),
+            ),
+            "namespace": pa.array(
+                [item_id[1] for item_id in item_ids.tolist()],
+                type=pa.string(),
+            ),
+            "target_id": pa.array(
+                [int(item_id[2]) for item_id in item_ids.tolist()],
+                type=pa.int64(),
+            ),
+            "vector": pa.array(
+                matrix.tolist(),
+                type=pa.list_(pa.float32(), matrix.shape[1]),
+            ),
+        },
+        schema=schema,
+    )
+    return db.create_table(table_name, data=table, mode="overwrite")
+
+
+def _load_lancedb_dependencies() -> tuple[Any, Any]:
+    """Import LanceDB and PyArrow lazily for indexed-vector execution."""
+
+    try:
+        import lancedb
+        import pyarrow as pa
+    except ImportError as exc:
+        raise RuntimeError(
+            "HumemVector indexed search requires the optional LanceDB runtime "
+            "dependencies to be installed."
+        ) from exc
+    return lancedb, pa
+
+
+def _lancedb_item_filter_expression(item_ids: np.ndarray) -> str:
+    """Build one LanceDB prefilter expression for a subset of logical keys."""
+
+    grouped: dict[tuple[str, str], list[int]] = {}
+    for target, namespace, target_id in item_ids.tolist():
+        grouped.setdefault((str(target), str(namespace)), []).append(int(target_id))
+
+    clauses = []
+    for (target, namespace), target_ids in grouped.items():
+        sorted_ids = sorted(set(target_ids))
+        if len(sorted_ids) == 1:
+            target_id_clause = f"target_id = {sorted_ids[0]}"
+        else:
+            joined_ids = ", ".join(str(value) for value in sorted_ids)
+            target_id_clause = f"target_id IN ({joined_ids})"
+        clauses.append(
+            "("
+            f"target = {_sql_quote_string(target)} AND "
+            f"namespace = {_sql_quote_string(namespace)} AND "
+            f"{target_id_clause}"
+            ")"
+        )
+    return " OR ".join(clauses)
+
+
+def _sql_quote_string(value: str) -> str:
+    """Quote one string literal for the current LanceDB SQL filter syntax."""
+
+    escaped = value.replace("'", "''")
+    return f"'{escaped}'"
+
+
+def _lancedb_score_to_similarity(metric: VectorMetric, distance: float) -> float:
+    """Convert LanceDB distance outputs into HumemDB score semantics."""
+
+    if metric == "cosine":
+        return 1.0 - distance
+    return -distance

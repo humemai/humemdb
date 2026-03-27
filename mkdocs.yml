@@ -88,7 +88,9 @@ nav:
       - 01 - SQL Basics: examples/01_sql_basics.md
       - 02 - Cypher Social Graph: examples/02_cypher_social_graph.md
       - 03 - Vector Search: examples/03_vector_search.md
+      - 04 - Mixed Memory Workflow: examples/04_mixed_memory_workflow.md
       - 05 - CSV Ingest: examples/05_csv_ingest.md
+      - Download Data: examples/download_data.md
   - Tests:
       - Overview: tests/index.md
       - test_db.py: tests/test_db.md

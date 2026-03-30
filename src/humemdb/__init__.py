@@ -1,16 +1,26 @@
-"""HumemDB Python package."""
+"""Public package surface for HumemDB.
 
-from importlib import import_module
+This module re-exports the small stable API that most callers should import from:
+
+- `HumemDB` as the main embedded database entry point
+- `translate_sql(...)` for backend-aware SQL translation
+- `QueryResult` for normalized query results
+- runtime thread-budget helpers and the installed package version
+
+Importing `humemdb` also applies any configured runtime thread limits through
+`configure_runtime_threads_from_env()` so SQLite, DuckDB, Arrow, and numeric
+libraries can share one process-wide thread budget.
+"""
+
 from importlib.metadata import PackageNotFoundError, version
 
+from .db import HumemDB
 from .runtime import configure_runtime_threads_from_env
 from .runtime import RuntimeThreadBudget
+from .sql import translate_sql
+from .types import QueryResult
 
 configure_runtime_threads_from_env()
-
-HumemDB = import_module("humemdb.db").HumemDB
-translate_sql = import_module("humemdb.sql").translate_sql
-QueryResult = import_module("humemdb.types").QueryResult
 
 try:
     __version__ = version("humemdb")

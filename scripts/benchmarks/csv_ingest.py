@@ -14,7 +14,7 @@ from typing import Any, Callable, Iterator
 
 HumemDB = import_module("humemdb").HumemDB
 _cypher_module = import_module("humemdb.cypher")
-_encode_property_value = getattr(_cypher_module, "_encode_property_value")
+_encode_property_value = _cypher_module._encode_property_value
 ensure_graph_schema = _cypher_module.ensure_graph_schema
 
 TableBatch = list[tuple[int, str, str, str]]
@@ -231,10 +231,6 @@ def _prepare_fixture_csvs(
     return table_csv, nodes_csv, edges_csv, edge_rows
 
 
-def _sqlite_engine(db: Any):
-    return getattr(db, "_sqlite")
-
-
 def _iter_table_batches(path: Path, *, chunk_size: int) -> Iterator[TableBatch]:
     batch: TableBatch = []
     with path.open("r", encoding="utf-8", newline="") as handle:
@@ -394,7 +390,7 @@ def _run_table_internal_sqlite(
     *,
     chunk_size: int,
 ) -> int:
-    sqlite = _sqlite_engine(db)
+    sqlite = db._sqlite
     imported_rows = 0
     sqlite.begin()
     try:
@@ -466,7 +462,7 @@ def _run_node_internal_sqlite(
     *,
     chunk_size: int,
 ) -> int:
-    sqlite = _sqlite_engine(db)
+    sqlite = db._sqlite
     ensure_graph_schema(sqlite)
     imported_rows = 0
     sqlite.begin()
@@ -557,7 +553,7 @@ def _run_edge_internal_sqlite(
     *,
     chunk_size: int,
 ) -> int:
-    sqlite = _sqlite_engine(db)
+    sqlite = db._sqlite
     ensure_graph_schema(sqlite)
     next_edge_id = 1
     sqlite.begin()
@@ -699,7 +695,7 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
 
             for method_name in config.table_methods:
                 runner = table_runners[method_name]
-                with HumemDB.open(run_dir / f"table-{method_name}") as db:
+                with HumemDB(run_dir / f"table-{method_name}") as db:
                     _create_users_table(db)
                     started = time.perf_counter()
                     imported_table_rows = runner(db, table_csv)
@@ -726,7 +722,7 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
                         )
 
             for method_name in config.graph_methods:
-                with HumemDB.open(run_dir / f"graph-{method_name}") as db:
+                with HumemDB(run_dir / f"graph-{method_name}") as db:
                     started = time.perf_counter()
                     imported_node_rows = node_runners[method_name](db, nodes_csv)
                     node_import_elapsed = time.perf_counter() - started

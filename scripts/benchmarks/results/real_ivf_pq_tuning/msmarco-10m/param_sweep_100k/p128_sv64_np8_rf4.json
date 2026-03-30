@@ -1,0 +1,121 @@
+{
+  "arrow_cpu_count": 8,
+  "artifact_sizes_bytes": {
+    "numpy_f32_matrix": 409600000,
+    "query_batch_f32": 409600
+  },
+  "available_filter_sources": [
+    "all"
+  ],
+  "cold_tier_ingest_path": "SQLite -> DuckDB (scan) -> Arrow batches -> LanceDB -> build index",
+  "dataset": "msmarco-10m",
+  "dimensions": 1024,
+  "filter_source": null,
+  "filtered_candidate_count": null,
+  "lancedb_index_settings": {
+    "index_type": "IVF_PQ",
+    "max_iterations": 50,
+    "num_bits": 8,
+    "num_partitions": 128,
+    "num_sub_vectors": 64,
+    "sample_rate": 256,
+    "scalar_index_prefilter": false,
+    "target_partition_size": null
+  },
+  "lancedb_search_settings": {
+    "nprobes": 8,
+    "refine_factor": 4
+  },
+  "lancedb_thread_limit": "8",
+  "memory_peak_rss_bytes": 2464423936,
+  "memory_snapshots_bytes": {
+    "after_dataset_load": 198512640,
+    "after_duckdb_arrow_export": 2219311104,
+    "after_lancedb_index_build": 1574268928,
+    "after_lancedb_indexed_search": 1589362688,
+    "after_lancedb_scalar_index_build": 1574268928,
+    "after_lancedb_table_create": 1472131072,
+    "after_numpy_exact_build": 1459412992,
+    "after_numpy_exact_search": 1579438080,
+    "after_query_and_recall": 1589362688,
+    "after_sqlite_exact_load": 1049681920,
+    "final": 1589370880,
+    "start": 185933824
+  },
+  "memory_stage_deltas_bytes": {
+    "after_dataset_load": 12578816,
+    "after_duckdb_arrow_export": 747180032,
+    "after_lancedb_index_build": -645042176,
+    "after_lancedb_indexed_search": 9924608,
+    "after_lancedb_scalar_index_build": 0,
+    "after_lancedb_table_create": 12718080,
+    "after_numpy_exact_build": 409731072,
+    "after_numpy_exact_search": 5169152,
+    "after_query_and_recall": 0,
+    "after_sqlite_exact_load": 851169280,
+    "final": 8192,
+    "start": null
+  },
+  "metric": "cosine",
+  "numpy_exact_enabled": true,
+  "numpy_exact_max_rows": 1000000,
+  "numpy_thread_limit": 8,
+  "queries": 100,
+  "rows": 100000,
+  "sample_mode": "prefix",
+  "stage_timings_ms": {
+    "dataset_load": 1177.6888249441981,
+    "duckdb_arrow_export": 905.254750046879,
+    "lancedb_index_build": 35652.97322906554,
+    "lancedb_scalar_index_build": 0.0,
+    "lancedb_table_create": 2.611276227980852,
+    "numpy_f32_build": 101.30211571231484,
+    "sqlite_exact_load": 529.8352520912886
+  },
+  "top_k_grid": [
+    10,
+    50
+  ],
+  "top_k_reports": [
+    {
+      "latency_summaries_ms": {
+        "lancedb_indexed_global": {
+          "maximum": 1.7396044731140137,
+          "mean": 1.6503146383911371,
+          "minimum": 1.489354013465345,
+          "stdev": 0.13967408408443302
+        },
+        "numpy_f32_global": {
+          "maximum": 9.431638377718627,
+          "mean": 9.20448028948158,
+          "minimum": 9.074657750315964,
+          "stdev": 0.19739414611375258
+        }
+      },
+      "recalls_at_k": {
+        "lancedb_indexed_global": 0.973
+      },
+      "top_k": 10
+    },
+    {
+      "latency_summaries_ms": {
+        "lancedb_indexed_global": {
+          "maximum": 2.5056831911206245,
+          "mean": 2.430362656402091,
+          "minimum": 2.371154041029513,
+          "stdev": 0.06869656843552764
+        },
+        "numpy_f32_global": {
+          "maximum": 9.18714945204556,
+          "mean": 9.09835271537304,
+          "minimum": 8.979537202976644,
+          "stdev": 0.10701194635569244
+        }
+      },
+      "recalls_at_k": {
+        "lancedb_indexed_global": 0.9142
+      },
+      "top_k": 50
+    }
+  ]
+}

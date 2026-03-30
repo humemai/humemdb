@@ -50,7 +50,7 @@ _BoundParameters: TypeAlias = Mapping[str, Any] | Sequence[Any]
 
 
 @dataclass(slots=True)
-class SQLiteEngine:
+class _SQLiteEngine:
     """Thin wrapper around an embedded `sqlite3` connection.
 
     This wrapper is responsible for:
@@ -199,7 +199,7 @@ class SQLiteEngine:
 
 
 @dataclass(slots=True)
-class DuckDBEngine:
+class _DuckDBEngine:
     """Thin wrapper around an embedded DuckDB connection.
 
     This engine provides the same lifecycle surface as `SQLiteEngine` so the

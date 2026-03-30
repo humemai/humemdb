@@ -27,7 +27,7 @@ vector ownership models while staying inside the current public `v0` surface.
 ## Representative flow
 
 ```python
-with HumemDB("vectors.sqlite3") as db:
+with HumemDB("vectors") as db:
     db.insert_vectors(build_direct_rows())
     db.set_vector_metadata([(1001, {"fresh": True})])
 

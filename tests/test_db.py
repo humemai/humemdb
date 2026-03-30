@@ -1,44 +1,39 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Any, cast
+import humemdb
+import humemdb.db
+import humemdb.runtime
 import os
 import tempfile
 import unittest
 from pathlib import Path
-import importlib
+from humemdb import HumemDB, QueryResult
+from humemdb.db import (
+    _OlapRoutingThresholds,
+    _classify_workload,
+    _plan_batch_query as plan_batch_query,
+    _plan_cypher_query,
+    _plan_query as plan_query,
+    _execute_cypher as db_execute_cypher,
+)
+from humemdb.sql import translate_sql_plan
+from humemdb.vector import encode_vector_blob
 from unittest import mock
-
-
-def _humemdb_class():
-    # Import lazily so the test can work with the src/ layout.
-    return importlib.import_module("humemdb").HumemDB
-
-
-def _translate_sql():
-    # Import lazily so tests exercise the installed package surface.
-    return importlib.import_module("humemdb").translate_sql
-
-
-def _runtime_module():
-    return importlib.import_module("humemdb.runtime")
-
-
-def _duckdb_engine(db):
-    return getattr(db, "_duckdb")
 
 
 class HumemDBTest(unittest.TestCase):
     def test_translate_sql_rewrites_postgres_cast_for_sqlite(self) -> None:
-        translate_sql = _translate_sql()
-
-        translated = translate_sql("SELECT 1::INTEGER AS value", target="sqlite")
+        translated = humemdb.translate_sql(
+            "SELECT 1::INTEGER AS value",
+            target="sqlite",
+        )
 
         self.assertEqual(translated, "SELECT CAST(1 AS INTEGER) AS value")
 
     def test_translate_sql_rewrites_ilike_for_sqlite(self) -> None:
-        translate_sql = _translate_sql()
-
-        translated = translate_sql(
+        translated = humemdb.translate_sql(
             "SELECT 'Alice' ILIKE 'aLiCe' AS matched",
             target="sqlite",
         )
@@ -49,9 +44,7 @@ class HumemDBTest(unittest.TestCase):
         )
 
     def test_translate_sql_keeps_sqlite_create_index_columns_plain(self) -> None:
-        translate_sql = _translate_sql()
-
-        translated = translate_sql(
+        translated = humemdb.translate_sql(
             (
                 "CREATE INDEX IF NOT EXISTS idx_docs_project_status "
                 "ON docs(project_slug, status)"
@@ -68,33 +61,26 @@ class HumemDBTest(unittest.TestCase):
         )
 
     def test_translate_sql_rejects_invalid_postgres_like_sql(self) -> None:
-        translate_sql = _translate_sql()
-
         with self.assertRaises(ValueError):
-            translate_sql("SELECT FROM", target="sqlite")
+            humemdb.translate_sql("SELECT FROM", target="sqlite")
 
     def test_translate_sql_rejects_unsupported_statement_kind(self) -> None:
-        translate_sql = _translate_sql()
-
         with self.assertRaisesRegex(ValueError, "HumemSQL v0 only supports"):
-            translate_sql("DROP TABLE users", target="sqlite")
+            humemdb.translate_sql("DROP TABLE users", target="sqlite")
 
     def test_translate_sql_rejects_recursive_cte(self) -> None:
-        translate_sql = _translate_sql()
-
         with self.assertRaisesRegex(ValueError, "recursive CTEs"):
-            translate_sql(
+            humemdb.translate_sql(
                 "WITH RECURSIVE t(n) AS (SELECT 1) SELECT * FROM t",
                 target="sqlite",
             )
 
     def test_cypher_create_and_match_node_on_sqlite(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 created = db.query(
                     "CREATE (u:User {name: 'Alice', age: 30})",
                 )
@@ -110,12 +96,11 @@ class HumemDBTest(unittest.TestCase):
                 self.assertEqual(result.rows, (("Alice", 30),))
 
     def test_cypher_supports_named_params_in_create_and_match(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE (u:User {name: $name, active: $active, note: $note})",
                     params={"name": "Alice", "active": True, "note": None},
@@ -136,12 +121,11 @@ class HumemDBTest(unittest.TestCase):
                 )
 
     def test_cypher_create_relationship_and_match_on_sqlite(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     (
                         "CREATE (a:User {name: 'Alice'})"
@@ -157,12 +141,11 @@ class HumemDBTest(unittest.TestCase):
                 self.assertEqual(result.rows, (("Alice", "Bob"),))
 
     def test_cypher_supports_relationship_alias_returns_and_filters(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     (
                         "CREATE (a:User {name: 'Alice'})"
@@ -186,15 +169,11 @@ class HumemDBTest(unittest.TestCase):
                 self.assertEqual(result.rows, (("Alice", "KNOWS", 2020, "Bob"),))
 
     def test_cypher_supports_reverse_relationship_match(self) -> None:
-        HumemDB = _humemdb_class()
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     (
                         "CREATE (a:User {name: 'Alice'})"
@@ -211,20 +190,17 @@ class HumemDBTest(unittest.TestCase):
                     route="duckdb",
                     params=None,
                 )
-                duckdb_result = getattr(db, "_execute_cypher_query_plan")(
-                    duckdb_plan
-                )
+                duckdb_result = db._execute_cypher_query_plan(duckdb_plan)
 
                 self.assertEqual(sqlite_result.rows, (("Alice", "Bob"),))
                 self.assertEqual(duckdb_result.rows, (("Alice", "Bob"),))
 
     def test_cypher_match_where_filters_nodes(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE (u:User {name: 'Alice', age: 30})",
                 )
@@ -239,15 +215,11 @@ class HumemDBTest(unittest.TestCase):
                 self.assertEqual(result.rows, (("Bob", 40),))
 
     def test_cypher_match_supports_order_by_and_limit_on_nodes(self) -> None:
-        HumemDB = _humemdb_class()
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+            with HumemDB(base_path) as db:
                 for name, age in (("Alice", 30), ("Bob", 40), ("Carol", 20)):
                     db.query(
                         f"CREATE (u:User {{name: '{name}', age: {age}}})",
@@ -260,23 +232,17 @@ class HumemDBTest(unittest.TestCase):
                     route="duckdb",
                     params=None,
                 )
-                duckdb_result = getattr(db, "_execute_cypher_query_plan")(
-                    duckdb_plan
-                )
+                duckdb_result = db._execute_cypher_query_plan(duckdb_plan)
 
                 self.assertEqual(sqlite_result.rows, (("Bob",), ("Alice",)))
                 self.assertEqual(duckdb_result.rows, (("Bob",), ("Alice",)))
 
     def test_cypher_match_supports_order_by_and_limit_on_relationships(self) -> None:
-        HumemDB = _humemdb_class()
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+            with HumemDB(base_path) as db:
                 for query in (
                     (
                         "CREATE (a:User {name: 'Alice'})"
@@ -306,24 +272,18 @@ class HumemDBTest(unittest.TestCase):
                     route="duckdb",
                     params=None,
                 )
-                duckdb_result = getattr(db, "_execute_cypher_query_plan")(
-                    duckdb_plan
-                )
+                duckdb_result = db._execute_cypher_query_plan(duckdb_plan)
 
                 expected = (("Dave", 2022), ("Bob", 2020))
                 self.assertEqual(sqlite_result.rows, expected)
                 self.assertEqual(duckdb_result.rows, expected)
 
     def test_cypher_match_can_run_on_duckdb(self) -> None:
-        HumemDB = _humemdb_class()
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     (
                         "CREATE (a:User {name: 'Alice'})"
@@ -337,40 +297,35 @@ class HumemDBTest(unittest.TestCase):
                     route="duckdb",
                     params=None,
                 )
-                result = getattr(db, "_execute_cypher_query_plan")(plan)
+                result = db._execute_cypher_query_plan(plan)
 
                 self.assertEqual(result.rows, (("Alice", "Bob"),))
 
     def test_internal_duckdb_route_rejects_cypher_writes(self) -> None:
-        HumemDB = _humemdb_class()
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+            with HumemDB(base_path) as db:
                 plan = plan_query(
                     "CREATE (u:User {name: 'Alice'})",
                     route="duckdb",
                     params=None,
                 )
                 with self.assertRaisesRegex(ValueError, "Cypher writes to DuckDB"):
-                    getattr(db, "_execute_cypher_query_plan")(plan)
+                    db._execute_cypher_query_plan(plan)
 
     def test_cypher_persists_graph_data_across_reopen(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE (u:User {name: 'Alice', active: true})",
                 )
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 result = db.query(
                     "MATCH (u:User) WHERE u.active = true RETURN u.name, u.active",
                 )
@@ -378,24 +333,22 @@ class HumemDBTest(unittest.TestCase):
                 self.assertEqual(result.rows, (("Alice", True),))
 
     def test_cypher_rejects_unsupported_where_expression(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 with self.assertRaises(ValueError):
                     db.query(
                         "MATCH (u:User) WHERE toLower(u.name) = 'alice' RETURN u.name",
                     )
 
     def test_cypher_rejects_positional_params(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 with self.assertRaisesRegex(NotImplementedError, "named parameter"):
                     db.query(
                         "CREATE (u:User {name: $name})",
@@ -403,18 +356,13 @@ class HumemDBTest(unittest.TestCase):
                     )
 
     def test_explicit_sqlite_and_duckdb_routing(self) -> None:
-        HumemDB = _humemdb_class()
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Each test gets fresh on-disk database files inside a temporary folder.
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
             # Entering HumemDB opens both embedded database connections.
             # Exiting this block closes both connections.
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+            with HumemDB(base_path) as db:
                 # Public writes target the canonical SQLite store.
                 db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
@@ -437,21 +385,17 @@ class HumemDBTest(unittest.TestCase):
                     route="duckdb",
                     params=None,
                 )
-                duckdb_result = getattr(db, "_execute_sql_query_plan")(duckdb_plan)
+                duckdb_result = db._execute_sql_query_plan(duckdb_plan)
 
                 self.assertEqual(duckdb_result.columns, ("id", "name"))
                 self.assertEqual(duckdb_result.rows, ((1, "Alice"),))
 
     def test_duckdb_reads_sqlite_source_of_truth_directly(self) -> None:
-        HumemDB = _humemdb_class()
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
                 )
@@ -465,29 +409,27 @@ class HumemDBTest(unittest.TestCase):
                     route="duckdb",
                     params=None,
                 )
-                result = getattr(db, "_execute_sql_query_plan")(plan)
+                result = db._execute_sql_query_plan(plan)
 
                 self.assertEqual(result.rows, (("Alice",), ("Bob",)))
 
     def test_duckdb_threads_can_be_overridden_from_humemdb_env(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
             with mock.patch.dict(os.environ, {"HUMEMDB_THREADS": "8"}):
-                with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
-                    threads = _duckdb_engine(db).connection.execute(
+                with HumemDB(base_path) as db:
+                    threads = db._duckdb.connection.execute(
                         "SELECT current_setting('threads')"
                     ).fetchone()[0]
 
             self.assertEqual(threads, 8)
 
     def test_runtime_threads_cap_arrow_and_numpy_from_humemdb_env(self) -> None:
-        runtime = _runtime_module()
         limiter = mock.Mock()
-        threadpool_state = getattr(runtime, "_THREADPOOL_STATE")
+        threadpool_state = humemdb.runtime._THREADPOOL_STATE
+        configure_runtime_threads = humemdb.runtime.configure_runtime_threads_from_env
 
         with mock.patch.dict(os.environ, {"HUMEMDB_THREADS": "6"}, clear=False):
             with mock.patch.dict(
@@ -505,9 +447,7 @@ class HumemDBTest(unittest.TestCase):
                                     "threadpoolctl.threadpool_limits",
                                     return_value=limiter,
                                 ) as threadpool_limits:
-                                    budget = (
-                                        runtime.configure_runtime_threads_from_env()
-                                    )
+                                    budget = configure_runtime_threads()
 
                                     self.assertEqual(budget.thread_count, 6)
                                     self.assertEqual(budget.arrow_cpu_count, 6)
@@ -515,7 +455,7 @@ class HumemDBTest(unittest.TestCase):
                                     self.assertEqual(budget.numpy_thread_limit, 6)
                                     self.assertEqual(
                                         budget.source_env,
-                                        runtime.HUMEMDB_THREADS_ENV,
+                                        humemdb.runtime.HUMEMDB_THREADS_ENV,
                                     )
                                     self.assertEqual(
                                         os.environ["OMP_THREAD_LIMIT"],
@@ -564,48 +504,43 @@ class HumemDBTest(unittest.TestCase):
         threadpool_limits.assert_called_once_with(limits=6)
 
     def test_runtime_threads_support_vector_only_fallback_env(self) -> None:
-        runtime = _runtime_module()
-
         with mock.patch.dict(os.environ, {"LANCEDB_THREADS": "5"}, clear=True):
-            source_env, thread_count = runtime.resolve_thread_budget_from_env(
-                fallback_env_names=(runtime.LANCEDB_THREADS_ENV,),
+            source_env, thread_count = humemdb.runtime.resolve_thread_budget_from_env(
+                fallback_env_names=(humemdb.runtime.LANCEDB_THREADS_ENV,),
             )
 
-        self.assertEqual(source_env, runtime.LANCEDB_THREADS_ENV)
+        self.assertEqual(source_env, humemdb.runtime.LANCEDB_THREADS_ENV)
         self.assertEqual(thread_count, 5)
 
     def test_internal_duckdb_route_rejects_sql_writes(self) -> None:
-        HumemDB = _humemdb_class()
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+            with HumemDB(base_path) as db:
                 plan = plan_query(
                     "CREATE TABLE metrics (name VARCHAR, value INTEGER)",
                     route="duckdb",
                     params=None,
                 )
                 with self.assertRaises(ValueError):
-                    getattr(db, "_execute_sql_query_plan")(plan)
+                    db._execute_sql_query_plan(plan)
 
     def test_invalid_route_raises_value_error(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
 
         with self.assertRaises(ValueError):
-            plan_query("SELECT 1", route="postgres", params=None)
+            plan_query(
+                "SELECT 1",
+                route=cast(Any, "postgres"),
+                params=None,
+            )
 
     def test_query_defaults_to_sqlite_route(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
                 )
@@ -620,12 +555,11 @@ class HumemDBTest(unittest.TestCase):
                 self.assertEqual(result.route, "sqlite")
 
     def test_query_allows_create_index_through_public_sql_surface(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     (
                         "CREATE TABLE docs ("
@@ -656,13 +590,11 @@ class HumemDBTest(unittest.TestCase):
                 self.assertEqual(indexes.rows, (("idx_docs_project_status",),))
 
     def test_query_auto_routes_broad_sql_read_to_duckdb(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     (
                         "CREATE TABLE events ("
@@ -691,15 +623,11 @@ class HumemDBTest(unittest.TestCase):
                 self.assertEqual(result.rows, (("click", 2), ("view", 1)))
 
     def test_query_explicit_sqlite_route_overrides_sql_auto_routing(self) -> None:
-        HumemDB = _humemdb_class()
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     (
                         "CREATE TABLE events ("
@@ -725,19 +653,17 @@ class HumemDBTest(unittest.TestCase):
                     route="sqlite",
                     params=None,
                 )
-                result = getattr(db, "_execute_sql_query_plan")(plan)
+                result = db._execute_sql_query_plan(plan)
 
                 self.assertEqual(result.route, "sqlite")
                 self.assertEqual(result.rows, (("click", 2), ("view", 1)))
 
     def test_query_auto_routes_read_only_cypher_to_sqlite(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query("CREATE (u:User {name: 'Alice'})")
 
                 result = db.query("MATCH (u:User) RETURN u.name")
@@ -746,12 +672,11 @@ class HumemDBTest(unittest.TestCase):
                 self.assertEqual(result.rows, (("Alice",),))
 
     def test_sqlite_transaction_context_commits_on_success(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
                 )
@@ -764,18 +689,17 @@ class HumemDBTest(unittest.TestCase):
                     )
 
             # Re-open SQLite to prove the committed row was persisted to disk.
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 result = db.query("SELECT name FROM users")
 
                 self.assertEqual(result.rows, (("Alice",),))
 
     def test_query_infers_cypher_create_and_match_on_sqlite(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 created = db.query("CREATE (u:User {name: 'Alice', age: 30})")
 
                 self.assertEqual(created.query_type, "cypher")
@@ -789,12 +713,11 @@ class HumemDBTest(unittest.TestCase):
                 self.assertEqual(result.rows, (("Alice", 30),))
 
     def test_query_infers_cypher_for_uppercase_multiline_starters(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 created = db.query(
                     "  CREATE\n(u:User {name: 'Alice', age: 30})"
                 )
@@ -816,12 +739,11 @@ class HumemDBTest(unittest.TestCase):
                 self.assertEqual(result.rows, ((31,),))
 
     def test_query_does_not_infer_mixed_case_cypher(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 with self.assertRaises(ValueError):
                     db.query("cReAtE (u:User {name: 'Alice'})")
 
@@ -832,12 +754,11 @@ class HumemDBTest(unittest.TestCase):
                     db.query("mAtCh (u:User {name: 'Alice'}) RETURN u.name")
 
     def test_query_infers_sql_by_default_for_create_table(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 created = db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
                 )
@@ -855,19 +776,16 @@ class HumemDBTest(unittest.TestCase):
                 self.assertEqual(result.rows, (("Alice",),))
 
     def test_query_reuses_parsed_cypher_plan_during_execution(self) -> None:
-        HumemDB = _humemdb_class()
-        db_module = importlib.import_module("humemdb.db")
-        plan_cypher_query = getattr(db_module, "_plan_cypher_query")
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
             with mock.patch.object(
-                db_module,
+                humemdb.db,
                 "_plan_cypher_query",
-                wraps=plan_cypher_query,
+                wraps=_plan_cypher_query,
             ) as plan_parse:
-                with HumemDB(str(sqlite_path)) as db:
+                with HumemDB(base_path) as db:
                     result = db.query(
                         "CREATE (u:User {name: 'Alice', age: 30})"
                     )
@@ -876,9 +794,7 @@ class HumemDBTest(unittest.TestCase):
                 self.assertEqual(plan_parse.call_count, 1)
 
     def test_sql_translation_plan_exposes_shape_metadata(self) -> None:
-        sql_module = importlib.import_module("humemdb.sql")
-
-        plan = sql_module.translate_sql_plan(
+        plan = translate_sql_plan(
             (
                 "WITH recent AS (SELECT customer_id, amount FROM payments) "
                 "SELECT c.name, COUNT(*) AS total "
@@ -903,8 +819,6 @@ class HumemDBTest(unittest.TestCase):
         self.assertFalse(plan.has_distinct)
 
     def test_query_plan_carries_sql_shape_metadata(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
 
         plan = plan_query(
             (
@@ -930,8 +844,6 @@ class HumemDBTest(unittest.TestCase):
         self.assertIn("benchmark-calibrated", plan.workload.reason)
 
     def test_query_plan_carries_cypher_shape_metadata(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
 
         plan = plan_query(
             (
@@ -960,8 +872,6 @@ class HumemDBTest(unittest.TestCase):
         self.assertIn("not broad enough", plan.workload.reason)
 
     def test_query_plan_carries_sql_vector_plan_metadata(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
 
         plan = plan_query(
             "SELECT id FROM docs ORDER BY embedding <=> $query LIMIT $limit",
@@ -984,14 +894,13 @@ class HumemDBTest(unittest.TestCase):
         self.assertEqual(plan.vector_plan.candidate_query.namespace, "docs")
 
     def test_query_plan_carries_cypher_vector_plan_metadata(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
 
         plan = plan_query(
             (
-                "MATCH (u:User) "
-                "SEARCH u IN (VECTOR INDEX embedding FOR $query LIMIT $limit) "
-                "RETURN u.id"
+                "CALL db.index.vector.queryNodes("
+                "'user_embedding_idx', $limit, $query) "
+                "YIELD node, score MATCH (node:User) "
+                "RETURN node.id, score"
             ),
             route=None,
             params={"query": [1.0, 0.0], "limit": 1},
@@ -1002,7 +911,7 @@ class HumemDBTest(unittest.TestCase):
         self.assertIsNotNone(plan.vector_plan)
         assert plan.vector_plan is not None
         self.assertEqual(type(plan.vector_plan).__name__, "CypherVectorQueryPlan")
-        self.assertEqual(plan.vector_plan.metric, "cosine")
+        self.assertEqual(plan.vector_plan.index_name, "user_embedding_idx")
         self.assertEqual(plan.vector_plan.top_k, 1)
         self.assertEqual(
             type(plan.vector_plan.candidate_query).__name__,
@@ -1012,10 +921,6 @@ class HumemDBTest(unittest.TestCase):
         self.assertEqual(plan.vector_plan.candidate_query.namespace, "")
 
     def test_execute_query_plan_prefers_explicit_vector_plan_shape(self) -> None:
-        HumemDB = _humemdb_class()
-        db_module = importlib.import_module("humemdb.db")
-        humemdb_module = importlib.import_module("humemdb")
-        plan_query = getattr(db_module, "_plan_query")
 
         plan = plan_query(
             "SELECT id FROM docs ORDER BY embedding <=> $query LIMIT $limit",
@@ -1023,7 +928,7 @@ class HumemDBTest(unittest.TestCase):
             params={"query": [1.0, 0.0], "limit": 2},
         )
         inconsistent_plan = replace(plan, query_type="sql")
-        expected = humemdb_module.QueryResult(
+        expected = QueryResult(
             rows=(),
             columns=("target", "namespace", "target_id", "score"),
             route="sqlite",
@@ -1032,9 +937,9 @@ class HumemDBTest(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 with mock.patch.object(
                     db,
                     "_execute_vector_query",
@@ -1048,10 +953,7 @@ class HumemDBTest(unittest.TestCase):
                             db,
                             "_execute_cypher_query_plan",
                         ) as execute_cypher:
-                            result = getattr(
-                                db,
-                                "_execute_query_plan",
-                            )(inconsistent_plan)
+                            result = db._execute_query_plan(inconsistent_plan)
 
         self.assertIs(result, expected)
         execute_vector.assert_called_once_with(inconsistent_plan)
@@ -1059,8 +961,6 @@ class HumemDBTest(unittest.TestCase):
         execute_cypher.assert_not_called()
 
     def test_query_plan_classifies_simple_sql_as_transactional_read(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
 
         plan = plan_query(
             "SELECT id, name FROM users WHERE id = $id",
@@ -1073,12 +973,7 @@ class HumemDBTest(unittest.TestCase):
         self.assertEqual(plan.workload.preferred_route, "sqlite")
 
     def test_sql_analytical_read_only_prefers_duckdb_after_calibration(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        sql_module = importlib.import_module("humemdb.sql")
-        classify_workload = getattr(db_module, "_classify_workload")
-        threshold_type = getattr(db_module, "_OlapRoutingThresholds")
-
-        sql_plan = sql_module.translate_sql_plan(
+        sql_plan = translate_sql_plan(
             (
                 "WITH recent AS (SELECT customer_id, amount FROM payments) "
                 "SELECT c.name, COUNT(*) AS total "
@@ -1088,11 +983,11 @@ class HumemDBTest(unittest.TestCase):
             ),
             target="duckdb",
         )
-        workload = classify_workload(
+        workload = _classify_workload(
             "sql",
             sql_plan=sql_plan,
             cypher_shape=None,
-            olap_thresholds=threshold_type(
+            olap_thresholds=_OlapRoutingThresholds(
                 benchmark_calibrated=True,
                 min_join_count=1,
                 min_aggregate_count=1,
@@ -1108,8 +1003,6 @@ class HumemDBTest(unittest.TestCase):
         self.assertIn("benchmark-calibrated OLAP thresholds", workload.reason)
 
     def test_selective_sql_join_lookup_stays_sqlite_by_default(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
 
         plan = plan_query(
             (
@@ -1125,8 +1018,6 @@ class HumemDBTest(unittest.TestCase):
         self.assertEqual(plan.workload.preferred_route, "sqlite")
 
     def test_windowed_sql_read_prefers_duckdb_by_default(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
 
         plan = plan_query(
             (
@@ -1144,8 +1035,6 @@ class HumemDBTest(unittest.TestCase):
         self.assertEqual(plan.workload.preferred_route, "duckdb")
 
     def test_read_only_cypher_stays_sqlite_by_default(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
 
         plan = plan_query(
             "MATCH (u:User) RETURN u.name LIMIT 5",
@@ -1158,8 +1047,6 @@ class HumemDBTest(unittest.TestCase):
         self.assertIn("not broad enough", plan.workload.reason)
 
     def test_query_plan_classifies_cypher_create_as_graph_write(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
 
         plan = plan_query(
             "CREATE (u:User {name: 'Alice'})",
@@ -1172,20 +1059,16 @@ class HumemDBTest(unittest.TestCase):
         self.assertEqual(plan.workload.preferred_route, "sqlite")
 
     def test_duckdb_rejects_cypher_writes_before_execution(self) -> None:
-        HumemDB = _humemdb_class()
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
             with mock.patch.object(
-                db_module,
-                "execute_cypher",
-                wraps=db_module.execute_cypher,
+                humemdb.db,
+                "_execute_cypher",
+                wraps=db_execute_cypher,
             ) as execute_cypher:
-                with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+                with HumemDB(base_path) as db:
                     plan = plan_query(
                         "CREATE (u:User {name: 'Alice'})",
                         route="duckdb",
@@ -1195,17 +1078,16 @@ class HumemDBTest(unittest.TestCase):
                         ValueError,
                         "does not allow direct Cypher writes to DuckDB",
                     ):
-                        getattr(db, "_execute_cypher_query_plan")(plan)
+                        db._execute_cypher_query_plan(plan)
 
                 self.assertEqual(execute_cypher.call_count, 0)
 
     def test_query_keeps_multiline_sql_create_table_on_sql_path(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 created = db.query(
                     "create\n table users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
                 )
@@ -1213,12 +1095,11 @@ class HumemDBTest(unittest.TestCase):
                 self.assertEqual(created.query_type, "sql")
 
     def test_sqlite_transaction_context_rolls_back_on_error(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
                 )
@@ -1237,12 +1118,11 @@ class HumemDBTest(unittest.TestCase):
                 self.assertEqual(result.rows, ((0,),))
 
     def test_sqlite_executemany_commits_small_batch(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
                 )
@@ -1251,62 +1131,55 @@ class HumemDBTest(unittest.TestCase):
                     [{"name": "Alice"}, {"name": "Bob"}],
                 )
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 result = db.query("SELECT name FROM users ORDER BY id")
 
                 self.assertEqual(result.rows, (("Alice",), ("Bob",)))
 
     def test_sqlite_query_accepts_postgres_cast_syntax(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 result = db.query("SELECT 1::INTEGER AS value")
 
                 self.assertEqual(result.columns, ("value",))
                 self.assertEqual(result.rows, ((1,),))
 
     def test_duckdb_query_accepts_postgres_cast_syntax(self) -> None:
-        HumemDB = _humemdb_class()
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+            with HumemDB(base_path) as db:
                 plan = plan_query(
                     "SELECT 1::INTEGER AS value",
                     route="duckdb",
                     params=None,
                 )
-                result = getattr(db, "_execute_sql_query_plan")(plan)
+                result = db._execute_sql_query_plan(plan)
 
                 self.assertEqual(result.columns, ("value",))
                 self.assertEqual(result.rows, ((1,),))
 
     def test_sqlite_query_accepts_postgres_ilike_syntax(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 result = db.query("SELECT 'Alice' ILIKE 'aLiCe' AS matched")
 
                 self.assertEqual(result.columns, ("matched",))
                 self.assertTrue(bool(result.rows[0][0]))
 
     def test_sql_query_supports_named_params_with_dollar_placeholders(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
                 )
@@ -1326,22 +1199,20 @@ class HumemDBTest(unittest.TestCase):
                 self.assertEqual(result.rows, ((1, "Alice"),))
 
     def test_sqlite_query_rejects_unsupported_humemsql_statement(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 with self.assertRaisesRegex(ValueError, "HumemSQL v0 only supports"):
                     db.query("DROP TABLE users")
 
     def test_sqlite_executemany_rolls_back_inside_transaction(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
                 )
@@ -1359,41 +1230,36 @@ class HumemDBTest(unittest.TestCase):
                 self.assertEqual(result.rows, ((0,),))
 
     def test_internal_duckdb_route_rejects_batched_writes(self) -> None:
-        HumemDB = _humemdb_class()
-        db_module = importlib.import_module("humemdb.db")
-        plan_batch_query = getattr(db_module, "_plan_batch_query")
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+            with HumemDB(base_path) as db:
                 plan = plan_batch_query(
                     "INSERT INTO metrics VALUES ($name, $value)",
                     route="duckdb",
                     params_seq=[{"name": "queries", "value": 1}],
                 )
                 with self.assertRaises(ValueError):
-                    getattr(db, "_execute_batch_query_plan")(plan)
+                    db._execute_batch_query_plan(plan)
 
     def test_transaction_context_is_sqlite_only(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+            with HumemDB(base_path) as db:
+                kwargs = {"route": "duckdb"}
                 with self.assertRaises(TypeError):
-                    db.transaction(route="duckdb")
+                    transaction = cast(Any, db.transaction)
+                    transaction(**kwargs)
 
     def test_search_vectors_returns_expected_matches(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 inserted_ids = db.insert_vectors(
                     [
                         [1.0, 0.0],
@@ -1408,12 +1274,11 @@ class HumemDBTest(unittest.TestCase):
                 self.assertEqual(tuple(row[2] for row in result.rows), (1, 2))
 
     def test_insert_vectors_invalidates_cached_index(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 inserted_ids = db.insert_vectors(
                     [
                         [0.8, 0.2],
@@ -1432,12 +1297,11 @@ class HumemDBTest(unittest.TestCase):
                 self.assertEqual(second_result.rows[0][2], 3)
 
     def test_insert_vectors_can_use_explicit_direct_ids(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 inserted_ids = db.insert_vectors(
                     [
                         (11, [1.0, 0.0]),
@@ -1454,12 +1318,11 @@ class HumemDBTest(unittest.TestCase):
                 )
 
     def test_search_vectors_supports_direct_metadata_filters(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 inserted_ids = db.insert_vectors(
                     [
                         [1.0, 0.0],
@@ -1485,12 +1348,11 @@ class HumemDBTest(unittest.TestCase):
                 self.assertEqual(result.rows, (("direct", "", 1, 1.0),))
 
     def test_insert_vectors_accepts_record_rows_with_inline_metadata(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 inserted_ids = db.insert_vectors(
                     [
                         {
@@ -1519,12 +1381,11 @@ class HumemDBTest(unittest.TestCase):
                 self.assertEqual(result.rows, (("direct", "", 1, 1.0),))
 
     def test_vector_targets_can_reuse_same_numeric_id_in_one_database(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 inserted_ids = db.insert_vectors([[1.0, 0.0]])
                 self.assertEqual(inserted_ids, (1,))
 
@@ -1574,27 +1435,24 @@ class HumemDBTest(unittest.TestCase):
 
                 cypher_candidate_filtered = db.query(
                     (
-                        "MATCH (u:User {cohort: 'alpha'}) "
-                        "SEARCH u IN (VECTOR INDEX embedding FOR $query LIMIT 1) "
-                        "RETURN u.id ORDER BY u.id"
+                        "CALL db.index.vector.queryNodes("
+                        "'user_embedding_idx', 1, $query) "
+                        "YIELD node, score MATCH (node:User {cohort: 'alpha'}) "
+                        "RETURN node.id, score ORDER BY node.id"
                     ),
                     params={
                         "query": [0.8, 0.2],
                     },
                 )
                 self.assertEqual(cypher_candidate_filtered.query_type, "cypher")
-                self.assertEqual(
-                    cypher_candidate_filtered.rows[0][:3],
-                    ("graph_node", "", 1),
-                )
+                self.assertEqual(cypher_candidate_filtered.rows[0][0], 1)
 
     def test_sql_insert_with_embedding_updates_row_and_vector_store(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     (
                         "CREATE TABLE docs ("
@@ -1660,12 +1518,11 @@ class HumemDBTest(unittest.TestCase):
                 )
 
     def test_sql_insert_with_auto_ids_updates_vector_store(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     (
                         "CREATE TABLE docs ("
@@ -1728,12 +1585,11 @@ class HumemDBTest(unittest.TestCase):
                 )
 
     def test_sql_single_insert_with_auto_id_updates_vector_store(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     (
                         "CREATE TABLE docs ("
@@ -1758,12 +1614,11 @@ class HumemDBTest(unittest.TestCase):
                 self.assertEqual(vector_result.rows[0][:3], ("sql_row", "docs", 1))
 
     def test_sql_update_with_embedding_updates_vector_store(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     (
                         "CREATE TABLE docs ("
@@ -1803,12 +1658,11 @@ class HumemDBTest(unittest.TestCase):
     def test_cypher_create_with_embedding_keeps_node_and_vector_write_together(
         self,
     ) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 node_ids = []
                 for name, cohort, embedding in (
                     ("Alice", "alpha", [1.0, 0.0]),
@@ -1845,29 +1699,26 @@ class HumemDBTest(unittest.TestCase):
 
                 vector_result = db.query(
                     (
-                        "MATCH (u:User {cohort: 'alpha'}) "
-                        "SEARCH u IN (VECTOR INDEX embedding FOR $query LIMIT 3) "
-                        "RETURN u.id ORDER BY u.id"
+                        "CALL db.index.vector.queryNodes("
+                        "'user_embedding_idx', 3, $query) "
+                        "YIELD node, score MATCH (node:User {cohort: 'alpha'}) "
+                        "RETURN node.id, score ORDER BY node.id"
                     ),
                     params={
                         "query": [1.0, 0.0],
                     },
                 )
                 self.assertEqual(
-                    tuple(row[:3] for row in vector_result.rows),
-                    (
-                        ("graph_node", "", node_ids[0]),
-                        ("graph_node", "", node_ids[1]),
-                    ),
+                    tuple(row[0] for row in vector_result.rows),
+                    (node_ids[0], node_ids[1]),
                 )
 
     def test_cypher_match_set_embedding_updates_vector_store(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 created = db.query(
                     (
                         "CREATE (u:User {"
@@ -1888,24 +1739,24 @@ class HumemDBTest(unittest.TestCase):
 
                 result = db.query(
                     (
-                        "MATCH (u:User {cohort: 'alpha'}) "
-                        "SEARCH u IN (VECTOR INDEX embedding FOR $query LIMIT 1) "
-                        "RETURN u.id ORDER BY u.id"
+                        "CALL db.index.vector.queryNodes("
+                        "'user_embedding_idx', 1, $query) "
+                        "YIELD node, score MATCH (node:User {cohort: 'alpha'}) "
+                        "RETURN node.id, score ORDER BY node.id"
                     ),
                     params={
                         "query": [1.0, 0.0],
                     },
                 )
-                self.assertEqual(result.rows[0][2], node_id)
-                self.assertAlmostEqual(result.rows[0][3], 1.0, places=6)
+                self.assertEqual(result.rows[0][0], node_id)
+                self.assertAlmostEqual(result.rows[0][1], 1.0, places=6)
 
     def test_sql_vector_syntax_supports_candidate_scope(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     (
                         "CREATE TABLE docs ("
@@ -1941,12 +1792,11 @@ class HumemDBTest(unittest.TestCase):
                 )
 
     def test_sql_vector_syntax_supports_ast_parsed_ordering_shape(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     (
                         "CREATE TABLE docs ("
@@ -1983,12 +1833,11 @@ class HumemDBTest(unittest.TestCase):
                 )
 
     def test_sql_vector_syntax_dot_operator_still_works(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     (
                         "CREATE TABLE docs ("
@@ -2021,12 +1870,11 @@ class HumemDBTest(unittest.TestCase):
                 self.assertEqual(result.rows[0][:3], ("sql_row", "docs", 1))
 
     def test_sql_vector_dot_rejects_invalid_candidate_query(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 with self.assertRaisesRegex(
                     ValueError,
                     "candidate query must be valid HumemSQL v0",
@@ -2040,12 +1888,11 @@ class HumemDBTest(unittest.TestCase):
                     )
 
     def test_sql_vector_syntax_keeps_large_fraction_scope_exact(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     (
                         "CREATE TABLE docs ("
@@ -2088,12 +1935,11 @@ class HumemDBTest(unittest.TestCase):
                 )
 
     def test_cypher_vector_syntax_supports_candidate_scope(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 alice = db.query(
                     (
                         "CREATE (u:User {"
@@ -2118,9 +1964,10 @@ class HumemDBTest(unittest.TestCase):
 
                 result = db.query(
                     (
-                        "MATCH (u:User {cohort: 'alpha'}) "
-                        "SEARCH u IN (VECTOR INDEX embedding FOR $query LIMIT 3) "
-                        "RETURN u.id ORDER BY u.id"
+                        "CALL db.index.vector.queryNodes("
+                        "'user_embedding_idx', 3, $query) "
+                        "YIELD node, score MATCH (node:User {cohort: 'alpha'}) "
+                        "RETURN node.id, score ORDER BY node.id"
                     ),
                     params={
                         "query": [1.0, 0.0],
@@ -2128,20 +1975,16 @@ class HumemDBTest(unittest.TestCase):
                 )
 
                 self.assertEqual(
-                    tuple(row[:3] for row in result.rows),
-                    (
-                        ("graph_node", "", alice.rows[0][0]),
-                        ("graph_node", "", bob.rows[0][0]),
-                    ),
+                    tuple(row[0] for row in result.rows),
+                    (alice.rows[0][0], bob.rows[0][0]),
                 )
 
     def test_cypher_vector_syntax_supports_parameterized_search_limit(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 alice = db.query(
                     (
                         "CREATE (u:User {"
@@ -2166,9 +2009,10 @@ class HumemDBTest(unittest.TestCase):
 
                 result = db.query(
                     (
-                        "MATCH (u:User {cohort: 'alpha'}) "
-                        "SEARCH u IN (VECTOR INDEX embedding FOR $query LIMIT $limit) "
-                        "RETURN u.id ORDER BY u.id"
+                        "CALL db.index.vector.queryNodes("
+                        "'user_embedding_idx', $limit, $query) "
+                        "YIELD node, score MATCH (node:User {cohort: 'alpha'}) "
+                        "RETURN node.id, score ORDER BY node.id"
                     ),
                     params={
                         "query": [1.0, 0.0],
@@ -2177,20 +2021,16 @@ class HumemDBTest(unittest.TestCase):
                 )
 
                 self.assertEqual(
-                    tuple(row[:3] for row in result.rows),
-                    (
-                        ("graph_node", "", alice.rows[0][0]),
-                        ("graph_node", "", bob.rows[0][0]),
-                    ),
+                    tuple(row[0] for row in result.rows),
+                    (alice.rows[0][0], bob.rows[0][0]),
                 )
 
     def test_cypher_vector_query_accepts_lowercase_search_keywords(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 alice = db.query(
                     (
                         "CREATE (u:User {"
@@ -2208,9 +2048,10 @@ class HumemDBTest(unittest.TestCase):
 
                 result = db.query(
                     (
-                        "MATCH (u:User {cohort: 'alpha'}) "
-                        "search u in (vector index embedding for $query limit $limit) "
-                        "RETURN u.id ORDER BY u.id"
+                        "call db.index.vector.queryNodes("
+                        "'user_embedding_idx', $limit, $query) "
+                        "yield node, score match (node:User {cohort: 'alpha'}) "
+                        "return node.id, score order by node.id"
                     ),
                     params={
                         "query": [1.0, 0.0],
@@ -2219,21 +2060,16 @@ class HumemDBTest(unittest.TestCase):
                 )
 
                 self.assertEqual(
-                    tuple(row[:3] for row in result.rows),
-                    (
-                        ("graph_node", "", alice.rows[0][0]),
-                        ("graph_node", "", bob.rows[0][0]),
-                    ),
+                    tuple(row[0] for row in result.rows),
+                    (alice.rows[0][0], bob.rows[0][0]),
                 )
 
     def test_raw_sql_vector_write_invalidates_cached_index(self) -> None:
-        HumemDB = _humemdb_class()
-        vector = importlib.import_module("humemdb.vector")
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 inserted_ids = db.insert_vectors(
                     [
                         [0.8, 0.2],
@@ -2258,7 +2094,7 @@ class HumemDBTest(unittest.TestCase):
                         "namespace": "",
                         "target_id": 3,
                         "dimensions": 2,
-                        "embedding": vector.encode_vector_blob([1.0, 0.0]),
+                        "embedding": encode_vector_blob([1.0, 0.0]),
                     },
                 )
 
@@ -2266,12 +2102,11 @@ class HumemDBTest(unittest.TestCase):
                 self.assertEqual(second_result.rows[0][2], 3)
 
     def test_preload_vectors_warms_existing_vector_set(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 inserted_ids = db.insert_vectors(
                     [
                         [1.0, 0.0],
@@ -2280,7 +2115,7 @@ class HumemDBTest(unittest.TestCase):
                 )
                 self.assertEqual(inserted_ids, (1, 2))
 
-            with HumemDB(str(sqlite_path), preload_vectors=True) as db:
+            with HumemDB(base_path, preload_vectors=True) as db:
                 self.assertTrue(db.vectors_cached())
 
                 result = db.search_vectors([1.0, 0.0], top_k=1)
@@ -2288,46 +2123,37 @@ class HumemDBTest(unittest.TestCase):
                 self.assertIsNone(result.query_type)
 
     def test_preload_vectors_ignores_missing_vector_table(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path), preload_vectors=True) as db:
+            with HumemDB(base_path, preload_vectors=True) as db:
                 self.assertFalse(db.vectors_cached())
 
     def test_vector_queries_reject_duckdb_route(self) -> None:
-        HumemDB = _humemdb_class()
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+            with HumemDB(base_path) as db:
                 plan = plan_query(
                     "SELECT id FROM docs ORDER BY embedding <=> $query LIMIT 1",
                     route="duckdb",
                     params={"query": [1.0, 0.0]},
                 )
                 with self.assertRaisesRegex(ValueError, "route='sqlite'"):
-                    getattr(db, "_execute_query_plan")(plan)
+                    db._execute_query_plan(plan)
 
     def test_duckdb_allows_read_only_cte_queries(self) -> None:
-        HumemDB = _humemdb_class()
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
-                _duckdb_engine(db).execute(
+            with HumemDB(base_path) as db:
+                db._duckdb.execute(
                     "CREATE TABLE metrics (name VARCHAR, value INTEGER)"
                 )
-                _duckdb_engine(db).execute(
+                db._duckdb.execute(
                     "INSERT INTO metrics VALUES (?, ?)",
                     params=("queries", 1),
                 )
@@ -2340,27 +2166,25 @@ class HumemDBTest(unittest.TestCase):
                     route="duckdb",
                     params=None,
                 )
-                result = getattr(db, "_execute_sql_query_plan")(plan)
+                result = db._execute_sql_query_plan(plan)
 
                 self.assertEqual(result.rows, (("queries", 1),))
 
     def test_humemdb_does_not_expose_engine_attributes_publicly(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 self.assertFalse(hasattr(db, "sqlite"))
                 self.assertFalse(hasattr(db, "duckdb"))
 
-    def test_humemdb_open_derives_companion_file_paths(self) -> None:
-        HumemDB = _humemdb_class()
+    def test_humemdb_constructor_derives_companion_file_paths(self) -> None:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             base_path = Path(tmpdir) / "graph"
 
-            with HumemDB.open(base_path) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
                 )
@@ -2371,20 +2195,41 @@ class HumemDBTest(unittest.TestCase):
 
                 result = db.query("SELECT name FROM users")
 
-                self.assertEqual(db.sqlite_path, str(base_path.with_suffix(".sqlite3")))
-                self.assertEqual(db.duckdb_path, str(base_path.with_suffix(".duckdb")))
+                self.assertFalse(hasattr(db, "sqlite_path"))
+                self.assertFalse(hasattr(db, "duckdb_path"))
+                self.assertTrue(base_path.with_suffix(".sqlite3").exists())
+                self.assertTrue(base_path.with_suffix(".duckdb").exists())
+                self.assertEqual(result.rows, (("Alice",),))
+
+    def test_humemdb_constructor_reopens_existing_companion_file_paths(self) -> None:
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_path = Path(tmpdir) / "app"
+
+            with HumemDB(base_path) as db:
+                db.query(
+                    "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
+                )
+                db.query(
+                    "INSERT INTO users (name) VALUES ($name)",
+                    params={"name": "Alice"},
+                )
+
+            with HumemDB(base_path) as db:
+                result = db.query("SELECT name FROM users")
+
+                self.assertFalse(hasattr(db, "sqlite_path"))
+                self.assertFalse(hasattr(db, "duckdb_path"))
+                self.assertTrue(base_path.with_suffix(".sqlite3").exists())
+                self.assertTrue(base_path.with_suffix(".duckdb").exists())
                 self.assertEqual(result.rows, (("Alice",),))
 
     def test_duckdb_rejects_data_modifying_cte_queries(self) -> None:
-        HumemDB = _humemdb_class()
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
                 )
@@ -2403,15 +2248,14 @@ class HumemDBTest(unittest.TestCase):
                     ValueError,
                     "does not allow direct writes to DuckDB",
                 ):
-                    getattr(db, "_execute_query_plan")(plan)
+                    db._execute_query_plan(plan)
 
     def test_sql_rejects_positional_params(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
                 )
@@ -2423,12 +2267,11 @@ class HumemDBTest(unittest.TestCase):
                     )
 
     def test_sql_batch_rejects_positional_params(self) -> None:
-        HumemDB = _humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
                 )

@@ -9,8 +9,8 @@ exercises `HumemCypher v0` query shapes. The vector benchmark exercises the curr
 
 Routing automation utilities:
 
-- [`routing_sweep.py`](./routing_sweep.py) runs the SQL and Cypher routing benchmarks
-  across scale ladders and writes merged JSON summaries.
+- [`routing_sweep.py`](./routing_sweep.py) runs the SQL, Cypher, and real-data vector
+  benchmark sweeps across scale ladders and writes merged JSON summaries.
 - [`routing_threshold_report.py`](./routing_threshold_report.py) reads one merged sweep
   summary and prints a crossover report showing where DuckDB first wins, if it does.
 
@@ -208,7 +208,7 @@ Machine-readable output:
 
 - pass `--output-json path/to/results.json` to persist one run as structured JSON for
   later graph-routing analysis and scale summaries
-- pass `--index-set baseline|phase11-node-prop-covering|phase11-edge-prop-covering|phase11-targeted`
+- pass `--index-set baseline|node-prop-covering|edge-prop-covering|targeted-covering`
   to rerun the same graph workload set against one named SQLite graph-index experiment
 - use [`routing_sweep.py`](./routing_sweep.py) to automate multi-scale SQL and Cypher
   runs into one merged summary file
@@ -225,7 +225,7 @@ Structured Cypher payloads now also include:
 
 Purpose:
 
-- Measure the first Phase 12 ingestion family built on top of the canonical SQLite
+- Measure the first public ingestion family built on top of the canonical SQLite
   write path.
 - Compare the new CSV-backed import APIs against the current manual alternatives the
   team would realistically use today.
@@ -270,7 +270,7 @@ What it reports:
   - internal SQLite graph-table batch writes as a lower bound
 - post-ingest count-query timing summaries for each comparison path
 
-Use this benchmark when Phase 12 ingest behavior changes materially, especially when:
+Use this benchmark when ingest behavior changes materially, especially when:
 
 - chunk-size defaults are adjusted
 - graph import validation or property coercion rules change
@@ -288,7 +288,7 @@ Method-selection flags:
 
 Current note on staged relational ingest:
 
-- `staging_normalize` exists to measure one realistic Phase 12 follow-on path where
+- `staging_normalize` exists to measure one realistic follow-on path where
   CSV rows first land in a permissive staging table and then move into the final table
   through one set-based SQLite normalization step
 - this staged path is intentionally table-first today; graph ingest is benchmarked
@@ -349,17 +349,20 @@ Current ingest takeaway:
   worse, especially for edges where they are still more than `6x` slower than the
   internal lower bound at `100k` and `1M`
 - the completed direct-import plus staged-relational runs are strong enough to treat
-  the first public ingestion family as benchmark-validated for this phase
+  the first public ingestion family as benchmark-validated for the current release bar
 
 ## [`routing_sweep.py`](./routing_sweep.py)
 
 Purpose:
 
-- run scale ladders for the SQL and Cypher routing benchmarks
+- run scale ladders for the SQL and Cypher routing benchmarks plus the real-data
+  vector benchmark sweep
 - persist per-scale JSON outputs plus one merged summary document
 - keep scale-sweep workflow reproducible instead of ad hoc terminal history
 - allow Cypher sweeps to compare named graph-index experiments without hand-editing
   the benchmark script
+- pass through the fixed real-data vector baseline inputs such as dataset, filter
+  sources, sample mode, row scales, and `top_k` grid
 
 Example command:
 
@@ -368,6 +371,9 @@ HUMEMDB_THREADS=8 python scripts/benchmarks/routing_sweep.py \
   --benchmark all \
   --sql-scales 10000,100000,1000000 \
   --cypher-scales 100000,1000000 \
+  --vector-dataset msmarco-10m \
+  --vector-scales 100000,1000000 \
+  --vector-top-k-grid 10,50 \
   --cypher-index-set baseline \
   --warmup 1 \
   --repetitions 3
@@ -381,9 +387,12 @@ Main outputs:
 
 - `sql_summary.json`
 - `cypher_summary.json`
+- `vector_summary.json`
 - `routing_sweep_summary.json`
-- when the Cypher benchmark is enabled, the merged summary also records the selected
-  graph `index_set`
+- when the Cypher benchmark is enabled, the merged summary records the selected graph
+  `index_set`
+- when the vector benchmark is enabled, the merged summary records the selected real
+  dataset sweep and its scenario summaries
 
 ## [`routing_threshold_report.py`](./routing_threshold_report.py)
 
@@ -391,8 +400,9 @@ Purpose:
 
 - summarize the merged routing sweep JSON into a workload-by-workload crossover report
 - show the first scale where DuckDB wins for each SQL or Cypher workload, if any
-- show the first scale where indexed vector search wins with acceptable recall, if any
-- emit `recommended_runtime.cypher_phase11_diagnostics` for graph-specific follow-up
+- summarize the real-data vector baseline by dataset, filter, and `top_k`, using the
+  scenario-level recall policy that was already baked into the vector sweep
+- emit `recommended_runtime.cypher_graph_index_diagnostics` for graph-specific follow-up
   work such as temp-B-tree pressure, property-join-heavy workloads, direct type-filter
   workloads, and ordered-versus-unordered sort overhead pairs
 
@@ -404,78 +414,31 @@ python scripts/benchmarks/routing_threshold_report.py \
   --output-json scripts/benchmarks/results/routing_sweep/routing_thresholds.json
 ```
 
-Targeted Phase 11 comparison example:
+Targeted graph-index comparison example:
 
 ```bash
 python scripts/benchmarks/routing_sweep.py \
   --benchmark cypher \
   --cypher-scales 100000,1000000 \
-  --cypher-index-set phase11-targeted \
+  --cypher-index-set targeted-covering \
   --warmup 0 \
   --repetitions 1 \
-  --output-dir /tmp/humemdb-phase11-sweep-targeted
+  --output-dir /tmp/humemdb-graph-index-sweep-targeted
 
 python scripts/benchmarks/routing_threshold_report.py \
-  --input /tmp/humemdb-phase11-sweep-targeted/routing_sweep_summary.json \
-  --output-json /tmp/humemdb-phase11-sweep-targeted/report.json
+  --input /tmp/humemdb-graph-index-sweep-targeted/routing_sweep_summary.json \
+  --output-json /tmp/humemdb-graph-index-sweep-targeted/report.json
 ```
 
-Current full-sweep inputs:
+Current note:
 
-- SQL scales: `10k`, `100k`, `1M` event rows
-- Cypher scales: `100k`, `1M` total nodes
-- Vector scales: `2k`, `10k`, `50k` rows at `256` dims and `top_k=10`
-
-Current SQL crossover summary:
-
-| Workload | Family | Shape | First DuckDB win | Takeaway |
-| --- | --- | --- | ---: | --- |
-| `event_point_lookup` | `oltp` | `point_lookup` | none | Indexed point reads stay on SQLite across the current sweep. |
-| `event_filtered_range` | `oltp` | `filtered_range` | none | Selective filtered reads still stay on SQLite. |
-| `event_type_hot_window` | `oltp` | `filtered_ordered_limit` | none | The current top-k event filter is still not a stable DuckDB crossover in the sweep. |
-| `event_aggregate_topk` | `analytics` | `scan_group_limit` | `10k` | Broad grouped scan work crosses to DuckDB immediately. |
-| `event_region_join` | `analytics` | `join_group_order` | `10k` | Low-selectivity join-group work also crosses early. |
-| `event_active_user_join_lookup` | `oltp_join` | `selective_join_lookup` | none | A selective join lookup remains SQLite territory. |
-| `event_active_user_rollup` | `analytics` | `filtered_join_group` | `10k` | Grouped join rollups cross early even when filtered. |
-| `event_cte_daily_rollup` | `analytics` | `cte_group_order` | `10k` | CTE-backed broad aggregation is an early DuckDB win. |
-| `event_window_rank` | `analytics` | `window_partition_order` | `10k` | Windowed ranking also crosses early in the current dataset family. |
-| `event_exists_region_filter` | `mixed` | `exists_filter` | `10k` | Even correlated `EXISTS` can flip once the work is broad enough. |
-| `document_tag_rollup` | `document` | `selective_multi_join_group` | none | A highly selective document-tag join still strongly favors SQLite. |
-| `document_owner_region_rollup` | `document` | `broad_multi_join_group` | `100k` | Broader document-owner aggregation crosses later, around the mid-scale tier. |
-| `document_distinct_owner_regions` | `document` | `distinct_join_projection` | `1M` | `DISTINCT` join projection does not flip until the larger scales. |
-| `memory_hot_rollup` | `memory` | `filtered_group_limit` | `1M` | Memory rollups sit in the crossover region and only move at larger scales. |
-| `memory_owner_exists_projection` | `memory` | `exists_projection` | `1M` | `EXISTS` over the memory table also crosses later. |
-| `memory_owner_join_lookup` | `memory` | `selective_join_lookup` | `1M` | Even lookup-like memory joins can flip, but only much later than event OLTP joins. |
-
-Current Cypher crossover summary:
-
-| Workload | Family | Shape | First DuckDB win | Takeaway |
-| --- | --- | --- | ---: | --- |
-| `user_lookup` | `node` | `anchored_node_lookup` | none | Anchored node lookups remain firmly SQLite-favored. |
-| `document_lookup` | `node` | `anchored_node_lookup` | none | Anchored document lookup stays on SQLite. |
-| `topic_lookup` | `node` | `anchored_node_lookup` | none | Anchored topic lookup stays on SQLite. |
-| `team_lookup` | `node` | `anchored_node_lookup` | none | The added `Team` node family also stays on SQLite. |
-| `social_expand` | `edge` | `broad_relationship_expand` | `1M` | Broad `KNOWS` traversal crosses, but only at the larger current graph scale. |
-| `social_mixed_boolean` | `edge` | `mixed_boolean_expand` | `100k` | Mixed boolean relationship filtering is the earliest current raw-backend graph crossover. |
-| `social_expand_ordered` | `edge` | `ordered_relationship_expand` | none | Ordering plus `LIMIT` still does not make this traversal a DuckDB win. |
-| `social_expand_untyped` | `edge` | `untyped_relationship_expand` | none | Untyped relationship expansion still stays on SQLite. |
-| `social_expand_type_alternation` | `edge` | `relationship_type_alternation` | none | Narrow type alternation does not justify DuckDB in the current sweep. |
-| `social_expand_anonymous_endpoints` | `edge` | `anonymous_endpoint_expand` | none | Anonymous-endpoint relationship reads still stay on SQLite. |
-| `social_expand_unfiltered` | `edge` | `full_relationship_expand` | none | Full fanout with a `LIMIT` still stays on SQLite in the current sweep. |
-| `social_reverse_since_anchor` | `edge` | `relationship_property_anchor` | `1M` | Reverse-edge traversal with relationship-property anchoring only crosses at the larger scale. |
-| `social_reverse_expand_ordered` | `edge` | `reverse_relationship_expand` | none | Reverse ordered expansion remains SQLite-favored. |
-| `author_expand` | `edge` | `selective_relationship_expand` | none | Selective authored traversal stays on SQLite. |
-| `author_expand_ordered` | `edge` | `ordered_relationship_expand` | none | Ordered authored traversal still stays on SQLite. |
-| `tagged_expand` | `edge` | `selective_relationship_expand` | none | Selective tagged traversal stays on SQLite. |
-| `tagged_topic_fanout` | `edge` | `topic_fanout_expand` | none | Topic-side fanout still does not justify DuckDB. |
-| `team_membership_expand` | `edge` | `membership_expand` | none | The new `MEMBER_OF` traversal family stays on SQLite. |
-| `team_membership_ordered` | `edge` | `ordered_membership_expand` | none | Ordered team-membership traversal also stays on SQLite. |
-
-Current vector crossover summary:
-
-| Workload | Family | Shape | First indexed win | Takeaway |
-| --- | --- | --- | ---: | --- |
-| `vector_dims256_topk10` | `vector` | `candidate_filtered_ann` | none | The current default indexed LanceDB path never beats the exact SQLite/NumPy path with acceptable recall in this sweep. |
+- treat the threshold report as a derived summary of whatever merged sweep JSON you
+  point it at, not as a permanent benchmark snapshot document
+- the SQL and Cypher sections still summarize first-crossing behavior
+- the vector section now summarizes the retained real-data baseline only, grouped by
+  dataset, filter family, and `top_k`, and uses the per-scenario recall admission
+  result from `vector_search_real_sweep.py` instead of the old synthetic crossover
+  interpretation
 
 Thread-control example:
 
@@ -549,322 +512,190 @@ Graph findings:
   than SQL routing: broad graph fanout may cross, but the portable `HumemCypher v0`
   surface has a much narrower DuckDB-friendly region today.
 
-## [`vector_search.py`](./vector_search.py)
+## [`vector_search_real.py`](./vector_search_real.py)
 
 Purpose:
 
-- Compare the first realistic `HumemVector v0` execution candidates.
-- Establish a benchmarked routing baseline for exact NumPy search, scalar-int8 quantized
-  search, and LanceDB flat versus indexed vector search.
-- Measure both global nearest-neighbor search and a simple metadata-prefiltered search
-  shape.
-- Treat LanceDB as a black-box indexed backend for now: the benchmark uses LanceDB's
-  default index algorithm and default search hyperparameters instead of hand-tuned
-  settings.
+- Benchmark shipped vector datasets.
+- Hold the operational split steady: NumPy exact for the hot tier and LanceDB `IVF_PQ`
+  for the cold tier.
+- Measure dataset load cost, LanceDB table/index build cost, indexed query latency,
+  and recall versus NumPy exact where the hot-tier baseline is still enabled.
+- Reuse one SQLite, NumPy, and LanceDB build across multiple `top_k` values when a
+  `top_k` grid is requested.
 
-Thread-control note:
-
-- `HUMEMDB_THREADS` is the top-level thread cap for the vector benchmark.
-- The vector runtime applies it to common NumPy/BLAS/OpenMP env vars and also uses
-  `threadpoolctl` as a best-effort runtime cap for loaded numeric pools.
-- The vector benchmark applies the same cap to Arrow's global CPU pool with
-  `pyarrow.set_cpu_count()`.
-- `LANCEDB_THREADS` remains available as a vector-only fallback when `HUMEMDB_THREADS`
-  is unset.
-- This is a best-effort local-thread cap for LanceDB's Arrow-backed execution path, not
-  a documented LanceDB-specific hard limit across every internal pool.
-- LanceDB still uses its own default index/search settings unless the library changes
-  them.
-
-Tuning note:
-
-- If your recall target is stricter, for example `>= 0.95`, benchmark tuned LanceDB
-  settings instead of relying on the library defaults.
-- The current benchmark supports explicit LanceDB index/search knobs such as
-  `--lancedb-index-type`, `--lancedb-num-partitions`, `--lancedb-num-sub-vectors`,
-  `--lancedb-nprobes`, `--lancedb-refine-factor`, and `--lancedb-ef`.
-
-Shared command:
+Representative commands:
 
 ```bash
-python scripts/benchmarks/vector_search.py \
+HUMEMDB_THREADS=8 python scripts/benchmarks/vector_search_real.py \
+  --dataset msmarco-10m \
   --rows 100000 \
-  --dimensions 384 \
-  --queries 64 \
-  --top-k 10 \
-  --warmup 1 \
-  --repetitions 5
-```
-
-Use it in one of these ways:
-
-## [`vector_query_steps.py`](./vector_query_steps.py)
-
-Purpose:
-
-- Break one exact-vector workload into step timings instead of only comparing complete
-  end-to-end paths.
-- Measure ingest cost for direct vectors, SQL-owned vectors, and Cypher-owned vectors.
-- Measure frontend overhead for SQL translation and Cypher parse/bind+compile.
-- Measure candidate-query execution, candidate-id mapping, pure NumPy vector search, and
-  end-to-end candidate-filtered vector query latency.
-
-Representative command used for the current intermediate result:
-
-```bash
-python scripts/benchmarks/vector_query_steps.py \
-  --rows 100000 \
-  --dimensions 768 \
-  --queries 50 \
+  --top-k-grid 10,50 \
+  --queries 100 \
   --warmup 1 \
   --repetitions 3 \
+  --metric cosine \
+  --sample-mode auto \
+  --lancedb-index-type IVF_PQ \
   --output json
 ```
 
-Current status:
+Use the same shape for `stackoverflow-xlarge`, typically with `--sample-mode stratified`
+and whichever `--rows` / `--top-k` combination you want to test.
 
-- These are intermediate measurements, not a final routing policy.
-- The current runtime is still expected to improve, especially around candidate-filtered-path
-  execution and future ingest work.
-- Cypher ingest is currently transactional but still statement-oriented, not a true
-  batched bulk-ingest path, so its ingest cost is not yet a fair lower bound.
+Current implementation note:
 
-Scenario:
+- Full NumPy exact now stops above `100k` rows by default so the benchmark mirrors the
+  fixed hot-tier operational cut.
+- The LanceDB side is intentionally narrowed to `IVF_PQ`; this script is no longer a
+  multi-family comparison harness.
+- Exact-enabled runs still stage sampled real vectors into SQLite first, then stream
+  them through `DuckDB -> Arrow batches -> LanceDB` before index build.
+- Cold-only runs above the `100k` cut now bypass SQLite and DuckDB, ingesting
+  selected shard memmaps straight into `Arrow batches -> LanceDB` before index build.
+- That direct cold ingest path materially reduced peak RSS in the `1M`
+  `msmarco-10m` profile, from about `9.5 GiB` to about `3.7 GiB`, so the dominant
+  memory spike is no longer the export path itself.
+- When `--top-k-grid` is used, the benchmark builds once per dataset and scale, then
+  reuses that build for all requested `top_k` values.
 
-| Metric | Value |
-| ------ | ----: |
-| Rows | 100,000 |
-| Dimensions | 768 |
-| Queries | 50 |
-| `top_k` | 10 |
-| Candidate-filtered count | 50,000 |
-
-One-time stage timings:
-
-| Stage | Time |
-| ----- | ---: |
-| Direct ingest | 1999.15 ms |
-| SQL-owned ingest | 9096.09 ms |
-| Cypher-owned ingest | 18029.06 ms |
-| Direct preload | 1707.34 ms |
-| SQL-owned preload | 1197.45 ms |
-| Cypher-owned preload | 1805.85 ms |
-
-Per-query timing means:
-
-| Stage | Mean |
-| ----- | ---: |
-| Direct vector query end-to-end | 8.38 ms |
-| Direct vector search only | 7.76 ms |
-| SQL cached translation | 0.0007 ms |
-| SQL uncached translation | 0.0982 ms |
-| SQL candidate query only | 109.10 ms |
-| SQL candidate mapping only | 5.11 ms |
-| SQL vector search only | 19.20 ms |
-| SQL vector query end-to-end | 150.56 ms |
-| Cypher parse only | 0.0149 ms |
-| Cypher bind+compile | 0.0077 ms |
-| Cypher candidate query only | 28.55 ms |
-| Cypher candidate mapping only | 5.12 ms |
-| Cypher vector search only | 349.70 ms |
-| Cypher vector query end-to-end | 432.36 ms |
-
-Interim interpretation:
-
-| Question | Current answer |
-| -------- | -------------- |
-| Is frontend translation/planning the bottleneck? | No. SQL uncached translation stayed around `0.10 ms`, and Cypher parse plus bind+compile stayed around `0.02 ms` combined. |
-| What dominates candidate-filtered vector latency today? | For SQL candidate-filtered search, the candidate query dominates first. For Cypher candidate-filtered search in this run, the vector search over the large candidate subset dominated heavily. |
-| Did candidate filtering help in this run? | No. The candidate filter kept 50,000 of 100,000 vectors, so the filter was still too broad to pay for the extra frontend and candidate-mapping work. |
-| Why is Cypher-owned ingest much slower? | The current Cypher write path is transactional but still one `CREATE` per node, not a true batched bulk-ingest surface. |
-| What should be optimized next? | Candidate-filtered path execution, candidate mapping, selectivity-sensitive vector search, and later bulk graph ingest rather than parser/compiler micro-optimizations. |
-
-Use this benchmark when you want to answer where time is spent inside the current exact
-vector path rather than only whether one whole end-to-end backend path wins.
-
-## [`vector_search_sweep.py`](./vector_search_sweep.py)
+## [`vector_search_real_sweep.py`](./vector_search_real_sweep.py)
 
 Purpose:
 
-- Sweep the vector benchmark across multiple row counts, dimensions, and `top_k` values.
-- Capture setup costs, steady-state query latency, and recall together so HumemDB can
-  estimate when NumPy exact, NumPy scalar-int8, or LanceDB indexed should be the
-  practical route.
-- Print a first-pass break-even estimate for LanceDB indexed versus NumPy exact.
+- Sweep real dataset scales over `top_k` and sampling choices.
+- Persist rolling summaries and per-scenario JSON files while long runs are still in
+  progress.
+- Produce a real-data routing baseline for the fixed `100k` hot / `>100k` cold split.
+- Score each scenario against the current IVF_PQ recall admission bar instead of using
+  one flat cutoff for every scale.
+- Reuse one real-data build per dataset, scale, and filter before expanding results
+  back out across the requested `top_k` grid.
 
-Example command:
-
-```bash
-HUMEMDB_THREADS=8 python scripts/benchmarks/vector_search_sweep.py \
-  --rows-grid 2000,10000,50000 \
-  --dimensions-grid 64,256,768 \
-  --top-k-grid 10 \
-  --queries 16 \
-  --repetitions 2
-```
-
-What it reports:
-
-- Per-scenario setup totals for NumPy and LanceDB paths.
-- Per-scenario mean query latencies and recall.
-- Break-even query estimates for LanceDB indexed versus NumPy exact.
-- A preliminary routing recommendation for each scenario plus an overall summary.
-
-Current use:
-
-- Use this script to build the current vector rule of thumb instead of relying on a single
-  benchmark point.
-- Re-run it when LanceDB versions change, when thread budgets change, or when the
-  expected production dimensions and query volumes change.
-- For most current LanceDB-versus-NumPy sweeps, pass `--skip-numpy-sq8`. In this
-  implementation, NumPy SQ8 is usually slower than NumPy FP32 and is only worth
-  keeping in the benchmark when memory-saving tradeoffs are the specific question.
-
-Recommended current sweep style:
+Representative commands:
 
 ```bash
-HUMEMDB_THREADS=8 python scripts/benchmarks/vector_search_sweep.py \
-  --rows-grid 100000,250000,500000,1000000 \
-  --dimensions-grid 256,384 \
-  --top-k-grid 10 \
+HUMEMDB_THREADS=8 python scripts/benchmarks/vector_search_real_sweep.py \
+  --dataset msmarco-10m \
+  --rows-grid 100000,1000000 \
+  --top-k-grid 10,50 \
   --queries 100 \
   --warmup 1 \
-  --repetitions 2 \
-  --lancedb-mode tuned \
-  --lancedb-tuned-family ivf_flat \
-  --skip-numpy-sq8
+  --repetitions 3 \
+  --sample-mode auto \
+  --filter-sources auto \
+  --lancedb-index-type IVF_PQ \
+  --output-json scripts/benchmarks/results/routing_sweep_msmarco_10m/vector_summary.json \
+  --intermediate-dir scripts/benchmarks/results/routing_sweep_msmarco_10m/vector_intermediate \
+  --output json
 ```
 
-Representative tuned sweep:
+For `stackoverflow-xlarge`, use the same command shape with `--dataset stackoverflow-xlarge`
+plus the appropriate `--sample-mode`, `--filter-sources`, and output paths.
 
-Key result artifacts:
+Current real-data indexed baseline:
 
-| Artifact                                                                                                                                                                                     | Grid                                    | High-level finding                                                                                                                                                                       |
-| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`results/vector_search_sweep_tuned_threads4_queries100_rows2k-100k_dims256-1024_topk10.json`](./results/vector_search_sweep_tuned_threads4_queries100_rows2k-100k_dims256-1024_topk10.json) | `2k` to `100k`, dims `256,384,768,1024` | Early tuned reference sweep. NumPy exact won `15 / 16`; LanceDB won only `100k x 256`, with break-even about `61,551` queries.                                                           |
-| [`results/ivfpq_100k_384.json`](./results/ivfpq_100k_384.json)                                                                                                                               | `100k x 384`                            | `IVF_PQ` gate failed badly for high recall. Best tested recall was only `0.482`.                                                                                                         |
-| [`results/ivfhnswsq_crossover_100k_1m_dims256_384.json`](./results/ivfhnswsq_crossover_100k_1m_dims256_384.json)                                                                             | `100k` to `1M`, dims `256,384`          | `IVF_HNSW_SQ` met the `0.95` recall bar in only `2 / 8` scenarios and had zero acceptable latency wins.                                                                                  |
-| [`results/ivfflat_crossover_100k_1m_dims256_384.json`](./results/ivfflat_crossover_100k_1m_dims256_384.json)                                                                                 | `100k` to `1M`, dims `256,384`          | `IVF_FLAT` met the `0.95` recall bar in `8 / 8` scenarios and produced the first real high-recall crossover.                                                                             |
-| [`results/ivfflat_boundary_150k_400k_dims256_384.json`](./results/ivfflat_boundary_150k_400k_dims256_384.json)                                                                               | `150k` to `400k`, dims `256,384`        | Refined the `IVF_FLAT` boundary: crossover starts around `300k` for `384` dims and around `400k` for `256` dims.                                                                         |
-| [`results/ivfflat_crossover_100k_1m_dims768_1024.json`](./results/ivfflat_crossover_100k_1m_dims768_1024.json)                                                                               | `100k` to `1M`, dims `768,1024`         | Higher-dimension validation. `IVF_FLAT` again met the recall bar in `8 / 8` scenarios and won in `5 / 8`, with crossover around `250k` for `768` dims and around `500k` for `1024` dims. |
+- This sweep is no longer trying to discover the routing threshold. The routing policy
+  is fixed at `100k`: hot stays in NumPy exact, cold goes to LanceDB `IVF_PQ`.
+- The current questions are narrower:
+  - what do hot-tier exact latency and memory look like at the `100k` cut;
+  - what do cold-tier `IVF_PQ` build/query costs look like above that cut; and
+  - how much operational pressure does LanceDB ingest add as cold history grows.
+- The current cold-only benchmark path uses direct shard-memmap ingest into LanceDB;
+  that change removed the earlier SQLite -> DuckDB -> Arrow blow-up seen in the `1M`
+  `msmarco-10m` profile.
+- The sweep now reports pass/fail against these recall targets:
 
-Column legend:
+| top_k | 100K | 1M | 10M | 25M | 100M |
+| ----- | ---- | -- | --- | --- | ---- |
+| 10 | 0.95 | 0.93 | 0.90 | 0.89 | 0.88 |
+| 50 | 0.98 | 0.96 | 0.95 | 0.94 | 0.93 |
 
-- `SQLite->NumPy ms` = source-to-NumPy load cost.
-- `LanceDB table ms` = source-to-LanceDB materialization cost.
-- `LanceDB index ms` = extra indexing cost after the LanceDB table exists.
+### Tuned References
 
-`IVF_FLAT` crossover decision table:
+This table keeps the current measured `100K` and `1M` references together and leaves
+explicit placeholders for the next larger `10M` and `25M` runs. At `100K`, NumPy
+exact remains enabled at the cut; at `1M`, recall now comes from packaged dataset
+ground-truth filtered back down to the sampled subset, so effective query counts can
+land below the requested `100` when the subset contains fewer GT-covered queries.
 
-|      Rows | Dims | Tuned LanceDB candidate | Recall | LanceDB indexed ms | NumPy FP32 ms | SQLite->NumPy ms | NumPy build ms | LanceDB table ms | LanceDB index ms | Break-even queries | Verdict                                 |
-| --------: | ---: | ----------------------- | -----: | -----------------: | ------------: | ---------------: | -------------: | ---------------: | ---------------: | -----------------: | --------------------------------------- |
-|   100,000 |  256 | `ivf_flat_probe256`     |  1.000 |               3.67 |          2.52 |           505.76 |          26.29 |          1396.26 |          7634.81 |                  — | NumPy exact                             |
-|   100,000 |  384 | `ivf_flat_probe256`     |  1.000 |               4.70 |          3.56 |           570.25 |          34.85 |          2075.78 |         12065.13 |                  — | NumPy exact                             |
-|   250,000 |  256 | `ivf_flat_probe256`     |  1.000 |               6.98 |          7.03 |          1250.24 |          63.39 |          3548.75 |          8256.99 |            107,144 | LanceDB only for very high reuse        |
-|   250,000 |  384 | `ivf_flat_probe256`     |  1.000 |              10.27 |         10.04 |          1516.16 |          84.96 |          5163.05 |         12589.26 |                  — | NumPy exact                             |
-|   500,000 |  256 | `ivf_flat_probe256`     |  1.000 |              13.18 |         15.27 |          2948.89 |         126.18 |          7209.81 |          9101.06 |              3,055 | LanceDB indexed if vector set is reused |
-|   500,000 |  384 | `ivf_flat_probe256`     |  1.000 |              19.07 |         23.07 |          3424.51 |         175.05 |         10266.06 |         13700.80 |              2,656 | LanceDB indexed if vector set is reused |
-| 1,000,000 |  256 | `ivf_flat_probe256`     |  1.000 |              26.23 |         36.27 |          6379.64 |         292.40 |         14989.44 |         10818.55 |              1,096 | Strong LanceDB indexed case             |
-| 1,000,000 |  384 | `ivf_flat_probe512`     |  1.000 |              37.77 |         41.22 |          7520.92 |         361.06 |         20651.90 |         15224.71 |              6,378 | LanceDB indexed if vector set is reused |
+| Scale | Dataset | IVF_PQ settings | LanceDB k=10 recall / ms | LanceDB k=50 recall / ms | NumPy k=10 ms | NumPy k=50 ms | SQLite seed | SQLite->NumPy load | NumPy build | Peak RSS | Lance export | Lance index build | Status | Notes |
+| ----- | ------- | --------------- | ------------------------: | ------------------------: | ------------: | ------------: | ----------: | -----------------: | ----------: | -------: | -----------: | ----------------: | ------ | ----- |
+| `100K` | `msmarco-10m` | `partitions=128`, `sub_vectors=128`, `nprobes=32`, `refine_factor=4` | `0.9970` / `2.27` | `0.9844` / `3.07` | `10.23` | `10.11` | `1206.73 ms` | `1164.94 ms` | `1647.96 ms` | `2.94 GiB` | `932.52 ms` | `62.79 s` | measured | `batch_count=1`; JSON/time RSS matched closely; files: `real_ivf_pq_refresh_100k/msmarco-10m_rows100000_topk10_50_memory_refresh.*` |
+| `100K` | `stackoverflow-xlarge` | `partitions=64`, `sub_vectors=128`, `nprobes=32`, `refine_factor=4` | `0.9940` / `2.02` | `0.9864` / `2.91` | `3.18` | `3.24` | `1023.53 ms` | `710.22 ms` | `418.97 ms` | `1.18 GiB` | `491.01 ms` | `52.28 s` | measured | `batch_count=1`; JSON/time RSS matched closely; files: `real_ivf_pq_refresh_100k/stackoverflow-xlarge_rows100000_topk10_50_memory_refresh.*` |
+| `1M` | `msmarco-10m` | `partitions=128`, `sub_vectors=128`, `nprobes=32`, `refine_factor=4` | `0.9978` / `3.31` | `0.9974` / `4.36` | `n/a` | `n/a` | `n/a` | `n/a` | `n/a` | `3.27 GiB` | `3076.65 ms` | `74.24 s` | measured | `ground_truth=packaged_gt_subset_filtered`; `queries=94/100 requested`; `batch_count=10`; files: `real_ivf_pq_refresh_1m/msmarco-10m_rows1000000_topk10_50_refresh.*` |
+| `1M` | `stackoverflow-xlarge` | `partitions=64`, `sub_vectors=128`, `nprobes=32`, `refine_factor=4` | `1.0000` / `5.47` | `1.0000` / `10.19` | `n/a` | `n/a` | `n/a` | `n/a` | `n/a` | `1.20 GiB` | `1869.69 ms` | `63.03 s` | measured | `ground_truth=packaged_gt_subset_filtered`; `queries=38/100 requested`; `batch_count=252`; files: `real_ivf_pq_refresh_1m/stackoverflow-xlarge_rows1000000_topk10_50_refresh.*` |
+| `10M` | `msmarco-10m` | `partitions=128`, `sub_vectors=128`, `nprobes=32`, `refine_factor=4` | `0.9800` / `13.12` | `0.9904` / `14.98` | `n/a` | `n/a` | `n/a` | `n/a` | `n/a` | `4.95 GiB` | `53.60 s` | `217.89 s` | measured | `ground_truth=packaged_gt_subset_filtered`; `queries=100/100 requested`; `batch_count=100`; files: `real_ivf_pq_refresh_10m/msmarco-10m_rows10000000_topk10_50_refresh.*` |
+| `10M` | `stackoverflow-xlarge` | `partitions=64`, `sub_vectors=128`, `nprobes=32`, `refine_factor=4` | `1.0000` / `25.42` | `0.9985` / `30.25` | `n/a` | `n/a` | `n/a` | `n/a` | `n/a` | `4.16 GiB` | `22.35 s` | `181.33 s` | measured | `ground_truth=packaged_gt_subset_filtered`; `queries=100/100 requested`; `batch_count=201`; files: `real_ivf_pq_refresh_10m/stackoverflow-xlarge_rows10000000_topk10_50_refresh.*` |
+| `25M` | `stackoverflow-xlarge` | `partitions=64`, `sub_vectors=128`, `nprobes=32`, `refine_factor=4` | `0.9940` / `58.36` | `0.9959` / `63.27` | `n/a` | `n/a` | `n/a` | `n/a` | `n/a` | `6.39 GiB` | `40.73 s` | `386.58 s` | measured | `ground_truth=packaged_gt_subset_filtered`; `queries=100/100 requested`; `batch_count=252`; files: `real_ivf_pq_refresh_25m/stackoverflow-xlarge_rows25000000_topk10_50_refresh.*` |
 
-Current LanceDB family takeaway:
-
-Family verdict:
-
-| Family        | Evidence                                                                                                                                                                                         | Verdict                                    |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------ |
-| `IVF_PQ`      | Best tested recall in [`results/ivfpq_100k_384.json`](./results/ivfpq_100k_384.json) was `0.482`.                                                                                                | Out for current `>= 0.95` recall target.   |
-| `IVF_HNSW_SQ` | Met recall bar in only `2 / 8` scenarios in [`results/ivfhnswsq_crossover_100k_1m_dims256_384.json`](./results/ivfhnswsq_crossover_100k_1m_dims256_384.json), with zero acceptable latency wins. | Out as default high-recall indexed family. |
-| `IVF_FLAT`    | Met recall bar in `8 / 8` scenarios in the crossover and boundary sweeps and produced the only real high-recall crossover.                                                                       | In. First serious indexed candidate.       |
-
-Current routing threshold:
-
-| Dims | Use NumPy exact through | Start considering tuned `IVF_FLAT` at | Notes                                                                                 |
-| ---: | ----------------------: | ------------------------------------: | ------------------------------------------------------------------------------------- |
-|  256 |       about `300k` rows |                     about `400k` rows | `300k` still loses to NumPy exact; `400k` wins with break-even about `6,481` queries. |
-|  384 |       about `200k` rows |                     about `300k` rows | `300k` wins with break-even about `3,642` queries.                                    |
-|  768 |       about `100k` rows |                     about `250k` rows | `250k` wins with break-even about `9,421` queries.                                    |
-| 1024 |       about `250k` rows |                     about `500k` rows | `250k` still loses; `500k` wins with break-even about `16,185` queries.               |
-
-Current takeaway:
-
-- Prefer NumPy exact as the baseline below the crossover region.
-- Use tuned `IVF_FLAT` for larger reused vector sets.
-- Treat NumPy SQ8 as a memory tradeoff, not a speed path.
-
-SQ8 tradeoffs:
-
-- Good: cuts the stored vector matrix from 4 bytes/value (`float32`) to about 1
-  byte/value plus small per-dimension scale metadata.
-- Bad: does not currently improve end-to-end latency here. FP32 exact uses an efficient
-  dense matrix-vector multiply, while the current SQ8 path pays extra dequantization-like
-  overhead without a specialized low-bit kernel.
-- Bad: recall is lower than FP32 exact by design, so it adds approximation error without
-  delivering a speed win on the tested grid.
-- Practical takeaway: SQ8 is only interesting when memory pressure matters more than raw
-  latency or exactness. If memory is not the bottleneck, prefer NumPy FP32 exact.
-
-## [`vector_search_tune_lancedb.py`](./vector_search_tune_lancedb.py)
+## [`vector_runtime_attribution.py`](./vector_runtime_attribution.py)
 
 Purpose:
 
-- Search a curated set of LanceDB index/search configurations.
-- Find the lowest-latency configuration that still meets a recall target such as `0.95`.
-- Cover a few progressively more aggressive families, including `IVF_PQ`, `IVF_FLAT`,
-  and `IVF_HNSW_SQ`, so the search is useful for both default-like and high-recall
-  scenarios.
+- Measure the live HumemDB vector runtime rather than the real-data build pipeline.
+- Break out hot exact search, cold LanceDB search, merge/rerank, candidate-resolution,
+  build, and refresh-scheduling time through the real runtime seams.
+- Compare direct, SQL, and Cypher surfaces over the same indexed runtime shape.
+- Capture both process RSS deltas and Python-only heap peaks so orchestration overhead
+  can be separated from backend-heavy work more clearly.
 
-Example command:
+Representative command:
 
 ```bash
-HUMEMDB_THREADS=8 python scripts/benchmarks/vector_search_tune_lancedb.py \
-  --rows 10000 \
-  --dimensions 384 \
-  --queries 16 \
-  --top-k 10 \
-  --target-recall 0.95
+HUMEMDB_THREADS=8 python scripts/benchmarks/vector_runtime_attribution.py \
+  --hot-max-rows 256 \
+  --direct-tiered-rows 65000 \
+  --sql-filler-count 50000 \
+  --graph-filler-count 50000 \
+  --warmup 1 \
+  --repetitions 3
 ```
 
-Initial observations from one representative sweep:
+What it measures:
 
-- Sweep used `HUMEMDB_THREADS=4`, row counts `2000,10000,50000`, dimensions `64,384`,
-  `top_k=10`, `queries=16`, and LanceDB defaults.
-- SQLite canonical insert cost ranged from about `94 ms` to `705 ms`.
-- SQLite-to-NumPy load cost ranged from about `5 ms` to `307 ms`.
-- LanceDB table creation ranged from about `14 ms` to `1139 ms`.
-- LanceDB index build ranged from about `44 ms` to `5495 ms`.
-- NumPy exact global query latency stayed between about `0.03 ms` and `6.53 ms` in these
-  scenarios.
-- LanceDB indexed global latency stayed between about `0.88 ms` and `1.22 ms`, but
-  recall@k only ranged from about `0.15` to `0.32`, so it did not meet a `0.95` recall
-  acceptance bar in any tested scenario.
-- NumPy scalar-int8 recall stayed around `0.98` to `0.99`, which makes it a plausible
-  in-memory compromise when exact float32 memory cost becomes painful.
+- direct exact-only search below the hot-tier cut
+- direct cold-index build from an exact-only tiered state
+- direct search with a ready hot+cold runtime
+- direct search with pending spill rows that still have to stay searchable before the
+  next cold refresh
+- SQL table-owned vector search over the ready tiered runtime
+- Cypher graph-owned vector search over the ready tiered runtime
 
-Follow-up tuning observations:
+Important note:
 
-- Default LanceDB indexed settings are still not acceptable when the recall bar is `>=
-0.95`.
-- Early small-scale tuning runs showed that `IVF_HNSW_SQ` could meet the bar in some
-  representative cases such as `10000 x 384` and `50000 x 384`, which made it a
-  plausible family to investigate further.
-- The later crossover sweeps changed that conclusion: on the broader
-  [`results/ivfhnswsq_crossover_100k_1m_dims256_384.json`](./results/ivfhnswsq_crossover_100k_1m_dims256_384.json)
-  grid, tuned `IVF_HNSW_SQ` met the `0.95` recall target in only 2 of 8 scenarios and
-  produced zero latency wins with acceptable recall.
-- By contrast, the broader
-  [`results/ivfflat_crossover_100k_1m_dims256_384.json`](./results/ivfflat_crossover_100k_1m_dims256_384.json)
-  sweep showed that tuned `IVF_FLAT` met the recall bar in all 8 scenarios and became
-  the only tested indexed family that delivered a real high-recall crossover on this
-  workload.
+- This benchmark is intentionally synthetic and runtime-focused. Keep using
+  [`vector_search_real.py`](./vector_search_real.py) and
+  [`vector_search_real_sweep.py`](./vector_search_real_sweep.py) for real-dataset
+  recall, build-cost, and routing evidence.
 
-Current rule of thumb:
+Current attribution takeaway:
 
-- Default to NumPy exact for the currently explored range.
-- Treat scalar-int8 as the first in-memory optimization to evaluate before routing to
-  LanceDB indexed.
-- Do not treat default LanceDB indexed search as the public default yet.
-- If the workload needs indexed search and recall must stay near `0.95` or above,
-  benchmark tuned `IVF_FLAT` first. On the currently tested grid, `IVF_PQ` and
-  `IVF_HNSW_SQ` both failed as high-recall defaults, while `IVF_FLAT` was the only
-  family that produced a real crossover against NumPy exact.
+- The fresh tuned `1M` MSMARCO rerun still says the expensive part of offline
+  real-data indexing is the LanceDB build itself, while the expensive part of
+  online vector search is mostly the surrounding Python-side orchestration and
+  candidate-resolution work rather than rerank or raw exact-search math.
+- Treat the percentages below as stage-attribution proxies, not as profiler-precise
+  CPU accounting: "Python / orchestration" means time outside the native heavy step,
+  and "backend / native" means the LanceDB or exact-search call that the benchmark
+  wrapped directly.
+
+Current split snapshot from the latest runs on this development machine:
+
+| Pipeline | Scale / scenario | Measured time | Python / orchestration | Backend / native | Notes |
+| -------- | ---------------- | ------------: | ---------------------: | ---------------: | ----- |
+| Index build | real MSMARCO `1M` tuned IVF_PQ (`vector_search_real.py`) | `84.99 s` | `5.0%` | `95.0%` | Split computed from `cold_tier_export = 4258.79 ms` plus `lancedb_table_create = 3.16 ms` versus `lancedb_index_build = 80724.02 ms`; the fresh tuned rerun still shows build cost overwhelmingly dominated by LanceDB index construction. |
+| Vector search | direct tiered ready at `65k` (`vector_runtime_attribution.py`) | `105.74 ms` | `94.6%` | `5.4%` | `orchestration_ms = 100.08 ms`; backend search was `lancedb_search_ms + numpy_exact_search_ms = 5.66 ms`. |
+| Vector search | direct tiered pending spill at `65k` (`vector_runtime_attribution.py`) | `110.19 ms` | `97.2%` | `2.8%` | Pending spill rows now make the exact fallback visible, but the fresh run still shows orchestration dominating end-to-end time. |
+| Vector search | SQL tiered ready at `50k` fillers (`vector_runtime_attribution.py`) | `376.79 ms` | `60.4%` | `39.6%` | Candidate resolution remained the heaviest Python-side slice at `96.07 ms`, while backend search (`lancedb_search_ms + numpy_exact_search_ms`) totaled `149.12 ms`. |
+| Vector search | Cypher tiered ready at `50k` fillers (`vector_runtime_attribution.py`) | `436.77 ms` | `64.4%` | `35.6%` | Cypher candidate resolution remained heavier than SQL at `156.27 ms`, so orchestration still takes the larger share of total latency. |
+
+Practical interpretation:
+
+- To reduce offline cold-index refresh cost, optimize or amortize LanceDB index build;
+  the fresh tuned `1M` rerun still spends about `95%` of build time there.
+- To reduce online direct-vector latency, optimize the tier split and surrounding
+  runtime bookkeeping first.
+- To reduce online SQL/Cypher vector latency, optimize candidate-set generation and
+  candidate-resolution overhead before focusing on rerank, because merge/rerank is
+  already effectively free in the current measurements.

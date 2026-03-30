@@ -107,10 +107,8 @@ nav:
         - CSV Ingest: guide/benchmarks/csv-ingest.md
         - Relational Direct Read: guide/benchmarks/relational-direct-read.md
         - Cypher Graph Path: guide/benchmarks/cypher-graph-path.md
-        - Vector Search: guide/benchmarks/vector-search.md
-        - Vector Query Steps: guide/benchmarks/vector-query-steps.md
-        - Vector Search Sweep: guide/benchmarks/vector-search-sweep.md
-        - Vector Search Tune LanceDB: guide/benchmarks/vector-search-tune-lancedb.md
+        - Real Vector Search: guide/benchmarks/vector-search.md
+        - Real Vector Sweep: guide/benchmarks/vector-search-sweep.md
   - Development:
       - Documentation: development/documentation.md
       - Licensing: development/licensing.md

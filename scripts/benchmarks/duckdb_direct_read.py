@@ -8,21 +8,10 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, TYPE_CHECKING
+from typing import Final
 
-from humemdb import HumemDB as _HumemDB
+from humemdb import HumemDB
 from humemdb.sql import translate_sql, translate_sql_plan
-
-if TYPE_CHECKING:
-    from humemdb.db import HumemDB
-
-
-def _sqlite_engine(db: HumemDB):
-    return getattr(db, "_sqlite")
-
-
-def _duckdb_engine(db: HumemDB):
-    return getattr(db, "_duckdb")
 
 
 @dataclass(frozen=True, slots=True)
@@ -595,8 +584,9 @@ def _create_indexes(db: HumemDB) -> None:
         "CREATE INDEX idx_memory_chunks_hot_topic ON memory_chunks (is_hot, topic)",
         "CREATE INDEX idx_users_region_active ON users (region, is_active)",
     ]
+    sqlite = db._sqlite
     for statement in index_statements:
-        _sqlite_engine(db).execute(statement)
+        sqlite.execute(statement)
 
 
 def _summarize(timings: list[float]) -> TimingSummary:
@@ -618,18 +608,18 @@ def _time_query(
     for _ in range(warmup):
         translated = translate_sql(query, target=route)
         if route == "sqlite":
-            _sqlite_engine(db).execute(translated, query_type="sql")
+            db._sqlite.execute(translated, query_type="sql")
         else:
-            _duckdb_engine(db).execute(translated, query_type="sql")
+            db._duckdb.execute(translated, query_type="sql")
 
     timings: list[float] = []
     for _ in range(repetitions):
         started = time.perf_counter()
         translated = translate_sql(query, target=route)
         if route == "sqlite":
-            _sqlite_engine(db).execute(translated, query_type="sql")
+            db._sqlite.execute(translated, query_type="sql")
         else:
-            _duckdb_engine(db).execute(translated, query_type="sql")
+            db._duckdb.execute(translated, query_type="sql")
         timings.append(time.perf_counter() - started)
 
     return _summarize(timings)
@@ -690,10 +680,9 @@ def main() -> None:
     }
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        sqlite_path = Path(tmpdir) / "bench.sqlite3"
-        duckdb_path = Path(tmpdir) / "bench.duckdb"
+        base_path = Path(tmpdir) / "bench"
 
-        with _HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+        with HumemDB(base_path) as db:
             dataset = _seed_rows(
                 db,
                 args.rows,

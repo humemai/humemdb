@@ -64,7 +64,7 @@ def parse_cypher_text(text: str) -> CypherParseResult:
     """Parse one Cypher statement through the generated ANTLR frontend.
 
     The current result is intentionally raw: a parse tree plus collected syntax
-    errors. Later Phase 9 work will layer normalization, subset validation, and
+    errors. Later parser work will layer normalization, subset validation, and
     lowering on top of this boundary.
     """
 
@@ -86,4 +86,3 @@ def parse_cypher_text(text: str) -> CypherParseResult:
         token_stream=token_stream,
         syntax_errors=tuple(error_listener.errors),
     )
-

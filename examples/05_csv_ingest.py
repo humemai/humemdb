@@ -146,7 +146,7 @@ def main() -> None:
         )
         report("wrote CSV fixtures")
 
-        with HumemDB.open(root / "ingest") as db:
+        with HumemDB(root / "ingest") as db:
             with db.transaction():
                 db.query(
                     (

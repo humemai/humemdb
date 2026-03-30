@@ -5,20 +5,19 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.support import humemdb_class
+from humemdb import HumemDB
 
 
 class HumemDBImportTest(unittest.TestCase):
     def test_import_table_loads_csv_using_header_columns(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            sqlite_path = root / "humem.sqlite3"
+            base_path = root / "humem"
             csv_path = root / "users.csv"
             csv_path.write_text("id,name,city\n1,Alice,Berlin\n2,Bob,Paris\n")
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     (
                         "CREATE TABLE users ("
@@ -39,15 +38,14 @@ class HumemDBImportTest(unittest.TestCase):
                 )
 
     def test_import_table_supports_headerless_csv_with_explicit_columns(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            sqlite_path = root / "humem.sqlite3"
+            base_path = root / "humem"
             csv_path = root / "users.csv"
             csv_path.write_text("1,Alice,Berlin\n2,Bob,Paris\n")
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     (
                         "CREATE TABLE users ("
@@ -73,17 +71,16 @@ class HumemDBImportTest(unittest.TestCase):
                 )
 
     def test_import_table_supports_explicit_column_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            sqlite_path = root / "humem.sqlite3"
+            base_path = root / "humem"
             csv_path = root / "users.csv"
             csv_path.write_text(
                 "id,name,city,ignored\n1,Alice,Berlin,x\n2,Bob,Paris,y\n"
             )
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     (
                         "CREATE TABLE users ("
@@ -104,15 +101,14 @@ class HumemDBImportTest(unittest.TestCase):
                 self.assertEqual(result.rows, ((1, "Alice"), (2, "Bob")))
 
     def test_import_table_rolls_back_all_rows_when_one_chunk_fails(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            sqlite_path = root / "humem.sqlite3"
+            base_path = root / "humem"
             csv_path = root / "users.csv"
             csv_path.write_text("id,name\n1,Alice\n1,Bob\n")
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
                 )
@@ -128,17 +124,16 @@ class HumemDBImportTest(unittest.TestCase):
                 self.assertEqual(result.rows, ((0,),))
 
     def test_import_nodes_loads_typed_graph_node_properties(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            sqlite_path = root / "humem.sqlite3"
+            base_path = root / "humem"
             csv_path = root / "users.csv"
             csv_path.write_text(
                 "id,name,age,active\n1,Alice,30,true\n2,Bob,41,false\n"
             )
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 imported = db.import_nodes(
                     "User",
                     csv_path,
@@ -159,17 +154,16 @@ class HumemDBImportTest(unittest.TestCase):
                 )
 
     def test_import_edges_loads_relationships_between_imported_nodes(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            sqlite_path = root / "humem.sqlite3"
+            base_path = root / "humem"
             nodes_csv = root / "users.csv"
             edges_csv = root / "knows.csv"
             nodes_csv.write_text("id,name\n1,Alice\n2,Bob\n3,Cory\n")
             edges_csv.write_text("from_id,to_id,since\n1,2,2020\n2,3,2021\n")
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.import_nodes("User", nodes_csv, id_column="id")
                 imported = db.import_edges(
                     "KNOWS",
@@ -189,17 +183,16 @@ class HumemDBImportTest(unittest.TestCase):
                 self.assertEqual(result.rows, ((1, 2020, 2), (2, 2021, 3)))
 
     def test_import_edges_rolls_back_when_endpoints_do_not_exist(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            sqlite_path = root / "humem.sqlite3"
+            base_path = root / "humem"
             nodes_csv = root / "users.csv"
             edges_csv = root / "knows.csv"
             nodes_csv.write_text("id,name\n1,Alice\n2,Bob\n")
             edges_csv.write_text("from_id,to_id\n1,2\n2,99\n")
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.import_nodes("User", nodes_csv, id_column="id")
 
                 with self.assertRaisesRegex(

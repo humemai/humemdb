@@ -1,20 +1,84 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from tests.support import humemdb_class, vector_module
+from humemdb import HumemDB
+from humemdb.vector import (
+    IndexedVectorRuntimeConfig,
+    _LanceDBVectorIndex,
+    encode_vector_blob,
+)
 
 
 class TestVectorAPI(unittest.TestCase):
+    def test_search_vectors_uses_tiered_runtime_above_hot_cut(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_path = Path(tmpdir) / "humem"
+
+            with HumemDB(base_path) as db:
+                db._vector_runtime_config = IndexedVectorRuntimeConfig(
+                    hot_max_rows=2,
+                    merge_buffer_factor=2,
+                )
+                inserted_ids = db.insert_vectors(
+                    [
+                        [0.0, 1.0],
+                        [1.0, 0.0],
+                        *([[0.0, 1.0]] * 256),
+                        [0.97, 0.03],
+                        [0.99, 0.01],
+                    ]
+                )
+                self.assertEqual(
+                    (
+                        inserted_ids[0],
+                        inserted_ids[1],
+                        inserted_ids[-2],
+                        inserted_ids[-1],
+                    ),
+                    (1, 2, 259, 260),
+                )
+
+                result = db.search_vectors([1.0, 0.0], top_k=3)
+
+                self.assertEqual(tuple(row[2] for row in result.rows), (2, 260, 259))
+                self.assertEqual(set(db._cold_vector_index_cache), {"cosine"})
+
+    def test_search_vectors_keeps_small_cold_spill_exact_until_relative_trigger(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_path = Path(tmpdir) / "humem"
+
+            with HumemDB(base_path) as db:
+                db._vector_runtime_config = IndexedVectorRuntimeConfig(
+                    hot_max_rows=1000,
+                    merge_buffer_factor=2,
+                    cold_index_relative_to_hot_fraction=0.5,
+                )
+                inserted_ids = db.insert_vectors(
+                    [
+                        [1.0, 0.0],
+                        [0.99, 0.01],
+                        *([[0.0, 1.0]] * 1298),
+                    ]
+                )
+                self.assertEqual(inserted_ids[:2], (1, 2))
+
+                result = db.search_vectors([1.0, 0.0], top_k=2)
+                self.assertEqual(tuple(row[2] for row in result.rows), (1, 2))
+                self.assertFalse(db._cold_vector_index_cache)
+
     def test_search_vectors_returns_expected_matches(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 inserted_ids = db.insert_vectors(
                     [
                         [1.0, 0.0],
@@ -29,12 +93,11 @@ class TestVectorAPI(unittest.TestCase):
                 self.assertEqual(tuple(row[2] for row in result.rows), (1, 2))
 
     def test_insert_vectors_invalidates_cached_index(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 inserted_ids = db.insert_vectors(
                     [
                         [0.8, 0.2],
@@ -52,13 +115,345 @@ class TestVectorAPI(unittest.TestCase):
                 second_result = db.search_vectors([1.0, 0.0], top_k=1)
                 self.assertEqual(second_result.rows[0][2], 3)
 
+    def test_insert_vectors_keeps_cached_cold_snapshot_for_pending_spill(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_path = Path(tmpdir) / "humem"
+
+            with HumemDB(base_path) as db:
+                db._vector_runtime_config = IndexedVectorRuntimeConfig(
+                    hot_max_rows=2,
+                    merge_buffer_factor=2,
+                    cold_refresh_min_rows=10,
+                    cold_refresh_relative_to_cold_fraction=0.5,
+                )
+                inserted_ids = db.insert_vectors(
+                    [
+                        [0.0, 1.0],
+                        [1.0, 0.0],
+                        *([[0.0, 1.0]] * 256),
+                        [0.97, 0.03],
+                        [0.99, 0.01],
+                    ]
+                )
+                self.assertEqual(
+                    (
+                        inserted_ids[0],
+                        inserted_ids[1],
+                        inserted_ids[-2],
+                        inserted_ids[-1],
+                    ),
+                    (1, 2, 259, 260),
+                )
+
+                first_result = db.search_vectors([1.0, 0.0], top_k=1)
+                self.assertEqual(first_result.rows[0][2], 2)
+                self.assertEqual(set(db._cold_vector_index_cache), {"cosine"})
+                first_cold_rows = db._cold_vector_index_cache["cosine"].item_ids.size
+
+                inserted_ids = db.insert_vectors(
+                    [
+                        [0.0, 1.0],
+                        [0.0, 1.0],
+                    ]
+                )
+                self.assertEqual(inserted_ids, (261, 262))
+                self.assertEqual(
+                    db._cold_vector_index_cache["cosine"].item_ids.size,
+                    first_cold_rows,
+                )
+
+                second_result = db.search_vectors([1.0, 0.0], top_k=3)
+                self.assertEqual(
+                    tuple(row[2] for row in second_result.rows),
+                    (2, 260, 259),
+                )
+                self.assertEqual(
+                    db._cold_vector_index_cache["cosine"].item_ids.size,
+                    first_cold_rows,
+                )
+
+    def test_insert_vectors_refreshes_cold_snapshot_after_pending_spill_threshold(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_path = Path(tmpdir) / "humem"
+
+            with HumemDB(base_path) as db:
+                db._vector_runtime_config = IndexedVectorRuntimeConfig(
+                    hot_max_rows=2,
+                    merge_buffer_factor=2,
+                    cold_refresh_min_rows=10,
+                    cold_refresh_relative_to_cold_fraction=0.0,
+                )
+                db.insert_vectors(
+                    [
+                        [0.0, 1.0],
+                        [1.0, 0.0],
+                        *([[0.0, 1.0]] * 256),
+                        [0.97, 0.03],
+                        [0.99, 0.01],
+                    ]
+                )
+
+                db.search_vectors([1.0, 0.0], top_k=1)
+                first_cold_rows = db._cold_vector_index_cache["cosine"].item_ids.size
+                self.assertEqual(first_cold_rows, 258)
+
+                db.insert_vectors([[0.0, 1.0]] * 10)
+
+                result = db.search_vectors([1.0, 0.0], top_k=3)
+                self.assertEqual(tuple(row[2] for row in result.rows), (2, 260, 259))
+                self.assertTrue(db._await_vector_runtime_background_refresh())
+                self.assertEqual(
+                    db._cold_vector_index_cache["cosine"].item_ids.size,
+                    268,
+                )
+
+    def test_pause_vector_index_defers_background_refresh_until_resumed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_path = Path(tmpdir) / "humem"
+
+            with HumemDB(base_path) as db:
+                db._vector_runtime_config = IndexedVectorRuntimeConfig(
+                    hot_max_rows=2,
+                    merge_buffer_factor=2,
+                    cold_refresh_min_rows=10,
+                    cold_refresh_relative_to_cold_fraction=0.0,
+                )
+                db.insert_vectors(
+                    [
+                        [0.0, 1.0],
+                        [1.0, 0.0],
+                        *([[0.0, 1.0]] * 256),
+                        [0.97, 0.03],
+                        [0.99, 0.01],
+                    ]
+                )
+
+                built = db.build_vector_index(index_name="direct_similarity_idx")
+                self.assertEqual(built["state"], "ready")
+
+                paused = db.pause_vector_index(index_name="direct_similarity_idx")
+                self.assertTrue(paused["maintenance_paused"])
+
+                db.insert_vectors([[0.0, 1.0]] * 10)
+
+                paused_state = db.inspect_vector_index(
+                    index_name="direct_similarity_idx"
+                )
+                self.assertEqual(paused_state["state"], "ready")
+                self.assertTrue(paused_state["maintenance_paused"])
+                self.assertFalse(paused_state["refresh_in_progress"])
+                self.assertGreater(paused_state["pending_cold_rows"], 0)
+                self.assertFalse(db._await_vector_runtime_background_refresh())
+
+                result = db.search_vectors([1.0, 0.0], top_k=3)
+                self.assertEqual(tuple(row[2] for row in result.rows), (2, 260, 259))
+
+                resumed = db.resume_vector_index(index_name="direct_similarity_idx")
+                self.assertFalse(resumed["maintenance_paused"])
+
+                refreshed = db.refresh_vector_index(
+                    index_name="direct_similarity_idx"
+                )
+                self.assertFalse(refreshed["maintenance_paused"])
+                self.assertEqual(refreshed["pending_cold_rows"], 0)
+
+    def test_background_cold_refresh_reports_runtime_state_and_promotes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_path = Path(tmpdir) / "humem"
+            original_from_matrix = _LanceDBVectorIndex.from_matrix
+            allow_second_build = threading.Event()
+            second_build_started = threading.Event()
+            build_count = 0
+
+            def delayed_from_matrix(*args: object, **kwargs: object) -> object:
+                nonlocal build_count
+                build_count += 1
+                if build_count == 2:
+                    second_build_started.set()
+                    if not allow_second_build.wait(timeout=5):
+                        raise TimeoutError("Timed out waiting for background refresh")
+                return original_from_matrix(*args, **kwargs)
+
+            with mock.patch(
+                "humemdb.db._LanceDBVectorIndex.from_matrix",
+                side_effect=delayed_from_matrix,
+            ):
+                with HumemDB(base_path) as db:
+                    db._vector_runtime_config = IndexedVectorRuntimeConfig(
+                        hot_max_rows=2,
+                        merge_buffer_factor=2,
+                        cold_refresh_min_rows=1,
+                        cold_refresh_relative_to_cold_fraction=0.0,
+                    )
+                    db.insert_vectors(
+                        [
+                            [0.0, 1.0],
+                            [1.0, 0.0],
+                            *([[0.0, 1.0]] * 256),
+                            [0.97, 0.03],
+                            [0.99, 0.01],
+                        ]
+                    )
+
+                    db.search_vectors([1.0, 0.0], top_k=1)
+                    first_state = db._inspect_vector_runtime()
+                    self.assertEqual(first_state["cold_snapshot_rows"], 258)
+
+                    db.insert_vectors([[0.0, 1.0]])
+                    result = db.search_vectors([1.0, 0.0], top_k=3)
+                    self.assertEqual(
+                        tuple(row[2] for row in result.rows),
+                        (2, 260, 259),
+                    )
+                    self.assertTrue(second_build_started.wait(timeout=5))
+
+                    in_progress = db._inspect_vector_runtime()
+                    self.assertTrue(in_progress["refresh_in_progress"])
+                    self.assertEqual(in_progress["pending_cold_rows"], 1)
+                    self.assertEqual(in_progress["cold_snapshot_rows"], 258)
+
+                    allow_second_build.set()
+                    self.assertTrue(db._await_vector_runtime_background_refresh())
+                    final_state = db._inspect_vector_runtime()
+                    self.assertFalse(final_state["refresh_in_progress"])
+                    self.assertEqual(final_state["pending_cold_rows"], 0)
+                    self.assertEqual(final_state["cold_snapshot_rows"], 259)
+
+    def test_delete_vectors_keeps_cold_snapshot_until_refresh(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_path = Path(tmpdir) / "humem"
+
+            with HumemDB(base_path) as db:
+                db._vector_runtime_config = IndexedVectorRuntimeConfig(
+                    hot_max_rows=2,
+                    merge_buffer_factor=2,
+                    cold_refresh_min_rows=1,
+                    cold_refresh_relative_to_cold_fraction=0.0,
+                )
+                db.insert_vectors(
+                    [
+                        [0.0, 1.0],
+                        [1.0, 0.0],
+                        *([[0.0, 1.0]] * 256),
+                        [0.97, 0.03],
+                        [0.99, 0.01],
+                    ]
+                )
+
+                db.search_vectors([1.0, 0.0], top_k=1)
+                self.assertEqual(
+                    db._inspect_vector_runtime()["cold_snapshot_rows"],
+                    258,
+                )
+
+                self.assertEqual(db.delete_vectors([2]), 1)
+
+                result = db.search_vectors([1.0, 0.0], top_k=2)
+                self.assertEqual(tuple(row[2] for row in result.rows), (260, 259))
+                in_progress = db._inspect_vector_runtime()
+                self.assertEqual(in_progress["cold_snapshot_rows"], 258)
+                self.assertEqual(in_progress["tombstone_rows"], 1)
+
+                self.assertTrue(db._await_vector_runtime_background_refresh())
+                final_state = db._inspect_vector_runtime()
+                self.assertEqual(final_state["cold_snapshot_rows"], 257)
+                self.assertEqual(final_state["tombstone_rows"], 0)
+
+    def test_reopen_uses_persisted_cold_snapshot_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_path = Path(tmpdir) / "humem"
+
+            with HumemDB(base_path) as db:
+                db._vector_runtime_config = IndexedVectorRuntimeConfig(
+                    hot_max_rows=2,
+                    merge_buffer_factor=2,
+                )
+                db.insert_vectors(
+                    [
+                        [0.0, 1.0],
+                        [1.0, 0.0],
+                        *([[0.0, 1.0]] * 256),
+                        [0.97, 0.03],
+                        [0.99, 0.01],
+                    ]
+                )
+                db.search_vectors([1.0, 0.0], top_k=1)
+                first_state = db._inspect_vector_runtime()
+                self.assertEqual(first_state["cold_snapshot_rows"], 258)
+                generation = first_state["cold_snapshot_generation"]
+
+            with mock.patch(
+                "humemdb.db._LanceDBVectorIndex.from_matrix",
+                side_effect=AssertionError("cold snapshot should reopen, not rebuild"),
+            ):
+                with HumemDB(base_path) as db:
+                    db._vector_runtime_config = IndexedVectorRuntimeConfig(
+                        hot_max_rows=2,
+                        merge_buffer_factor=2,
+                    )
+                    result = db.search_vectors([1.0, 0.0], top_k=3)
+                    self.assertEqual(
+                        tuple(row[2] for row in result.rows),
+                        (2, 260, 259),
+                    )
+                    second_state = db._inspect_vector_runtime()
+                    self.assertEqual(second_state["cold_snapshot_rows"], 258)
+                    self.assertEqual(
+                        second_state["cold_snapshot_generation"],
+                        generation,
+                    )
+
+    def test_public_vector_index_lifecycle_methods_manage_named_index_state(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_path = Path(tmpdir) / "humem"
+
+            with HumemDB(base_path) as db:
+                db._vector_runtime_config = IndexedVectorRuntimeConfig(
+                    hot_max_rows=2,
+                    merge_buffer_factor=2,
+                )
+                db.insert_vectors(
+                    [
+                        [0.0, 1.0],
+                        [1.0, 0.0],
+                        *([[0.0, 1.0]] * 256),
+                        [0.97, 0.03],
+                        [0.99, 0.01],
+                    ]
+                )
+
+                built = db.build_vector_index(index_name="docs_embedding_idx")
+                self.assertEqual(built["name"], "docs_embedding_idx")
+                self.assertTrue(built["enabled"])
+                self.assertEqual(built["state"], "ready")
+                self.assertEqual(built["cold_snapshot_rows"], 258)
+
+                dropped = db.drop_vector_index(index_name="docs_embedding_idx")
+                self.assertFalse(dropped["enabled"])
+                self.assertEqual(dropped["state"], "disabled")
+                self.assertEqual(dropped["cold_snapshot_rows"], 0)
+
+                result = db.search_vectors([1.0, 0.0], top_k=3)
+                self.assertEqual(tuple(row[2] for row in result.rows), (2, 260, 259))
+                after_search = db.inspect_vector_index(index_name="docs_embedding_idx")
+                self.assertFalse(after_search["enabled"])
+                self.assertEqual(after_search["cold_snapshot_rows"], 0)
+
+                refreshed = db.refresh_vector_index(index_name="docs_embedding_idx")
+                self.assertTrue(refreshed["enabled"])
+                self.assertEqual(refreshed["state"], "ready")
+                self.assertEqual(refreshed["cold_snapshot_rows"], 258)
+
     def test_insert_vectors_can_use_explicit_direct_ids(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 inserted_ids = db.insert_vectors(
                     [
                         (11, [1.0, 0.0]),
@@ -75,12 +470,11 @@ class TestVectorAPI(unittest.TestCase):
                 )
 
     def test_search_vectors_supports_direct_metadata_filters(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 inserted_ids = db.insert_vectors(
                     [
                         [1.0, 0.0],
@@ -106,12 +500,11 @@ class TestVectorAPI(unittest.TestCase):
                 self.assertEqual(result.rows, (("direct", "", 1, 1.0),))
 
     def test_insert_vectors_accepts_record_rows_with_inline_metadata(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 inserted_ids = db.insert_vectors(
                     [
                         {
@@ -140,12 +533,11 @@ class TestVectorAPI(unittest.TestCase):
                 self.assertEqual(result.rows, (("direct", "", 1, 1.0),))
 
     def test_vector_targets_can_reuse_same_numeric_id_in_one_database(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 inserted_ids = db.insert_vectors([[1.0, 0.0]])
                 self.assertEqual(inserted_ids, (1,))
 
@@ -195,28 +587,23 @@ class TestVectorAPI(unittest.TestCase):
 
                 cypher_candidate_filtered = db.query(
                     (
-                        "MATCH (u:User {cohort: 'alpha'}) "
-                        "SEARCH u IN (VECTOR INDEX embedding FOR $query LIMIT 1) "
-                        "RETURN u.id ORDER BY u.id"
+                        "CALL db.index.vector.queryNodes("
+                        "'user_embedding_idx', 1, $query) "
+                        "YIELD node, score MATCH (node:User {cohort: 'alpha'}) "
+                        "RETURN node.id, score ORDER BY node.id"
                     ),
                     params={
                         "query": [0.8, 0.2],
                     },
                 )
                 self.assertEqual(cypher_candidate_filtered.query_type, "cypher")
-                self.assertEqual(
-                    cypher_candidate_filtered.rows[0][:3],
-                    ("graph_node", "", 1),
-                )
+                self.assertEqual(cypher_candidate_filtered.rows[0][0], 1)
 
     def test_raw_sql_vector_write_invalidates_cached_index(self) -> None:
-        HumemDB = humemdb_class()
-        vector = vector_module()
-
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 inserted_ids = db.insert_vectors(
                     [
                         [0.8, 0.2],
@@ -241,7 +628,7 @@ class TestVectorAPI(unittest.TestCase):
                         "namespace": "",
                         "target_id": 3,
                         "dimensions": 2,
-                        "embedding": vector.encode_vector_blob([1.0, 0.0]),
+                        "embedding": encode_vector_blob([1.0, 0.0]),
                     },
                 )
 
@@ -249,12 +636,11 @@ class TestVectorAPI(unittest.TestCase):
                 self.assertEqual(second_result.rows[0][2], 3)
 
     def test_preload_vectors_warms_existing_vector_set(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 inserted_ids = db.insert_vectors(
                     [
                         [1.0, 0.0],
@@ -263,7 +649,7 @@ class TestVectorAPI(unittest.TestCase):
                 )
                 self.assertEqual(inserted_ids, (1, 2))
 
-            with HumemDB(str(sqlite_path), preload_vectors=True) as db:
+            with HumemDB(base_path, preload_vectors=True) as db:
                 self.assertTrue(db.vectors_cached())
 
                 result = db.search_vectors([1.0, 0.0], top_k=1)
@@ -271,11 +657,32 @@ class TestVectorAPI(unittest.TestCase):
                 self.assertIsNone(result.query_type)
 
     def test_preload_vectors_ignores_missing_vector_table(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-
-            with HumemDB(str(sqlite_path), preload_vectors=True) as db:
+            base_path = Path(tmpdir) / "humem"
+            with HumemDB(base_path, preload_vectors=True) as db:
                 self.assertFalse(db.vectors_cached())
 
+    def test_search_vectors_falls_back_on_tiny_cold_tier(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_path = Path(tmpdir) / "humem"
+
+            with HumemDB(base_path) as db:
+                db._vector_runtime_config = IndexedVectorRuntimeConfig(
+                    hot_max_rows=2,
+                    merge_buffer_factor=2,
+                )
+                inserted_ids = db.insert_vectors(
+                    [
+                        [0.0, 1.0],
+                        [1.0, 0.0],
+                        [0.97, 0.03],
+                        [0.99, 0.01],
+                    ]
+                )
+                self.assertEqual(inserted_ids, (1, 2, 3, 4))
+
+                result = db.search_vectors([1.0, 0.0], top_k=3)
+
+                self.assertEqual(tuple(row[2] for row in result.rows), (2, 4, 3))
+                self.assertFalse(db._cold_vector_index_cache)

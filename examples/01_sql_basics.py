@@ -106,7 +106,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
 
-        with HumemDB.open(root / "app") as db:
+        with HumemDB(root / "app") as db:
             with db.transaction():
                 db.query(
                     (

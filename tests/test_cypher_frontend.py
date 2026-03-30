@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-import importlib
 import unittest
+
+import humemdb.cypher as humemdb_cypher
+import humemdb.cypher_frontend as humemdb_cypher_frontend
 
 
 class TestCypherFrontend(unittest.TestCase):
     def test_generated_frontend_parses_current_create_shape(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         result = frontend.parse_cypher_text(
             "CREATE (u:User {name: 'Alice', age: 30})"
@@ -21,7 +23,7 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertIsNotNone(result.token_stream)
 
     def test_generated_frontend_parses_current_match_where_shape(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         result = frontend.parse_cypher_text(
             "MATCH (u:User) WHERE u.name = $name RETURN u.name ORDER BY u.name LIMIT 1"
@@ -31,7 +33,7 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(type(result.tree).__name__, "OC_CypherContext")
 
     def test_generated_frontend_reports_syntax_errors(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         result = frontend.parse_cypher_text("MATCH (u RETURN u")
 
@@ -39,7 +41,7 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertGreaterEqual(len(result.syntax_errors), 1)
 
     def test_generated_frontend_normalizes_current_create_shape(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             "CREATE (u:User {name: 'Alice', age: 30})"
@@ -58,7 +60,7 @@ class TestCypherFrontend(unittest.TestCase):
     def test_generated_frontend_normalizes_reverse_relationship_create_shape(
         self,
     ) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             "CREATE (a:User)<-[r:KNOWS {since: 2020}]-(b:User)"
@@ -75,7 +77,7 @@ class TestCypherFrontend(unittest.TestCase):
     def test_generated_frontend_normalizes_separate_pattern_relationship_create(
         self,
     ) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             "CREATE (a:A {name: 'Alice'}), (b:B {name: 'Bob'}), (a)-[:R]->(b)"
@@ -94,7 +96,7 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(normalized.relationship.type_name, "R")
 
     def test_generated_frontend_normalizes_self_loop_create_shape(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             "CREATE (root:Root)-[:LINK]->(root:Root)"
@@ -109,7 +111,7 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(normalized.relationship.direction, "out")
 
     def test_generated_frontend_normalizes_match_create_self_loop_shape(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             "MATCH (root:Root) CREATE (root)-[:LINK]->(root)"
@@ -125,7 +127,7 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(normalized.relationship.type_name, "LINK")
 
     def test_generated_frontend_normalizes_match_create_with_new_endpoint(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             "MATCH (x:Begin) CREATE (x)-[:TYPE]->(:End)"
@@ -144,7 +146,7 @@ class TestCypherFrontend(unittest.TestCase):
     def test_generated_frontend_normalizes_match_create_with_new_start_node(
         self,
     ) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             "MATCH (x:End) CREATE (:Begin {name: 'start'})-[:TYPE]->(x)"
@@ -162,7 +164,7 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(normalized.relationship.type_name, "TYPE")
 
     def test_generated_frontend_normalizes_two_node_match_create_shape(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             "MATCH (x:Begin), (y:End) WHERE y.name = 'finish' CREATE (x)-[:TYPE]->(y)"
@@ -183,7 +185,7 @@ class TestCypherFrontend(unittest.TestCase):
     def test_generated_frontend_normalizes_two_node_reverse_match_create_shape(
         self,
     ) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             "MATCH (x:Begin), (y:End) WHERE x.name = 'start' CREATE (x)<-[:TYPE]-(y)"
@@ -203,7 +205,7 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(normalized.relationship.direction, "in")
 
     def test_generated_frontend_normalizes_current_match_where_shape(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             "MATCH (u:User) WHERE u.name = $name RETURN u.name ORDER BY u.name LIMIT 1"
@@ -224,7 +226,7 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(normalized.limit, 1)
 
     def test_generated_frontend_normalizes_distinct_skip_match_shape(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             "MATCH (u:User) RETURN DISTINCT u.name ORDER BY u.name SKIP 1 LIMIT 2"
@@ -239,7 +241,7 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(normalized.order_by[0].field, "name")
 
     def test_generated_frontend_normalizes_offset_match_shape(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             "MATCH (u:User) RETURN u.name ORDER BY u.name OFFSET 2 LIMIT 3"
@@ -252,7 +254,7 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(normalized.returns[0].column_name, "u.name")
 
     def test_generated_frontend_normalizes_match_where_inequality_shape(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             "MATCH (u:User) WHERE u.age >= 30 RETURN u.name ORDER BY u.age LIMIT 1"
@@ -266,7 +268,7 @@ class TestCypherFrontend(unittest.TestCase):
     def test_generated_frontend_normalizes_match_where_string_predicate_shape(
         self,
     ) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             (
@@ -288,7 +290,7 @@ class TestCypherFrontend(unittest.TestCase):
     def test_generated_frontend_normalizes_match_where_null_predicate_shape(
         self,
     ) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             (
@@ -308,7 +310,7 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertIsNone(normalized.predicates[1].value)
 
     def test_generated_frontend_normalizes_top_level_or_where_shape(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             (
@@ -329,7 +331,7 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(normalized.predicates[1].value, "Alice")
 
     def test_generated_frontend_normalizes_and_within_or_groups(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             (
@@ -349,7 +351,7 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(normalized.predicates[2].disjunct_index, 1)
 
     def test_generated_frontend_normalizes_current_match_set_shape(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             "MATCH (u:User) WHERE u.name = $name SET u.age = 31"
@@ -368,7 +370,7 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(normalized.assignments[0].value, 31)
 
     def test_generated_frontend_normalizes_multi_assignment_match_set(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             "MATCH (u:User) WHERE u.name = $name SET u.age = 31, u.active = true"
@@ -382,7 +384,7 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(normalized.assignments[1].value, True)
 
     def test_generated_frontend_normalizes_relationship_match_set(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             (
@@ -399,7 +401,7 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(normalized.assignments[1].field, "strength")
 
     def test_generated_frontend_normalizes_match_detach_delete_node(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             "MATCH (u:User) WHERE u.name = $name DETACH DELETE u"
@@ -414,7 +416,7 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(normalized.predicates[0].field, "name")
 
     def test_generated_frontend_normalizes_match_delete_relationship(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             (
@@ -433,7 +435,7 @@ class TestCypherFrontend(unittest.TestCase):
     def test_generated_frontend_normalizes_multi_type_relationship_match(
         self,
     ) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             (
@@ -449,7 +451,7 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(normalized.returns[1].column_name, "r.type")
 
     def test_generated_frontend_normalizes_untyped_relationship_match(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             "MATCH (a:User)-[r]->(b:User) RETURN b.name, r.type ORDER BY b.name"
@@ -462,7 +464,7 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(normalized.returns[1].column_name, "r.type")
 
     def test_generated_frontend_normalizes_anonymous_node_create(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text("CREATE (:User {name: 'Alice'})")
 
@@ -473,7 +475,7 @@ class TestCypherFrontend(unittest.TestCase):
     def test_generated_frontend_normalizes_anonymous_relationship_endpoints(
         self,
     ) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             (
@@ -488,7 +490,7 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(normalized.relationship.alias, "r")
 
     def test_generated_frontend_normalizes_reverse_relationship_match_set(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             (
@@ -509,7 +511,7 @@ class TestCypherFrontend(unittest.TestCase):
     def test_generated_frontend_normalizes_multi_type_relationship_match_set(
         self,
     ) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             "MATCH (a:User)-[r:KNOWS|FOLLOWS]->(b:User) SET r.strength = 5"
@@ -524,7 +526,7 @@ class TestCypherFrontend(unittest.TestCase):
     def test_generated_frontend_normalizes_untyped_relationship_match_set(
         self,
     ) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             "MATCH (a:User)-[r]->(b:User) SET r.strength = 5"
@@ -539,7 +541,7 @@ class TestCypherFrontend(unittest.TestCase):
     def test_generated_frontend_normalizes_anonymous_endpoint_match_set(
         self,
     ) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             (
@@ -557,7 +559,7 @@ class TestCypherFrontend(unittest.TestCase):
     def test_generated_frontend_normalizes_mixed_and_or_relationship_match_set(
         self,
     ) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             (
@@ -581,7 +583,7 @@ class TestCypherFrontend(unittest.TestCase):
     def test_generated_frontend_normalizes_mixed_and_or_reverse_relationship_match_set(
         self,
     ) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             (
@@ -602,7 +604,7 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(normalized.assignments[1].field, "strength")
 
     def test_generated_frontend_rejects_node_match_set_alias_mismatch(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         with self.assertRaisesRegex(ValueError, "matched node alias"):
             frontend.normalize_cypher_text(
@@ -612,7 +614,7 @@ class TestCypherFrontend(unittest.TestCase):
     def test_generated_frontend_rejects_relationship_match_set_alias_mismatch(
         self,
     ) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         with self.assertRaisesRegex(ValueError, "matched relationship alias"):
             frontend.normalize_cypher_text(
@@ -620,7 +622,7 @@ class TestCypherFrontend(unittest.TestCase):
             )
 
     def test_generated_frontend_rejects_unknown_where_alias(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         with self.assertRaisesRegex(ValueError, "unknown alias"):
             frontend.normalize_cypher_text(
@@ -630,7 +632,7 @@ class TestCypherFrontend(unittest.TestCase):
     def test_generated_frontend_rejects_non_equality_relationship_type_comparison(
         self,
     ) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         with self.assertRaisesRegex(
             ValueError,
@@ -642,7 +644,7 @@ class TestCypherFrontend(unittest.TestCase):
             )
 
     def test_generated_frontend_validation_rejects_merge_for_now(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         with self.assertRaisesRegex(
             ValueError,
@@ -651,19 +653,19 @@ class TestCypherFrontend(unittest.TestCase):
             frontend.validate_cypher_text("MERGE (u:User {name: 'Alice'})")
 
     def test_generated_frontend_rejects_multi_label_create_boundary(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         with self.assertRaisesRegex(ValueError, "HumemCypher v0"):
             frontend.lower_cypher_text("CREATE (:A:B)")
 
     def test_generated_frontend_rejects_cartesian_match_boundary(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         with self.assertRaisesRegex(ValueError, "HumemCypher v0"):
             frontend.lower_cypher_text("MATCH (n), (m) RETURN n")
 
     def test_generated_frontend_normalizes_parenthesized_where_shape(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         normalized = frontend.normalize_cypher_text(
             (
@@ -685,7 +687,7 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(normalized.predicates[3].field, "active")
 
     def test_generated_frontend_rejects_not_where_boundary(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         with self.assertRaisesRegex(ValueError, "HumemCypher v0"):
             frontend.lower_cypher_text(
@@ -693,7 +695,7 @@ class TestCypherFrontend(unittest.TestCase):
             )
 
     def test_generated_frontend_rejects_long_pattern_boundary(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
+        frontend = humemdb_cypher_frontend
 
         with self.assertRaisesRegex(ValueError, "HumemCypher v0"):
             frontend.lower_cypher_text(
@@ -701,8 +703,8 @@ class TestCypherFrontend(unittest.TestCase):
             )
 
     def test_lowering_matches_handwritten_create_node_plan(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
-        cypher = importlib.import_module("humemdb.cypher")
+        frontend = humemdb_cypher_frontend
+        cypher = humemdb_cypher
 
         query = "CREATE (u:User {name: 'Alice', age: 30})"
 
@@ -712,8 +714,8 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(lowered, handwritten)
 
     def test_lowering_matches_handwritten_create_relationship_plan(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
-        cypher = importlib.import_module("humemdb.cypher")
+        frontend = humemdb_cypher_frontend
+        cypher = humemdb_cypher
 
         query = (
             "CREATE (a:User {name: 'Alice'})"
@@ -729,8 +731,8 @@ class TestCypherFrontend(unittest.TestCase):
     def test_lowering_matches_handwritten_separate_pattern_create_relationship_plan(
         self,
     ) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
-        cypher = importlib.import_module("humemdb.cypher")
+        frontend = humemdb_cypher_frontend
+        cypher = humemdb_cypher
 
         query = (
             "CREATE (a:A {name: 'Alice'}), (b:B {name: 'Bob'}), "
@@ -745,8 +747,8 @@ class TestCypherFrontend(unittest.TestCase):
     def test_lowering_matches_handwritten_match_create_relationship_plan(
         self,
     ) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
-        cypher = importlib.import_module("humemdb.cypher")
+        frontend = humemdb_cypher_frontend
+        cypher = humemdb_cypher
 
         query = "MATCH (x:Begin) CREATE (x)-[:TYPE]->(:End {name: 'finish'})"
 
@@ -758,8 +760,8 @@ class TestCypherFrontend(unittest.TestCase):
     def test_lowering_matches_handwritten_match_create_new_start_node_plan(
         self,
     ) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
-        cypher = importlib.import_module("humemdb.cypher")
+        frontend = humemdb_cypher_frontend
+        cypher = humemdb_cypher
 
         query = "MATCH (x:End) CREATE (:Begin {name: 'start'})-[:TYPE]->(x)"
 
@@ -771,8 +773,8 @@ class TestCypherFrontend(unittest.TestCase):
     def test_lowering_matches_handwritten_two_node_match_create_relationship_plan(
         self,
     ) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
-        cypher = importlib.import_module("humemdb.cypher")
+        frontend = humemdb_cypher_frontend
+        cypher = humemdb_cypher
 
         query = (
             "MATCH (x:Begin), (y:End) "
@@ -787,8 +789,8 @@ class TestCypherFrontend(unittest.TestCase):
     def test_lowering_matches_handwritten_two_node_reverse_match_create_plan(
         self,
     ) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
-        cypher = importlib.import_module("humemdb.cypher")
+        frontend = humemdb_cypher_frontend
+        cypher = humemdb_cypher
 
         query = (
             "MATCH (x:Begin), (y:End) "
@@ -801,8 +803,8 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(lowered, handwritten)
 
     def test_lowering_matches_handwritten_parameterized_create_node_plan(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
-        cypher = importlib.import_module("humemdb.cypher")
+        frontend = humemdb_cypher_frontend
+        cypher = humemdb_cypher
 
         query = "CREATE (u:User {name: $name, active: $active, note: $note})"
 
@@ -812,8 +814,8 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(lowered, handwritten)
 
     def test_lowering_matches_handwritten_match_node_plan(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
-        cypher = importlib.import_module("humemdb.cypher")
+        frontend = humemdb_cypher_frontend
+        cypher = humemdb_cypher
 
         query = (
             "MATCH (u:User) "
@@ -827,8 +829,8 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(lowered, handwritten)
 
     def test_lowering_matches_handwritten_distinct_skip_match_node_plan(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
-        cypher = importlib.import_module("humemdb.cypher")
+        frontend = humemdb_cypher_frontend
+        cypher = humemdb_cypher
 
         query = (
             "MATCH (u:User) "
@@ -841,8 +843,8 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(lowered, handwritten)
 
     def test_lowering_matches_handwritten_offset_match_node_plan(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
-        cypher = importlib.import_module("humemdb.cypher")
+        frontend = humemdb_cypher_frontend
+        cypher = humemdb_cypher
 
         query = "MATCH (u:User) RETURN u.name ORDER BY u.name OFFSET 2 LIMIT 3"
 
@@ -852,8 +854,8 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(lowered, handwritten)
 
     def test_lowering_matches_handwritten_inequality_match_node_plan(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
-        cypher = importlib.import_module("humemdb.cypher")
+        frontend = humemdb_cypher_frontend
+        cypher = humemdb_cypher
 
         query = (
             "MATCH (u:User) "
@@ -869,8 +871,8 @@ class TestCypherFrontend(unittest.TestCase):
     def test_lowering_matches_handwritten_string_predicate_match_node_plan(
         self,
     ) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
-        cypher = importlib.import_module("humemdb.cypher")
+        frontend = humemdb_cypher_frontend
+        cypher = humemdb_cypher
 
         query = (
             "MATCH (u:User) "
@@ -886,8 +888,8 @@ class TestCypherFrontend(unittest.TestCase):
     def test_lowering_matches_handwritten_null_predicate_match_node_plan(
         self,
     ) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
-        cypher = importlib.import_module("humemdb.cypher")
+        frontend = humemdb_cypher_frontend
+        cypher = humemdb_cypher
 
         query = (
             "MATCH (u:User) "
@@ -901,8 +903,8 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(lowered, handwritten)
 
     def test_lowering_matches_handwritten_top_level_or_match_node_plan(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
-        cypher = importlib.import_module("humemdb.cypher")
+        frontend = humemdb_cypher_frontend
+        cypher = humemdb_cypher
 
         query = (
             "MATCH (u:User) "
@@ -916,8 +918,8 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(lowered, handwritten)
 
     def test_lowering_matches_handwritten_parenthesized_match_node_plan(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
-        cypher = importlib.import_module("humemdb.cypher")
+        frontend = humemdb_cypher_frontend
+        cypher = humemdb_cypher
 
         query = (
             "MATCH (u:User) "
@@ -931,8 +933,8 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(lowered, handwritten)
 
     def test_lowering_matches_handwritten_mixed_and_or_match_node_plan(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
-        cypher = importlib.import_module("humemdb.cypher")
+        frontend = humemdb_cypher_frontend
+        cypher = humemdb_cypher
 
         query = (
             "MATCH (u:User) "
@@ -946,8 +948,8 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(lowered, handwritten)
 
     def test_lowering_matches_handwritten_mixed_and_or_relationship_plan(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
-        cypher = importlib.import_module("humemdb.cypher")
+        frontend = humemdb_cypher_frontend
+        cypher = humemdb_cypher
 
         query = (
             "MATCH (a:User)-[r:KNOWS]->(b:User) "
@@ -961,8 +963,8 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(lowered, handwritten)
 
     def test_lowering_matches_handwritten_match_relationship_plan(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
-        cypher = importlib.import_module("humemdb.cypher")
+        frontend = humemdb_cypher_frontend
+        cypher = humemdb_cypher
 
         query = (
             "MATCH (a:User)-[r:KNOWS]->(b:User) "
@@ -976,8 +978,8 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(lowered, handwritten)
 
     def test_lowering_matches_handwritten_reverse_relationship_plan(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
-        cypher = importlib.import_module("humemdb.cypher")
+        frontend = humemdb_cypher_frontend
+        cypher = humemdb_cypher
 
         query = (
             "MATCH (b:User)<-[r:KNOWS]-(a:User) "
@@ -991,8 +993,8 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(lowered, handwritten)
 
     def test_lowering_matches_handwritten_match_set_plan(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
-        cypher = importlib.import_module("humemdb.cypher")
+        frontend = humemdb_cypher_frontend
+        cypher = humemdb_cypher
 
         query = "MATCH (u:User {name: 'Alice'}) SET u.age = 31"
 
@@ -1004,8 +1006,8 @@ class TestCypherFrontend(unittest.TestCase):
     def test_lowering_matches_handwritten_multi_assignment_match_set_plan(
         self,
     ) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
-        cypher = importlib.import_module("humemdb.cypher")
+        frontend = humemdb_cypher_frontend
+        cypher = humemdb_cypher
 
         query = (
             "MATCH (u:User {name: 'Alice'}) "
@@ -1020,8 +1022,8 @@ class TestCypherFrontend(unittest.TestCase):
     def test_lowering_matches_handwritten_parameterized_multi_assignment_set_plan(
         self,
     ) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
-        cypher = importlib.import_module("humemdb.cypher")
+        frontend = humemdb_cypher_frontend
+        cypher = humemdb_cypher
 
         query = (
             "MATCH (u:User {name: $name}) "
@@ -1034,8 +1036,8 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(lowered, handwritten)
 
     def test_lowering_matches_handwritten_relationship_match_set_plan(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
-        cypher = importlib.import_module("humemdb.cypher")
+        frontend = humemdb_cypher_frontend
+        cypher = humemdb_cypher
 
         query = (
             "MATCH (a:User)-[r:KNOWS]->(b:User) "
@@ -1048,8 +1050,8 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(lowered, handwritten)
 
     def test_lowering_matches_handwritten_match_detach_delete_node_plan(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
-        cypher = importlib.import_module("humemdb.cypher")
+        frontend = humemdb_cypher_frontend
+        cypher = humemdb_cypher
 
         query = "MATCH (u:User {name: 'Alice'}) DETACH DELETE u"
 
@@ -1059,8 +1061,8 @@ class TestCypherFrontend(unittest.TestCase):
         self.assertEqual(lowered, handwritten)
 
     def test_lowering_matches_handwritten_match_delete_relationship_plan(self) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
-        cypher = importlib.import_module("humemdb.cypher")
+        frontend = humemdb_cypher_frontend
+        cypher = humemdb_cypher
 
         query = (
             "MATCH (a:User)-[r:KNOWS]->(b:User) "
@@ -1075,8 +1077,8 @@ class TestCypherFrontend(unittest.TestCase):
     def test_lowering_matches_handwritten_reverse_relationship_match_set_plan(
         self,
     ) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
-        cypher = importlib.import_module("humemdb.cypher")
+        frontend = humemdb_cypher_frontend
+        cypher = humemdb_cypher
 
         query = (
             "MATCH (b:User)<-[r:KNOWS]-(a:User) "
@@ -1091,8 +1093,8 @@ class TestCypherFrontend(unittest.TestCase):
     def test_lowering_matches_handwritten_mixed_and_or_relationship_match_set_plan(
         self,
     ) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
-        cypher = importlib.import_module("humemdb.cypher")
+        frontend = humemdb_cypher_frontend
+        cypher = humemdb_cypher
 
         query = (
             "MATCH (a:User)-[r:KNOWS]->(b:User) "
@@ -1108,8 +1110,8 @@ class TestCypherFrontend(unittest.TestCase):
     def test_lowering_matches_handwritten_reverse_rel_mixed_bool_set_plan(
         self,
     ) -> None:
-        frontend = importlib.import_module("humemdb.cypher_frontend")
-        cypher = importlib.import_module("humemdb.cypher")
+        frontend = humemdb_cypher_frontend
+        cypher = humemdb_cypher
 
         query = (
             "MATCH (b:User)<-[r:KNOWS]-(a:User) "

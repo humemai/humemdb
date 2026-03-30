@@ -41,14 +41,29 @@ def _parse_args() -> argparse.Namespace:
         help="Named extra graph-index set to pass to the Cypher benchmark.",
     )
     parser.add_argument(
+        "--vector-dataset",
+        choices=("msmarco-10m", "stackoverflow-xlarge"),
+        default="stackoverflow-xlarge",
+        help="Dataset to use for the real-data vector sweep.",
+    )
+    parser.add_argument(
+        "--vector-filter-sources",
+        default="auto",
+        help=(
+            "Comma-separated filter families, or 'auto', for the real-data "
+            "vector sweep."
+        ),
+    )
+    parser.add_argument(
+        "--vector-sample-mode",
+        choices=("auto", "prefix", "stratified"),
+        default="auto",
+        help="Sampling strategy for the real-data vector benchmark.",
+    )
+    parser.add_argument(
         "--vector-scales",
         default="2000,10000,50000",
         help="Comma-separated row-count scales for the vector benchmark.",
-    )
-    parser.add_argument(
-        "--vector-dimensions-grid",
-        default="256",
-        help="Comma-separated vector dimensions to include in the vector sweep.",
     )
     parser.add_argument(
         "--vector-top-k-grid",
@@ -58,7 +73,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--vector-queries",
         type=int,
-        default=16,
+        default=100,
         help="Query count to pass through to the vector benchmark sweep.",
     )
     parser.add_argument(
@@ -223,22 +238,26 @@ def _run_cypher_sweep(
 def _run_vector_sweep(
     *,
     scales: tuple[int, ...],
-    dimensions_grid: tuple[int, ...],
     top_k_grid: tuple[int, ...],
     queries: int,
     warmup: int,
     repetitions: int,
+    dataset: str,
+    filter_sources: str,
+    sample_mode: str,
     output_dir: Path,
     env: dict[str, str],
 ) -> dict[str, object]:
-    benchmark_file = Path(__file__).with_name("vector_search_sweep.py")
+    benchmark_file = Path(__file__).with_name("vector_search_real_sweep.py")
+    intermediate_dir = output_dir / "vector_intermediate"
+    summary_path = output_dir / "vector_summary.json"
     command = [
         sys.executable,
         str(benchmark_file),
+        "--dataset",
+        dataset,
         "--rows-grid",
         ",".join(str(scale) for scale in scales),
-        "--dimensions-grid",
-        ",".join(str(value) for value in dimensions_grid),
         "--top-k-grid",
         ",".join(str(value) for value in top_k_grid),
         "--queries",
@@ -247,6 +266,14 @@ def _run_vector_sweep(
         str(warmup),
         "--repetitions",
         str(repetitions),
+        "--sample-mode",
+        sample_mode,
+        "--filter-sources",
+        filter_sources,
+        "--output-json",
+        str(summary_path),
+        "--intermediate-dir",
+        str(intermediate_dir),
         "--output",
         "json",
     ]
@@ -259,7 +286,8 @@ def _run_vector_sweep(
         text=True,
     )
     summary = json.loads(completed.stdout)
-    summary["benchmark"] = "vector_routing_sweep"
+    summary["benchmark"] = "vector_real_routing_sweep"
+    summary["dataset"] = dataset
     summary_path = output_dir / "vector_summary.json"
     summary_path.write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n",
@@ -277,7 +305,6 @@ def main() -> None:
     sql_scales = _parse_scales(args.sql_scales)
     cypher_scales = _parse_scales(args.cypher_scales)
     vector_scales = _parse_scales(args.vector_scales)
-    vector_dimensions_grid = _parse_scales(args.vector_dimensions_grid)
     vector_top_k_grid = _parse_scales(args.vector_top_k_grid)
     merged: dict[str, object] = {
         "benchmark": "routing_sweep",
@@ -304,11 +331,13 @@ def main() -> None:
     if args.benchmark in {"all", "vector"}:
         merged["vector"] = _run_vector_sweep(
             scales=vector_scales,
-            dimensions_grid=vector_dimensions_grid,
             top_k_grid=vector_top_k_grid,
             queries=args.vector_queries,
             warmup=args.warmup,
             repetitions=args.repetitions,
+            dataset=args.vector_dataset,
+            filter_sources=args.vector_filter_sources,
+            sample_mode=args.vector_sample_mode,
             output_dir=output_dir,
             env=env,
         )

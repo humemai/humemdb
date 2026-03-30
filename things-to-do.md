@@ -34,7 +34,7 @@ Initial classes:
 
 Initial methods:
 
-- `HumemDB.__init__(sqlite_path, duckdb_path=None)`
+- `HumemDB(base_path)`
 - `HumemDB.query(text, *, route, query_type="sql", params=None)`
 - `HumemDB.executemany(text, params_seq, *, route, query_type="sql")`
 - `HumemDB.begin(route=...)`
@@ -48,8 +48,7 @@ Initial methods:
 Phase 1 transaction behavior:
 
 - Writes auto-commit unless they are inside an explicit transaction block.
-- `with db.transaction(route="sqlite"):` and `with db.transaction(route="duckdb"):` are
-  supported.
+- `with db.transaction():` is supported for the public SQLite write path.
 - Public writes target SQLite; DuckDB is read-only from the `HumemDB` API.
 - Small to moderate batch writes go through SQLite with `executemany(...)`.
 
@@ -714,29 +713,115 @@ Current Phase 12 progress:
 
 ## Phase 13
 
-Add indexed vector runtime and vector index lifecycle once indexed search is real.
+Add indexed vector runtime, tiering, and lifecycle once indexed search is real.
 
-Status: planned.
+Status: done.
 
 - [x] Keep exact search as the current public baseline until indexed ANN is
   benchmark-justified.
-- [ ] Add a real indexed ANN vector path, likely LanceDB-backed first, for larger
-  vector scales where exact NumPy search is no longer operationally enough.
-- [ ] Add explicit vector index build, rebuild, refresh, inspect, and drop operations
-  once HumemDB ships a real indexed vector path.
-- [ ] Expose vector index lifecycle through the internal/advanced vector object API
-  first.
-- [ ] Add matching SQL and Cypher support later so vector indexing is not permanently
+- [x] Keep the Phase 13 design simple and explicit: hot search stays SQLite plus
+  in-memory NumPy exact through `100k`, while colder or larger histories move to one
+  LanceDB-backed `IVF_PQ` tier.
+- [x] Keep the first hot-tier admission rule simple too: for now, the hot tier can be
+  the most recently added `N` vectors instead of trying to optimize for recency-of-use
+  or frequency-of-use before real product evidence exists.
+- [x] Keep SQLite as the source of truth for all vectors, while treating the NumPy hot
+  tier only as a lazy-loaded in-memory cache rather than a second canonical store.
+- [x] When total vectors exceed the hot-tier budget, start building or refreshing the
+  cold `IVF_PQ` index in the background using the learned benchmark-backed LanceDB
+  parameters instead of blocking foreground exact search on immediate ANN upkeep;
+  allow a small spillover staging buffer before folding new overflow into cold ANN.
+- [x] Keep a small hot/cold overlap window during background cold-index rebuilds, then
+  swap in the refreshed cold snapshot once that overlap grows large enough to justify it.
+- [x] Keep the steady-state cold tier as the complement of the hot tier rather than a
+  duplicate copy of it: hot stays in exact NumPy, cold should normally index
+  `total - hot` vectors.
+- [x] Keep true parallel hot exact plus cold `IVF_PQ` search out of the initial Phase 13
+  runtime unless later benchmarks show the current sequential tiered path has become a
+  meaningful latency bottleneck.
+- [x] Keep merge-and-rerank simple at first: ask each tier for a small top-k buffer,
+  concatenate results, deduplicate by logical vector id, sort by score, and trim to
+  the final requested `k`.
+- [x] Keep exact search free of mandatory index-build steps so new vectors remain
+  immediately searchable before any ANN refresh work happens.
+- [x] Benchmark the cold path on real datasets at the scales that matter now instead of
+  over-expanding the matrix: `100k`, `1M`, and `10M` for `msmarco-10m`, plus `100k`,
+  `1M`, `10M`, and `25M` for `stackoverflow-xlarge`.
+- [x] Compare NumPy exact against LanceDB only where it is still practical and useful:
+  keep the explicit side-by-side comparison at `100k`, and let `1M+` runs stay
+  LanceDB-only once the hot-tier cut is fixed there.
+- [x] Tune only the rough `IVF_PQ` knobs that matter first on real data:
+  `num_partitions`, `num_sub_vectors`, `nprobes`, and `refine_factor`; keep broader
+  ANN-family exploration out of scope.
+- [x] Use scale-appropriate recall targets as the admission bar for those runs:
+  `k=10` targets of `0.95`, `0.93`, `0.90`, and `0.88`, and `k=50` targets of `0.98`,
+  `0.96`, `0.95`, and `0.93` for `100k`, `1M`, `10M`, and `100M`-class scales.
+- [x] Report only the basic evidence needed to justify the tiered runtime: recall,
+  indexed latency, exact latency where it still runs, stage timings, peak RSS, and
+  per-stage memory deltas.
+- [x] Keep the cold ingest path aligned with the intended runtime shape and measure it
+  directly: `SQLite -> DuckDB (scan) -> Arrow batches -> LanceDB -> build index`.
+- [x] Once that path is benchmark-justified, move it into the production `src`
+  runtime instead of leaving it only in benchmark scripts: productize the cold
+  ingest/build flow, background refresh lifecycle, hot/cold split, and
+  merge-and-rerank behavior behind internal runtime code.
+- [x] Keep lifecycle and policy work narrow and benchmark-backed instead of turning the
+  first indexed runtime into a broad schema-management surface.
+- [x] Add explicit vector index build, rebuild, refresh, inspect, await, and drop
+  operations once the simple hot/cold split and the benchmark-backed admission bar are
+  settled.
+- [x] Add matching SQL and Cypher support later so vector indexing is not permanently
   object-API-only.
-- [ ] Keep exact search free of mandatory index-build steps.
-- [ ] Use vector benchmarks to define the admission bar for indexed search: build cost,
-  refresh cost, latency, recall, memory overhead, and larger-scale crossover behavior
-  must justify the added runtime.
-- [ ] Extend the current vector sweep and tuning benchmarks so exact versus indexed
-  crossover points are measured rather than guessed, including larger LanceDB-backed
-  runs.
-- [ ] Treat this as the phase where indexed ANN semantics and lifecycle are defined
-  together, not separately.
+- [x] Finish the public vector-index model instead of treating the current shared
+  metric-backed names as the final architecture: public lifecycle now uses
+  user-chosen named indexes with one explicit named index per metric plus direct
+  Python index handles instead of hard-wired shared names.
+- [x] Revisit whether the SQL and Cypher vector index lifecycle should stay as the
+  current narrow admin subset or grow into fuller PostgreSQL-like and Neo4j-like
+  schema objects before Phase 13 is considered finished: for `v0.1.0`, keep the
+  narrow admin subset but make it work over real named indexes rather than special
+  metric aliases.
+
+Current Phase 13 progress:
+
+- the real-data benchmark harness now supports packaged dataset ground truth for large
+  runs, so `1M+` refresh baselines no longer report null recall when NumPy exact is
+  skipped
+- the real-data cold-path benchmark matrix is now measured at the intended scales:
+  `100K`, `1M`, and `10M` for `msmarco-10m`, plus `100K`, `1M`, `10M`, and `25M`
+  for `stackoverflow-xlarge`
+- the current tuned `IVF_PQ` reference settings have been narrowed to the intended
+  first-pass knobs only, with measured reference rows checked into the benchmark
+  docs for both datasets
+- the benchmark runner and sweep tooling now encode scale-appropriate recall targets,
+  report recall/latency/stage timing/peak RSS/per-stage memory deltas, and keep
+  those expectations under regression coverage
+- the measured cold ingest/build path is now explicit and evidence-backed as
+  `SQLite -> DuckDB (scan) -> Arrow batches -> LanceDB -> build index` for the
+  benchmarked exact-enabled path, with the large sampled cold-only path also tracked
+  explicitly in the benchmark runner
+- the production runtime slice in `src` is now landed: the internal
+  `IndexedVectorRuntimeConfig` policy exists, tiered search now splits hot exact and
+  cold ANN candidates, pending cold spill rows stay searchable through the exact path,
+  and per-tier results are merged and reranked before trimming to the final `top_k`
+- cold ANN snapshots are now built and refreshed behind the internal runtime instead
+  of living only in benchmark scripts, and writes schedule background cold refreshes
+  once drift passes the configured refresh threshold
+- cold lifecycle state now survives reopen through persisted snapshot metadata, and
+  cold deletes are tracked through tombstones until a later background refresh folds
+  them into the cold snapshot
+- SQL row-owned and graph-node-owned vector queries now exercise the same indexed
+  runtime path, so the Phase 13 work is no longer direct-vector-only
+- public vector index lifecycle and admin operations now exist across direct Python,
+  SQL, and Cypher, with the SQL/Cypher surface intentionally kept narrow for `v0.1.0`
+- the indexed-runtime baseline now also has a settled public index model: SQL,
+  Cypher, and direct Python lifecycle flows all resolve through user-chosen named
+  indexes instead of hard-wired shared metric aliases, while SQL vector operators
+  remain metric-driven and Cypher `SEARCH ... VECTOR INDEX ...` resolves through the
+  created index registry
+- true parallel hot+cold search is still intentionally deferred to Future phases;
+  that remaining work is about later runtime broadening, not the core Phase 13
+  public index architecture
 
 ## Phase 14
 
@@ -746,6 +831,10 @@ Status: in progress.
 
 This phase is about coherence, correctness, and documentation quality, not preserving
 backward compatibility with every earlier pre-`v0.1.0` API shape.
+
+Phase 14 now also absorbs the former post-Phase-13 vector-runtime overhead cleanup
+work, so the remaining Python-side search-latency reductions are part of release
+hardening rather than a separate intermediate phase.
 
 - [ ] Review whether `HumemSQL v0`, `HumemCypher v0`, and `HumemVector v0` are
   stable, coherent, and documented enough to ship as one explicit `v0.1.0`
@@ -766,6 +855,38 @@ backward compatibility with every earlier pre-`v0.1.0` API shape.
   vector paths.
 - [ ] Make result shapes and explicit query semantics stable and well documented.
 - [ ] Re-run benchmark-backed routing checks when runtime behavior changes materially.
+- [ ] Treat online vector search latency, not cold-index build time, as the immediate
+  runtime optimization target where current benchmark attribution still shows too
+  much Python-side orchestration in direct, SQL, and Cypher vector search.
+- [ ] Stop resolving SQL and Cypher vector candidates through logical key
+  round-trips in Python: make the candidate query path return search-ready vector
+  identities or stable vector-entry ids instead of returning business keys that the
+  runtime has to remap into vector indexes afterward.
+- [ ] Replace the current direct tiered-search hot/cold/pending partition loop with
+  cached integer-index metadata instead of rebuilding Python tuple keys, set
+  membership checks, and per-query list partitions over the full candidate set.
+- [ ] Precompute and cache per-metric tier membership so the runtime can answer
+  "hot vs cold vs pending" from dense integer lookups or masks rather than from
+  tuple reconstruction against `item_ids.tolist()` on every search.
+- [ ] Keep the first search-speed optimization pass inside the current Python/NumPy
+  runtime before introducing new extension-tooling complexity: prefer array-native
+  integer maps, masks, and cached remap tables first, then remeasure before
+  deciding whether a binary extension is justified.
+- [ ] Rework the candidate-resolution seam so full-namespace direct searches can
+  stay on a cached fast path instead of paying per-query namespace scans and
+  repartitioning work.
+- [ ] Push more selectivity down into SQL/Cypher candidate queries wherever the
+  current path still admits broad candidate sets that Python then has to filter or
+  remap after the fact.
+- [ ] Keep merge/rerank simple and low priority unless future measurements say
+  otherwise: the current attribution numbers say merge work is already effectively
+  free relative to candidate resolution and tier orchestration.
+- [ ] Re-benchmark direct, SQL, and Cypher tiered search after each runtime-shape
+  change, and make the optimization pass evidence-driven rather than assumption-
+  driven.
+- [ ] Add explicit benchmark guardrails for search orchestration share so future
+  changes can catch regressions in Python-side latency instead of only validating
+  total wall-clock time.
 - [ ] Revisit the SQLite-to-NumPy vector load and exact-index materialization path if
   it is still the active bottleneck after the indexed vector direction is settled, but
   keep the current simple exact loader unless measured evidence justifies lower-level
@@ -781,7 +902,20 @@ backward compatibility with every earlier pre-`v0.1.0` API shape.
 
 Current Phase 14 progress:
 
-- public examples and docs now use the backend-neutral `HumemDB.open(...)` helper
+- vector-runtime release hardening now explicitly includes the former `Phase 13.5`
+  Python-overhead cleanup instead of treating it as a separate pre-release phase
+- the current real-data cold-index build path is mostly native/backend work already,
+  so it is not the urgent optimization target for `v0.1.0`
+- the larger runtime-attribution runs now show direct tiered search as overwhelmingly
+  Python/orchestration-heavy, and SQL/Cypher vector search still spend a majority or
+  near-majority of total latency outside the raw backend search calls
+- the current hot path still does too much Python object churn around candidate-key
+  remapping, tier partitioning, and repeated full-candidate bookkeeping
+- the next runtime win should therefore come from better search-ready identity flow,
+  cached integer metadata, and array-native partitioning before considering more
+  invasive binary-extension work
+
+- public examples and docs now use the backend-neutral `HumemDB(...)` constructor
   instead of teaching paired SQLite and DuckDB filenames directly
 - public examples no longer label query results with backend-specific names such as
   `sqlite_result` or `duckdb_result` where the route is an internal concern
@@ -827,6 +961,14 @@ coherent shipped surface, not continuity with every earlier experimental shape.
 Only reopen these if later evidence justifies them. None of them should be treated as
 pre-`v0.1.0` default scope.
 
+- [ ] Revisit true parallel hot/cold vector search only if later benchmarks show the
+  current sequential tiered search has become a meaningful latency bottleneck.
+- [ ] Do one serious documentation pass after `v0.1.0` ships instead of trying to
+  perfect the docs during release hardening. That pass should at least cover a real
+  Python API reference, a clearer guide structure for SQL/Cypher/vector/import
+  workflows, a supported-surface or capability matrix, and a cleanup pass on README plus
+  quickstart examples so they read as a coherent product story rather than a set of
+  release notes.
 - [ ] Add larger file-based or workload-specific ingest paths only if the current
   CSV-first SQLite path stops being enough in real use.
 - [ ] Add a real bulk Cypher ingest path only if usage justifies growing beyond the
@@ -845,6 +987,10 @@ pre-`v0.1.0` default scope.
 - [ ] Keep SQLite as the canonical persisted store unless the broader HumemDB storage
   strategy itself changes; any future graph-storage redesign is about layout and
   write/read strategy, not casually replacing the embedded storage foundation.
+- [ ] Revisit SQLite and DuckDB operational policy only if real workloads justify it,
+  including WAL mode, checkpointing, lock/concurrency behavior, and connection usage.
+- [ ] Evaluate `sqlite-vec` in a later phase only as a benchmarked SQLite-native vector
+  backend candidate, not as part of the pre-`v0.1.0` scope.
 - [ ] Treat broader graph property payloads, operational graph writes such as `MERGE`,
   and later ingest workloads as the main triggers for revisiting the current graph
   storage model.
@@ -855,6 +1001,22 @@ pre-`v0.1.0` default scope.
 - [ ] Revisit `db.ask(...)` only after the `db.query(...)`-first public snapshot is
   stable; keep it as a later natural-language surface built on top of the cleaned
   SQL, Cypher, and vector plan layer rather than part of the initial release bar.
+- [ ] Revisit naming `HumemSQL v1` and `HumemCypher v1` only after `v0.1.0` ships and
+  the language contracts are intentionally broadened and stable enough to deserve it.
 - [ ] Keep any future `db.ask(...)` scope narrow at first: do not expose low-level
   routing or planner plumbing, and benchmark NL latency and planner quality
   separately from raw `db.query(...)` execution.
+- [ ] Revisit whether the current `100k` hot/cold vector threshold is still the
+  right cut once later large-scale real-data runs give enough post-release evidence.
+- [ ] Revisit workload-driven index recommendation or optional auto-indexing later if
+  repeated user query patterns are stable enough to justify it; keep it evidence-based
+  and opt-in rather than part of the pre-`v0.1.0` default scope.
+- [ ] Revisit the vector benchmark matrix later with larger corpora and wider embeddings,
+  including scales up to roughly `100M` vectors and dimensions up to roughly `1536`.
+- [ ] Revisit non-`IVF_PQ` ANN options in a later phase once the current cold-tier
+  lifecycle is stable enough to benchmark other index families fairly.
+- [ ] Consider FAISS later only as a hot-tier optimization candidate after the NumPy
+  hot path and LanceDB cold-tier lifecycle are stable.
+- [ ] Revisit hot-tier admission policy later if real usage justifies it: the current
+  simple rule can stay "most recently added N vectors", while recency-of-use or
+  frequency-of-use policies remain future options.

@@ -7,16 +7,18 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from tests.support import humemdb_class, runtime_module
-
-
-def _duckdb_engine(db):
-    return getattr(db, "_duckdb")
+from humemdb import HumemDB
+from humemdb.runtime import (
+    HUMEMDB_THREADS_ENV,
+    LANCEDB_THREADS_ENV,
+    _THREADPOOL_STATE,
+    configure_runtime_threads_from_env,
+    resolve_thread_budget_from_env,
+)
 
 
 class TestRoutingRuntime(unittest.TestCase):
     def test_public_api_no_longer_exposes_route_selection(self) -> None:
-        HumemDB = humemdb_class()
 
         query_signature = inspect.signature(HumemDB.query)
         executemany_signature = inspect.signature(HumemDB.executemany)
@@ -34,13 +36,11 @@ class TestRoutingRuntime(unittest.TestCase):
         self.assertNotIn("route", rollback_signature.parameters)
 
     def test_duckdb_reads_sqlite_source_of_truth_directly(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
                 )
@@ -59,28 +59,24 @@ class TestRoutingRuntime(unittest.TestCase):
                 self.assertEqual(result.rows, (("Alice", 2), ("Bob", 1)))
 
     def test_duckdb_threads_can_be_overridden_from_humemdb_env(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
             with mock.patch.dict(os.environ, {"HUMEMDB_THREADS": "8"}):
-                with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
-                    threads = _duckdb_engine(db).connection.execute(
+                with HumemDB(base_path) as db:
+                    threads = db._duckdb.connection.execute(
                         "SELECT current_setting('threads')"
                     ).fetchone()[0]
 
             self.assertEqual(threads, 8)
 
     def test_runtime_threads_cap_arrow_and_numpy_from_humemdb_env(self) -> None:
-        runtime = runtime_module()
         limiter = mock.Mock()
-        threadpool_state = getattr(runtime, "_THREADPOOL_STATE")
 
-        with mock.patch.dict(os.environ, {"HUMEMDB_THREADS": "6"}, clear=False):
+        with mock.patch.dict(os.environ, {HUMEMDB_THREADS_ENV: "6"}, clear=False):
             with mock.patch.dict(
-                threadpool_state,
+                _THREADPOOL_STATE,
                 {"limiter": None, "limit": None},
                 clear=True,
             ):
@@ -94,9 +90,7 @@ class TestRoutingRuntime(unittest.TestCase):
                                     "threadpoolctl.threadpool_limits",
                                     return_value=limiter,
                                 ) as threadpool_limits:
-                                    budget = (
-                                        runtime.configure_runtime_threads_from_env()
-                                    )
+                                    budget = configure_runtime_threads_from_env()
 
                                     self.assertEqual(budget.thread_count, 6)
                                     self.assertEqual(budget.arrow_cpu_count, 6)
@@ -104,7 +98,7 @@ class TestRoutingRuntime(unittest.TestCase):
                                     self.assertEqual(budget.numpy_thread_limit, 6)
                                     self.assertEqual(
                                         budget.source_env,
-                                        runtime.HUMEMDB_THREADS_ENV,
+                                        HUMEMDB_THREADS_ENV,
                                     )
                                     self.assertEqual(
                                         os.environ["OMP_THREAD_LIMIT"],
@@ -150,23 +144,20 @@ class TestRoutingRuntime(unittest.TestCase):
         threadpool_limits.assert_called_once_with(limits=6)
 
     def test_runtime_threads_support_vector_only_fallback_env(self) -> None:
-        runtime = runtime_module()
-
-        with mock.patch.dict(os.environ, {"LANCEDB_THREADS": "5"}, clear=True):
-            source_env, thread_count = runtime.resolve_thread_budget_from_env(
-                fallback_env_names=(runtime.LANCEDB_THREADS_ENV,),
+        with mock.patch.dict(os.environ, {LANCEDB_THREADS_ENV: "5"}, clear=True):
+            source_env, thread_count = resolve_thread_budget_from_env(
+                fallback_env_names=(LANCEDB_THREADS_ENV,),
             )
 
-        self.assertEqual(source_env, runtime.LANCEDB_THREADS_ENV)
+        self.assertEqual(source_env, LANCEDB_THREADS_ENV)
         self.assertEqual(thread_count, 5)
 
     def test_query_defaults_to_sqlite_route(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
                 )
@@ -181,13 +172,11 @@ class TestRoutingRuntime(unittest.TestCase):
                 self.assertEqual(result.route, "sqlite")
 
     def test_query_auto_routes_broad_sql_read_to_duckdb(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     (
                         "CREATE TABLE events ("
@@ -216,13 +205,11 @@ class TestRoutingRuntime(unittest.TestCase):
                 self.assertEqual(result.rows, (("click", 2), ("view", 1)))
 
     def test_query_keeps_selective_sql_read_on_sqlite(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     (
                         "CREATE TABLE events ("
@@ -249,13 +236,11 @@ class TestRoutingRuntime(unittest.TestCase):
                 self.assertEqual(result.rows, ((10,),))
 
     def test_query_auto_routes_read_only_cypher_to_sqlite(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query("CREATE (u:User {name: 'Alice'})")
 
                 result = db.query("MATCH (u:User) RETURN u.name")
@@ -264,12 +249,11 @@ class TestRoutingRuntime(unittest.TestCase):
                 self.assertEqual(result.rows, (("Alice",),))
 
     def test_sqlite_transaction_context_commits_on_success(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
                 )
@@ -280,17 +264,16 @@ class TestRoutingRuntime(unittest.TestCase):
                         params={"name": "Alice"},
                     )
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 result = db.query("SELECT name FROM users")
                 self.assertEqual(result.rows, (("Alice",),))
 
     def test_sqlite_transaction_context_rolls_back_on_error(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
                 )
@@ -307,12 +290,11 @@ class TestRoutingRuntime(unittest.TestCase):
                 self.assertEqual(result.rows, ((0,),))
 
     def test_sqlite_executemany_commits_small_batch(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
                 )
@@ -321,17 +303,16 @@ class TestRoutingRuntime(unittest.TestCase):
                     [{"name": "Alice"}, {"name": "Bob"}],
                 )
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 result = db.query("SELECT name FROM users ORDER BY id")
                 self.assertEqual(result.rows, (("Alice",), ("Bob",)))
 
     def test_sqlite_executemany_rolls_back_inside_transaction(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
                 )

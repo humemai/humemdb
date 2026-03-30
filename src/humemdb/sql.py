@@ -49,6 +49,30 @@ class SQLTranslationPlan:
     has_distinct: bool
 
 
+def _expr_args(expression: Any) -> dict[str, Any]:
+    """Return parsed sqlglot args or an empty dict."""
+
+    return dict(getattr(expression, "args", {}))
+
+
+def _expr_arg(expression: Any, name: str) -> Any:
+    """Return one parsed sqlglot arg when present."""
+
+    return _expr_args(expression).get(name)
+
+
+def _expr_expressions(expression: Any) -> tuple[Any, ...]:
+    """Return parsed child expressions as a tuple."""
+
+    return tuple(getattr(expression, "expressions", ()))
+
+
+def _expr_this(expression: Any) -> Any:
+    """Return the parsed `this` child when present."""
+
+    return getattr(expression, "this", None)
+
+
 def translate_sql(text: str, *, target: Route) -> str:
     """Translate PostgreSQL-like SQL into backend-specific SQL.
 
@@ -133,9 +157,9 @@ def _validate_humemsql_v0(expression: Any) -> None:
             "and CREATE statements."
         )
 
-    expression_args = getattr(expression, "args", {})
+    expression_args = _expr_args(expression)
     with_clause = expression_args.get("with_")
-    with_args = getattr(with_clause, "args", {}) if with_clause is not None else {}
+    with_args = _expr_args(with_clause) if with_clause is not None else {}
     if with_args.get("recursive"):
         logger.debug("Rejected recursive CTE in HumemSQL v0")
         raise ValueError(
@@ -175,18 +199,18 @@ def _expression_is_read_only(expression: Any) -> bool:
     if type(expression).__name__ != "Select":
         return False
 
-    with_clause = getattr(expression, "args", {}).get("with_")
-    ctes = list(getattr(with_clause, "expressions", ())) if with_clause else []
-    return all(_expression_is_read_only(getattr(cte, "this", None)) for cte in ctes)
+    with_clause = _expr_arg(expression, "with_")
+    ctes = list(_expr_expressions(with_clause)) if with_clause else []
+    return all(_expression_is_read_only(_expr_this(cte)) for cte in ctes)
 
 
 def _expression_cte_count(expression: Any) -> int:
     """Return the number of CTE bindings attached to one expression."""
 
-    with_clause = getattr(expression, "args", {}).get("with_")
+    with_clause = _expr_arg(expression, "with_")
     if with_clause is None:
         return 0
-    return len(getattr(with_clause, "expressions", ()))
+    return len(_expr_expressions(with_clause))
 
 
 def _expression_join_count(expression: Any) -> int:
@@ -221,22 +245,22 @@ def _expression_exists_count(expression: Any) -> int:
 def _expression_has_order_by(expression: Any) -> bool:
     """Return whether one parsed expression contains ORDER BY."""
 
-    return getattr(expression, "args", {}).get("order") is not None
+    return _expr_arg(expression, "order") is not None
 
 
 def _expression_has_limit(expression: Any) -> bool:
     """Return whether one parsed expression contains LIMIT."""
 
-    return getattr(expression, "args", {}).get("limit") is not None
+    return _expr_arg(expression, "limit") is not None
 
 
 def _expression_has_group_by(expression: Any) -> bool:
     """Return whether one parsed expression contains GROUP BY."""
 
-    return getattr(expression, "args", {}).get("group") is not None
+    return _expr_arg(expression, "group") is not None
 
 
 def _expression_has_distinct(expression: Any) -> bool:
     """Return whether one parsed expression contains DISTINCT."""
 
-    return getattr(expression, "args", {}).get("distinct") is not None
+    return _expr_arg(expression, "distinct") is not None

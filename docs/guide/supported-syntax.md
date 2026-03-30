@@ -127,24 +127,23 @@ Current read-clause subset:
 
 Current vector-shaped Cypher subset:
 
-- node-oriented vector search is expressed as `MATCH` plus `SEARCH`
+- unfiltered node-oriented vector search is expressed through `CALL
+  db.index.vector.queryNodes(...)`
 - the current public shape is:
 
 ```cypher
-MATCH (u:User {cohort: 'alpha'})
-SEARCH u IN (VECTOR INDEX embedding FOR $query LIMIT 3)
-RETURN u.id
-ORDER BY u.id
+CALL db.index.vector.queryNodes('user_embedding_idx', 3, $query)
+YIELD node, score
+RETURN node.id, score
 ```
 
-- the current `SEARCH` subset requires:
-    - a `MATCH` clause first
-    - a bound node alias from that `MATCH`
-    - `VECTOR INDEX embedding`
-    - `FOR $query`
+- the current `queryNodes` subset requires:
+    - a quoted vector index name
     - literal or parameterized `LIMIT`
-- the current candidate-query result still comes from the parsed `MATCH ... RETURN ...`
-  subset that HumemCypher already supports
+    - a named parameter for the query vector
+    - `YIELD node, score`
+    - optional `MATCH ...` or `WHERE ...` filtering between `YIELD` and `RETURN`
+    - `RETURN node.id` and/or `score`
 
 What HumemDB is **not** claiming here:
 
@@ -162,5 +161,5 @@ This distinction is important for both implementation and documentation.
 - The syntax choices are grounded in familiar upstream ecosystems.
 - The supported behavior is still only the narrow subset HumemDB parses, lowers,
   tests, and documents.
-- Future phase-9 work should keep expanding that subset through parser/planner work,
+- Future parser/planner work should keep expanding that subset,
   not by adding undocumented string-shaped special cases.

@@ -35,7 +35,7 @@ layers.
 - graph `CREATE` and relationship creation through public Cypher across six labels
 - direct vector inserts through `insert_vectors(...)`
 - SQL `ORDER BY embedding <=> $query LIMIT k` on multiple large tables
-- Cypher `SEARCH alias IN (VECTOR INDEX ...)` on multiple node families
+- Cypher `CALL db.index.vector.queryNodes(...) YIELD node, score` on multiple node families
 - exact direct-vector `search_vectors(...)`
 - SQL `UPDATE` and Cypher `SET` that refresh vector-backed lookup state
 - per-step elapsed timing output
@@ -47,7 +47,7 @@ but they are not the main reason the direct and graph-owned vector lookups stay 
 ## Representative flow
 
 ```python
-with HumemDB.open("memory") as db:
+with HumemDB("memory") as db:
     create_relational_tables(db)
     populate_relational_rows(db)
     populate_graph(db)

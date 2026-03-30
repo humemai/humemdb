@@ -1,6 +1,10 @@
 # Transactions
 
-Transaction control is explicit and route-bound.
+Transaction control is explicit and currently applies to the canonical SQLite write
+path.
+
+Public writes already target SQLite, so `db.transaction()` is the normal transaction
+surface. The public API does not expose a DuckDB transaction route override.
 
 ## Context manager
 
@@ -13,7 +17,7 @@ with db.transaction():
 ```
 
 On normal exit, the transaction commits. If an exception escapes the block, HumemDB
-rolls the selected route back before the exception continues.
+rolls the SQLite transaction back before the exception continues.
 
 ## Manual control
 
@@ -30,4 +34,6 @@ except Exception:
 ## Batch writes
 
 `executemany(...)` is intentionally limited to SQLite for now. That keeps the initial
-bulk-write story simple and aligned with the current source-of-truth model.
+bulk-write story simple and aligned with the current source-of-truth model. That means
+the common pattern is to combine `executemany(...)` with `db.transaction()` when one
+batch should commit atomically.

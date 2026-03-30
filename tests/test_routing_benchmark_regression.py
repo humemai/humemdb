@@ -25,13 +25,165 @@ def _load_module(relative_path: str, module_name: str):
 
 
 class TestRoutingBenchmarkRegression(unittest.TestCase):
+    def test_ivf_pq_recall_policy_scales_by_rows_and_top_k(self) -> None:
+        sweep_module = _load_module(
+            "scripts/benchmarks/vector_search_real_sweep.py",
+            "humemdb_vector_search_real_sweep_recall_policy",
+        )
+
+        sweep_target_for = sweep_module._recall_target_for
+
+        self.assertEqual(
+            sweep_target_for(rows=100_000, top_k=10)["target_recall"],
+            0.95,
+        )
+        self.assertEqual(
+            sweep_target_for(rows=1_000_000, top_k=10)["target_recall"],
+            0.93,
+        )
+        self.assertEqual(
+            sweep_target_for(rows=10_000_000, top_k=50)["target_recall"],
+            0.95,
+        )
+        self.assertEqual(
+            sweep_target_for(rows=25_000_000, top_k=10)["target_recall"],
+            0.89,
+        )
+        self.assertEqual(
+            sweep_target_for(rows=100_000_000, top_k=50)["target_recall"],
+            0.93,
+        )
+        self.assertEqual(
+            sweep_target_for(rows=25_000_000, top_k=50)["target_recall"],
+            0.94,
+        )
+        self.assertEqual(
+            sweep_target_for(rows=25_000_000, top_k=50)["scale_label"],
+            "25M",
+        )
+        with self.assertRaisesRegex(ValueError, "Supported values: 10, 50"):
+            sweep_target_for(rows=100_000, top_k=25)
+
+    def test_real_vector_dataset_info_exposes_stackoverflow_filter_groups(self) -> None:
+        benchmark_module = _load_module(
+            "scripts/benchmarks/vector_search_real.py",
+            "humemdb_vector_search_real",
+        )
+        dataset_info = benchmark_module._dataset_info
+
+        stackoverflow = dataset_info("stackoverflow-xlarge")
+        msmarco = dataset_info("msmarco-10m")
+
+        self.assertEqual(stackoverflow.dimensions, 384)
+        self.assertIn("questions", stackoverflow.group_names)
+        self.assertIn("answers", stackoverflow.group_names)
+        self.assertIn("comments", stackoverflow.group_names)
+        self.assertEqual(msmarco.dimensions, 1024)
+        self.assertEqual(msmarco.group_names, ("all",))
+
+    def test_real_vector_proportional_allocations_stay_stable(self) -> None:
+        benchmark_module = _load_module(
+            "scripts/benchmarks/vector_search_real.py",
+            "humemdb_vector_search_real_allocations",
+        )
+        proportional_allocations = benchmark_module._proportional_allocations
+
+        allocations = proportional_allocations(
+            {"questions": 5_000_000, "answers": 12_000_000, "comments": 8_000_000},
+            total=1_000_000,
+        )
+
+        self.assertEqual(sum(allocations.values()), 1_000_000)
+        self.assertGreater(allocations["answers"], allocations["comments"])
+        self.assertGreater(allocations["comments"], allocations["questions"])
+
+    def test_real_vector_sweep_auto_filters_expand_for_stackoverflow(self) -> None:
+        sweep_module = _load_module(
+            "scripts/benchmarks/vector_search_real_sweep.py",
+            "humemdb_vector_search_real_sweep",
+        )
+        filter_sources_for_dataset = sweep_module._filter_sources_for_dataset
+
+        self.assertEqual(
+            filter_sources_for_dataset(
+                dataset="msmarco-10m",
+                raw="auto",
+            ),
+            [None],
+        )
+        self.assertEqual(
+            filter_sources_for_dataset(
+                dataset="stackoverflow-xlarge",
+                raw="auto",
+            ),
+            [None, "questions", "answers", "comments"],
+        )
+
+    def test_real_vector_benchmark_requires_min_queries_and_repetitions(self) -> None:
+        benchmark_module = _load_module(
+            "scripts/benchmarks/vector_search_real.py",
+            "humemdb_vector_search_real_sampling",
+        )
+        validate = benchmark_module._validate_benchmark_sampling
+
+        with self.assertRaisesRegex(ValueError, "at least 100 queries"):
+            validate(99, 3)
+        with self.assertRaisesRegex(ValueError, "at least 3 repetitions"):
+            validate(100, 2)
+        validate(100, 3)
+
+    def test_real_vector_benchmark_multi_top_k_reuses_build_output(self) -> None:
+        benchmark_module = _load_module(
+            "scripts/benchmarks/vector_search_real.py",
+            "humemdb_vector_search_real_multi_topk",
+        )
+        finalize_top_k_reports = benchmark_module._finalize_top_k_reports
+
+        report = finalize_top_k_reports(
+            base_report={
+                "dataset": "msmarco-10m",
+                "rows": 100_000,
+                "queries": 100,
+            },
+            top_k_reports=[
+                {
+                    "top_k": 10,
+                    "latency_summaries_ms": {"lancedb_indexed_global": {"mean": 1.0}},
+                    "recalls_at_k": {"lancedb_indexed_global": 0.95},
+                },
+                {
+                    "top_k": 50,
+                    "latency_summaries_ms": {"lancedb_indexed_global": {"mean": 2.0}},
+                    "recalls_at_k": {"lancedb_indexed_global": 0.97},
+                },
+            ],
+        )
+
+        self.assertEqual(report["top_k_grid"], [10, 50])
+        self.assertEqual(len(report["top_k_reports"]), 2)
+        self.assertEqual(report["top_k_reports"][1]["top_k"], 50)
+
+    def test_real_vector_sweep_requires_min_queries_and_repetitions(self) -> None:
+        sweep_module = _load_module(
+            "scripts/benchmarks/vector_search_real_sweep.py",
+            "humemdb_vector_search_real_sweep_sampling",
+        )
+
+        sweep_validate = sweep_module._validate_benchmark_sampling
+
+        with self.assertRaisesRegex(ValueError, "at least 100 queries"):
+            sweep_validate(32, 3)
+        with self.assertRaisesRegex(ValueError, "at least 3 repetitions"):
+            sweep_validate(100, 1)
+        sweep_validate(100, 3)
+
     def test_sql_workloads_still_emit_router_feature_shapes(self) -> None:
         benchmark_module = _load_module(
             "scripts/benchmarks/duckdb_direct_read.py",
             "humemdb_duckdb_direct_read",
         )
-        workloads = getattr(benchmark_module, "QUERY_WORKLOADS")
-        sql_feature_dict = getattr(benchmark_module, "_sql_feature_dict")
+        workloads = benchmark_module.QUERY_WORKLOADS
+        sql_feature_dict = benchmark_module._sql_feature_dict
 
         self.assertIn("event_exists_region_filter", workloads)
         self.assertIn(
@@ -74,15 +226,12 @@ class TestRoutingBenchmarkRegression(unittest.TestCase):
             "scripts/benchmarks/cypher_graph_path.py",
             "humemdb_cypher_graph_path",
         )
-        dataset_counts = getattr(benchmark_module, "_dataset_counts")
-        workloads_for = getattr(benchmark_module, "_workloads")
-        compile_workload = getattr(benchmark_module, "_compile_workload")
-        cypher_feature_dict = getattr(benchmark_module, "_cypher_feature_dict")
-        apply_graph_index_set = getattr(benchmark_module, "_apply_graph_index_set")
-        sqlite_plan_summary_from_details = getattr(
-            benchmark_module,
-            "_sqlite_plan_summary_from_details",
-        )
+        dataset_counts = benchmark_module._dataset_counts
+        workloads_for = benchmark_module._workloads
+        compile_workload = benchmark_module._compile_workload
+        cypher_feature_dict = benchmark_module._cypher_feature_dict
+        apply_graph_index_set = benchmark_module._apply_graph_index_set
+        sqlite_plan_summary_from_details = benchmark_module._sqlite_plan_summary_from_details
 
         dataset = dataset_counts(5_000, 3, 2)
         workloads = workloads_for(dataset)
@@ -285,11 +434,8 @@ class TestRoutingBenchmarkRegression(unittest.TestCase):
             "scripts/benchmarks/routing_threshold_report.py",
             "humemdb_routing_threshold_report_sql",
         )
-        sql_workload_report = getattr(report_module, "_sql_workload_report")
-        recommended_sql_olap_thresholds = getattr(
-            report_module,
-            "_recommended_sql_olap_thresholds",
-        )
+        sql_workload_report = report_module._sql_workload_report
+        recommended_sql_olap_thresholds = report_module._recommended_sql_olap_thresholds
 
         runs = [
             {
@@ -405,10 +551,7 @@ class TestRoutingBenchmarkRegression(unittest.TestCase):
             "scripts/benchmarks/routing_threshold_report.py",
             "humemdb_routing_threshold_report_sql_rules",
         )
-        recommended_sql_olap_thresholds = getattr(
-            report_module,
-            "_recommended_sql_olap_thresholds",
-        )
+        recommended_sql_olap_thresholds = report_module._recommended_sql_olap_thresholds
 
         runs = [
             {
@@ -576,11 +719,8 @@ class TestRoutingBenchmarkRegression(unittest.TestCase):
             "scripts/benchmarks/routing_threshold_report.py",
             "humemdb_routing_threshold_report_cypher",
         )
-        cypher_workload_report = getattr(report_module, "_cypher_workload_report")
-        phase11_cypher_diagnostics = getattr(
-            report_module,
-            "_phase11_cypher_diagnostics",
-        )
+        cypher_workload_report = report_module._cypher_workload_report
+        cypher_graph_index_diagnostics = report_module._cypher_graph_index_diagnostics
 
         report = cypher_workload_report(
             [
@@ -668,7 +808,7 @@ class TestRoutingBenchmarkRegression(unittest.TestCase):
             1,
         )
 
-        diagnostics = phase11_cypher_diagnostics(report)
+        diagnostics = cypher_graph_index_diagnostics(report)
         self.assertEqual(
             diagnostics["property_join_heavy_workloads"],
             [],
@@ -679,19 +819,16 @@ class TestRoutingBenchmarkRegression(unittest.TestCase):
         )
         self.assertEqual(diagnostics["sort_cost_overhead"], [])
 
-    def test_phase11_cypher_diagnostics_highlight_property_join_pressure(
+    def test_cypher_graph_index_diagnostics_highlight_property_join_pressure(
         self,
     ) -> None:
         report_module = _load_module(
             "scripts/benchmarks/routing_threshold_report.py",
-            "humemdb_routing_threshold_report_cypher_phase11",
+            "humemdb_routing_threshold_report_cypher_graph_index",
         )
-        phase11_cypher_diagnostics = getattr(
-            report_module,
-            "_phase11_cypher_diagnostics",
-        )
+        cypher_graph_index_diagnostics = report_module._cypher_graph_index_diagnostics
 
-        diagnostics = phase11_cypher_diagnostics(
+        diagnostics = cypher_graph_index_diagnostics(
             [
                 {
                     "workload": "team_membership_role_region",
@@ -808,7 +945,7 @@ class TestRoutingBenchmarkRegression(unittest.TestCase):
             "scripts/benchmarks/routing_threshold_report.py",
             "humemdb_routing_threshold_report_vector",
         )
-        vector_workload_report = getattr(report_module, "_vector_workload_report")
+        vector_workload_report = report_module._vector_workload_report
 
         report = vector_workload_report(
             [
@@ -872,7 +1009,7 @@ class TestRoutingBenchmarkRegression(unittest.TestCase):
             "scripts/benchmarks/routing_threshold_report.py",
             "humemdb_routing_threshold_report_vector_print",
         )
-        print_section = getattr(report_module, "_print_section")
+        print_section = report_module._print_section
 
         output = io.StringIO()
         with redirect_stdout(output):
@@ -904,13 +1041,290 @@ class TestRoutingBenchmarkRegression(unittest.TestCase):
         self.assertIn("Indexed first wins at scale 50000", rendered)
         self.assertIn("no indexed crossover in current sweep", rendered)
 
+    def test_real_vector_threshold_report_groups_by_dataset_and_filter(self) -> None:
+        report_module = _load_module(
+            "scripts/benchmarks/routing_threshold_report.py",
+            "humemdb_routing_threshold_report_real_vector",
+        )
+        vector_workload_report = report_module._vector_workload_report
+
+        report = vector_workload_report(
+            [
+                {
+                    "dataset": "stackoverflow-xlarge",
+                    "rows": 10_000,
+                    "top_k": 10,
+                    "filter_source": None,
+                    "sample_mode": "stratified",
+                    "latency_mean_ms": {
+                        "numpy_f32_global": 3.0,
+                        "lancedb_indexed_global": 4.0,
+                    },
+                    "recalls_at_k": {
+                        "lancedb_indexed_global": 0.98,
+                    },
+                },
+                {
+                    "dataset": "stackoverflow-xlarge",
+                    "rows": 100_000,
+                    "top_k": 10,
+                    "filter_source": None,
+                    "sample_mode": "stratified",
+                    "latency_mean_ms": {
+                        "numpy_f32_global": 12.0,
+                        "lancedb_indexed_global": 6.0,
+                    },
+                    "recalls_at_k": {
+                        "lancedb_indexed_global": 0.97,
+                    },
+                },
+                {
+                    "dataset": "stackoverflow-xlarge",
+                    "rows": 1_000_000,
+                    "top_k": 10,
+                    "filter_source": None,
+                    "sample_mode": "stratified",
+                    "latency_mean_ms": {
+                        "lancedb_indexed_global": 5.0,
+                    },
+                    "recalls_at_k": {
+                        "lancedb_indexed_global": None,
+                    },
+                },
+                {
+                    "dataset": "stackoverflow-xlarge",
+                    "rows": 10_000,
+                    "top_k": 10,
+                    "filter_source": "questions",
+                    "sample_mode": "stratified",
+                    "filtered_candidate_count": 4_000,
+                    "latency_mean_ms": {
+                        "numpy_f32_filtered": 2.0,
+                        "lancedb_indexed_filtered": 1.5,
+                    },
+                    "recalls_at_k": {
+                        "lancedb_indexed_filtered": 0.96,
+                    },
+                },
+            ],
+            min_indexed_recall=0.95,
+        )
+
+        by_workload = {entry["workload"]: entry for entry in report}
+        self.assertEqual(
+            by_workload["vector_stackoverflow-xlarge_global_topk10"][
+                "first_indexed_scale"
+            ],
+            100_000,
+        )
+        self.assertEqual(
+            by_workload["vector_stackoverflow-xlarge_global_topk10"]["winners"][-1][
+                "winner"
+            ],
+            "unmeasured_exact",
+        )
+        self.assertEqual(
+            by_workload["vector_stackoverflow-xlarge_questions_topk10"][
+                "first_indexed_scale"
+            ],
+            10_000,
+        )
+
+    def test_real_vector_report_skips_numpy_exact_above_default_cutoff(self) -> None:
+        benchmark_module = _load_module(
+            "scripts/benchmarks/vector_search_real.py",
+            "humemdb_vector_search_real_cutoff",
+        )
+
+        config = benchmark_module.BenchmarkConfig(
+            dataset="msmarco-10m",
+            rows=1_000_001,
+            queries=100,
+            top_k=10,
+            warmup=0,
+            repetitions=3,
+            metric="cosine",
+            seed=0,
+            filter_source=None,
+            sample_mode="auto",
+            batch_size=1_024,
+            lancedb_index_type="IVF_PQ",
+            numpy_exact_max_rows=100_000,
+        )
+
+        dataset_info = benchmark_module.DatasetInfo(
+            name="msmarco-10m",
+            meta_path=Path("/tmp/fake.meta.json"),
+            count=2_000_000,
+            dimensions=2,
+            group_names=("all",),
+        )
+        selected_ranges = [
+            benchmark_module.SelectedRange(
+                row_start=0,
+                shard_path=Path("/tmp/fake.shard.f32"),
+                shard_count=1_000_001,
+                offset=0,
+                count=1_000_001,
+                group_id=0,
+                group_name="all",
+            )
+        ]
+        query_indexes = benchmark_module.np.arange(
+            100,
+            dtype=benchmark_module.np.int64,
+        )
+        group_ids = benchmark_module.np.zeros(1_000_001, dtype=benchmark_module.np.int8)
+        group_lookup = {0: "all"}
+        queries = [
+            benchmark_module.np.zeros(2, dtype=benchmark_module.np.float32)
+            for _ in range(100)
+        ]
+        fake_table = mock.Mock()
+        fake_db = mock.Mock()
+        fake_db.__enter__ = mock.Mock(return_value=fake_db)
+        fake_db.__exit__ = mock.Mock(return_value=None)
+        fake_db._duckdb = mock.Mock()
+        packaged_ground_truth = benchmark_module.PackagedGroundTruth(
+            gt_path=Path("/tmp/fake.gt.jsonl"),
+            query_ids=query_indexes.copy(),
+            neighbors_by_query_id={
+                int(query_index): tuple(range(10)) for query_index in query_indexes
+            },
+        )
+
+        with (
+            mock.patch.object(
+                benchmark_module,
+                "_dataset_info",
+                return_value=dataset_info,
+            ),
+            mock.patch.object(
+                benchmark_module,
+                "_plan_dataset_subset",
+                return_value=(selected_ranges, group_ids, group_lookup),
+            ),
+            mock.patch.object(
+                benchmark_module,
+                "_query_indexes",
+                return_value=query_indexes,
+            ),
+            mock.patch.object(
+                benchmark_module,
+                "_load_query_vectors",
+                return_value=queries,
+            ),
+            mock.patch.object(
+                benchmark_module,
+                "_load_packaged_ground_truth",
+                return_value=packaged_ground_truth,
+            ),
+            mock.patch.object(benchmark_module, "HumemDB") as humemdb_cls,
+            mock.patch.object(
+                benchmark_module,
+                "_seed_lancedb_table_from_selected_ranges",
+                return_value=fake_table,
+            ),
+            mock.patch.object(
+                benchmark_module,
+                "_build_lancedb_index",
+                return_value=10.0,
+            ),
+            mock.patch.object(
+                benchmark_module,
+                "_build_lancedb_scalar_index",
+                return_value=0.0,
+            ),
+            mock.patch.object(
+                benchmark_module,
+                "_search_lancedb_indexed",
+                side_effect=lambda *_args, **_kwargs: tuple(range(10)),
+            ),
+            mock.patch.object(benchmark_module, "_time_callable") as time_callable,
+            mock.patch.object(benchmark_module, "_ExactVectorIndex") as exact_index_cls,
+        ):
+            time_callable.return_value = benchmark_module.TimingSummary(
+                mean=1.0,
+                stdev=0.0,
+                minimum=1.0,
+                maximum=1.0,
+            )
+            report = benchmark_module.run_benchmark(config)
+
+        exact_index_cls.assert_not_called()
+        humemdb_cls.assert_not_called()
+        self.assertFalse(report["numpy_exact_enabled"])
+        self.assertEqual(report["numpy_exact_max_rows"], 100_000)
+        self.assertEqual(report["artifact_sizes_bytes"]["numpy_f32_matrix"], 0)
+        self.assertEqual(
+            report["ground_truth_source"],
+            "packaged_gt_subset_filtered",
+        )
+        self.assertNotIn("numpy_f32_global", report["latency_summaries_ms"])
+        self.assertEqual(report["recalls_at_k"]["lancedb_indexed_global"], 1.0)
+        self.assertIsNone(report["stage_timings_ms"]["numpy_f32_build"])
+        self.assertEqual(
+            report["cold_tier_ingest_path"],
+            "Selected shard memmaps -> Arrow batches -> LanceDB -> build index",
+        )
+
+    def test_real_vector_threshold_recommendations_emit_dataset_guidance(self) -> None:
+        report_module = _load_module(
+            "scripts/benchmarks/routing_threshold_report.py",
+            "humemdb_routing_threshold_report_real_vector_recommendations",
+        )
+        recommend = report_module._recommended_real_vector_thresholds
+
+        recommendation = recommend(
+            [
+                {
+                    "dataset": "stackoverflow-xlarge",
+                    "filter_source": None,
+                    "top_k": 10,
+                    "shape": "global_ann",
+                    "first_indexed_scale": 100_000,
+                    "winners": [
+                        {"scale": 10_000, "winner": "numpy_exact"},
+                        {"scale": 100_000, "winner": "lancedb_indexed"},
+                    ],
+                },
+                {
+                    "dataset": "stackoverflow-xlarge",
+                    "filter_source": "questions",
+                    "top_k": 10,
+                    "shape": "candidate_filtered_ann",
+                    "first_indexed_scale": 10_000,
+                    "winners": [
+                        {
+                            "scale": 10_000,
+                            "winner": "lancedb_indexed",
+                            "filtered_candidate_count": 4_000,
+                        }
+                    ],
+                },
+            ]
+        )
+
+        self.assertTrue(recommendation["dataset_aware"])
+        by_filter = {
+            entry["filter_source"]: entry
+            for entry in recommendation["recommendations"]
+        }
+        self.assertEqual(by_filter[None]["default_route"], "numpy_exact")
+        self.assertEqual(by_filter[None]["switch_to_indexed_at_rows"], 100_000)
+        self.assertEqual(by_filter["questions"]["default_route"], "lancedb_indexed")
+        self.assertEqual(
+            by_filter["questions"]["min_filtered_candidate_count_for_indexed"],
+            4_000,
+        )
+
     def test_routing_sweep_writes_representative_scale_summaries(self) -> None:
         sweep_module = _load_module(
             "scripts/benchmarks/routing_sweep.py",
             "humemdb_routing_sweep",
         )
-        run_sql_sweep = getattr(sweep_module, "_run_sql_sweep")
-        run_cypher_sweep = getattr(sweep_module, "_run_cypher_sweep")
+        run_sql_sweep = sweep_module._run_sql_sweep
+        run_cypher_sweep = sweep_module._run_cypher_sweep
 
         def fake_run(
             command: list[str],
@@ -974,7 +1388,7 @@ class TestRoutingBenchmarkRegression(unittest.TestCase):
                 )
                 cypher_summary = run_cypher_sweep(
                     scales=(100_000,),
-                    index_set="phase11-targeted",
+                    index_set="targeted-covering",
                     warmup=0,
                     repetitions=1,
                     output_dir=output_dir,
@@ -993,7 +1407,7 @@ class TestRoutingBenchmarkRegression(unittest.TestCase):
                 [run["scale_value"] for run in cypher_summary["runs"]],
                 [100_000],
             )
-            self.assertEqual(cypher_summary["index_set"], "phase11-targeted")
+            self.assertEqual(cypher_summary["index_set"], "targeted-covering")
             self.assertEqual(
                 [run["scale_key"] for run in cypher_summary["runs"]],
                 ["nodes"],
@@ -1001,15 +1415,15 @@ class TestRoutingBenchmarkRegression(unittest.TestCase):
             self.assertTrue((output_dir / "sql_summary.json").exists())
             self.assertTrue((output_dir / "cypher_summary.json").exists())
 
-    def test_routing_sweep_writes_vector_scale_summaries(self) -> None:
+    def test_routing_sweep_writes_real_vector_scale_summaries(self) -> None:
         sweep_module = _load_module(
             "scripts/benchmarks/routing_sweep.py",
-            "humemdb_routing_sweep_vector",
+            "humemdb_routing_sweep_vector_real",
         )
-        run_vector_sweep = getattr(sweep_module, "_run_vector_sweep")
+        run_vector_sweep = sweep_module._run_vector_sweep
 
         def fake_run(
-            _command: list[str],
+            command: list[str],
             *,
             check: bool,
             env: dict[str, str],
@@ -1018,42 +1432,37 @@ class TestRoutingBenchmarkRegression(unittest.TestCase):
         ):
             self.assertTrue(check)
             self.assertIn("HUMEMDB_THREADS", env)
+            self.assertIn("vector_search_real_sweep.py", command[1])
+            self.assertEqual(
+                command[command.index("--dataset") + 1],
+                "stackoverflow-xlarge",
+            )
+            self.assertEqual(command[command.index("--filter-sources") + 1], "auto")
+            self.assertIn("--output-json", command)
+            self.assertIn("--intermediate-dir", command)
             self.assertIsNotNone(stdout)
             self.assertTrue(text)
             payload = {
-                "acceptance_thresholds": {"indexed_recall": 0.95},
+                "dataset": "stackoverflow-xlarge",
                 "grid": {
-                    "rows": [2_000, 10_000],
-                    "dimensions": [256],
+                    "rows": [10_000],
                     "top_k": [10],
+                    "filter_sources": ["none", "questions"],
                 },
                 "scenario_summaries": [
                     {
-                        "rows": 2_000,
-                        "dimensions": 256,
-                        "top_k": 10,
-                        "filtered_candidate_count": 200,
-                        "lancedb_strategy": "default",
-                        "latency_mean_ms": {
-                            "numpy_f32_filtered": 0.20,
-                            "lancedb_indexed_filtered": 0.35,
-                        },
-                        "recalls_at_k": {"lancedb_indexed_filtered": 0.99},
-                    },
-                    {
+                        "dataset": "stackoverflow-xlarge",
                         "rows": 10_000,
-                        "dimensions": 256,
                         "top_k": 10,
-                        "filtered_candidate_count": 500,
-                        "lancedb_strategy": "tuned",
+                        "filter_source": None,
                         "latency_mean_ms": {
-                            "numpy_f32_filtered": 0.80,
-                            "lancedb_indexed_filtered": 0.45,
+                            "numpy_f32_global": 3.0,
+                            "lancedb_indexed_global": 2.0,
                         },
-                        "recalls_at_k": {"lancedb_indexed_filtered": 0.97},
-                    },
+                        "recalls_at_k": {"lancedb_indexed_global": 0.97},
+                    }
                 ],
-                "overall": {"scenario_count": 2},
+                "overall": {"scenario_count": 1},
             }
             return mock.Mock(stdout=json.dumps(payload))
 
@@ -1068,23 +1477,198 @@ class TestRoutingBenchmarkRegression(unittest.TestCase):
                 side_effect=fake_run,
             ):
                 vector_summary = run_vector_sweep(
-                    scales=(2_000, 10_000),
-                    dimensions_grid=(256,),
+                    scales=(10_000,),
                     top_k_grid=(10,),
-                    queries=8,
+                    queries=100,
                     warmup=0,
-                    repetitions=1,
+                    repetitions=3,
+                    dataset="stackoverflow-xlarge",
+                    filter_sources="auto",
+                    sample_mode="stratified",
                     output_dir=output_dir,
                     env=env,
                 )
 
-            self.assertEqual(vector_summary["benchmark"], "vector_routing_sweep")
-            self.assertEqual(
-                vector_summary["grid"]["rows"],
-                [2_000, 10_000],
-            )
-            self.assertEqual(
-                [scenario["rows"] for scenario in vector_summary["scenario_summaries"]],
-                [2_000, 10_000],
-            )
+            self.assertEqual(vector_summary["benchmark"], "vector_real_routing_sweep")
+            self.assertEqual(vector_summary["dataset"], "stackoverflow-xlarge")
             self.assertTrue((output_dir / "vector_summary.json").exists())
+
+    def test_real_vector_sweep_persists_intermediate_outputs(self) -> None:
+        sweep_module = _load_module(
+            "scripts/benchmarks/vector_search_real_sweep.py",
+            "humemdb_vector_search_real_sweep_persist",
+        )
+        build_payload = sweep_module._build_payload
+        persist_outputs = sweep_module._persist_outputs
+
+        report = {
+            "dataset": "stackoverflow-xlarge",
+            "rows": 10_000,
+            "dimensions": 384,
+            "top_k": 10,
+            "filter_source": "questions",
+            "sample_mode": "stratified",
+            "filtered_candidate_count": 4_000,
+            "lancedb_index_settings": {"index_type": "IVF_PQ"},
+            "lancedb_search_settings": {},
+            "latency_summaries_ms": {
+                "numpy_f32_filtered": {"mean": 2.0},
+                "lancedb_indexed_filtered": {"mean": 1.5},
+            },
+            "recalls_at_k": {"lancedb_indexed_filtered": 0.96},
+            "stage_timings_ms": {"dataset_load": 10.0},
+            "memory_snapshots_bytes": {
+                "after_dataset_load": 10,
+                "after_numpy_exact_build": 12,
+                "after_lancedb_table_create": 20,
+                "after_lancedb_index_build": 30,
+                "after_numpy_exact_search": 31,
+                "after_lancedb_indexed_search": 32,
+                "after_query_and_recall": 33,
+            },
+            "memory_stage_deltas_bytes": {
+                "after_numpy_exact_build": 2,
+                "after_lancedb_table_create": 8,
+                "after_lancedb_index_build": 10,
+                "after_numpy_exact_search": 1,
+                "after_lancedb_indexed_search": 1,
+                "after_query_and_recall": 1,
+            },
+        }
+
+        payload = build_payload(
+            dataset="stackoverflow-xlarge",
+            rows_grid=[10_000],
+            top_k_grid=[10],
+            queries=100,
+            warmup=1,
+            repetitions=3,
+            metric="cosine",
+            sample_mode="stratified",
+            filter_sources=[None, "questions"],
+            lancedb_index_type="IVF_PQ",
+            reports=[report],
+        )
+
+        scenario = payload["scenario_summaries"][0]
+        self.assertEqual(scenario["recall_target_at_k"], 0.95)
+        self.assertEqual(scenario["recall_target_scale"], "100K")
+        self.assertTrue(scenario["meets_recall_target"])
+        self.assertEqual(payload["overall"]["met_recall_target_count"], 1)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_json = Path(tmpdir) / "summary.json"
+            intermediate_dir = Path(tmpdir) / "scenarios"
+            persist_outputs(
+                payload=payload,
+                output_json=output_json,
+                intermediate_dir=intermediate_dir,
+                latest_reports=[report],
+            )
+
+            self.assertTrue(output_json.exists())
+            self.assertTrue(
+                (
+                    intermediate_dir
+                    / "stackoverflow-xlarge_rows10000_topk10_questions.json"
+                ).exists()
+            )
+
+    def test_real_vector_sweep_expands_multi_top_k_payloads(self) -> None:
+        sweep_module = _load_module(
+            "scripts/benchmarks/vector_search_real_sweep.py",
+            "humemdb_vector_search_real_sweep_multi_topk",
+        )
+        run_command = sweep_module._run_benchmark_command
+
+        payload = {
+            "dataset": "msmarco-10m",
+            "rows": 100_000,
+            "dimensions": 1024,
+            "metric": "cosine",
+            "queries": 100,
+            "filter_source": None,
+            "sample_mode": "auto",
+            "filtered_candidate_count": None,
+            "available_filter_sources": ["all"],
+            "cold_tier_ingest_path": (
+                "SQLite -> DuckDB (scan) -> Arrow batches -> LanceDB -> build index"
+            ),
+            "lancedb_thread_limit": "8",
+            "arrow_cpu_count": 8,
+            "numpy_thread_limit": 8,
+            "lancedb_index_settings": {"index_type": "IVF_PQ"},
+            "lancedb_search_settings": {},
+            "stage_timings_ms": {"lancedb_index_build": 1.0},
+            "artifact_sizes_bytes": {"numpy_f32_matrix": 0, "query_batch_f32": 0},
+            "memory_snapshots_bytes": {},
+            "memory_stage_deltas_bytes": {},
+            "memory_peak_rss_bytes": 0,
+            "top_k_grid": [10, 50],
+            "top_k_reports": [
+                {
+                    "top_k": 10,
+                    "latency_summaries_ms": {"lancedb_indexed_global": {"mean": 1.0}},
+                    "recalls_at_k": {"lancedb_indexed_global": 0.95},
+                },
+                {
+                    "top_k": 50,
+                    "latency_summaries_ms": {"lancedb_indexed_global": {"mean": 2.0}},
+                    "recalls_at_k": {"lancedb_indexed_global": 0.97},
+                },
+            ],
+        }
+
+        with mock.patch.object(sweep_module.subprocess, "run") as run_mock:
+            run_mock.return_value = mock.Mock(stdout=json.dumps(payload))
+            reports = run_command(
+                dataset="msmarco-10m",
+                rows=100_000,
+                top_k_grid=[10, 50],
+                queries=100,
+                warmup=1,
+                repetitions=3,
+                metric="cosine",
+                sample_mode="auto",
+                filter_source=None,
+                lancedb_index_type="IVF_PQ",
+                lancedb_num_partitions=None,
+                lancedb_num_sub_vectors=None,
+                lancedb_num_bits=8,
+                lancedb_sample_rate=256,
+                lancedb_max_iterations=50,
+                lancedb_nprobes=None,
+                lancedb_refine_factor=None,
+            )
+
+        self.assertEqual([report["top_k"] for report in reports], [10, 50])
+
+    def test_real_vector_memory_stage_deltas_are_derived_in_order(self) -> None:
+        benchmark_module = _load_module(
+            "scripts/benchmarks/vector_search_real.py",
+            "humemdb_vector_search_real_memory_deltas",
+        )
+        memory_stage_deltas = benchmark_module._memory_stage_deltas
+
+        deltas = memory_stage_deltas(
+            {
+                "start": 100,
+                "after_dataset_load": 140,
+                "after_numpy_exact_build": 180,
+                "after_lancedb_table_create": 220,
+                "after_lancedb_index_build": 260,
+                "after_numpy_exact_search": 290,
+                "after_lancedb_indexed_search": 310,
+                "after_query_and_recall": 315,
+                "final": 300,
+            }
+        )
+
+        self.assertIsNone(deltas["start"])
+        self.assertEqual(deltas["after_dataset_load"], 40)
+        self.assertEqual(deltas["after_numpy_exact_build"], 40)
+        self.assertEqual(deltas["after_lancedb_table_create"], 40)
+        self.assertEqual(deltas["after_lancedb_index_build"], 40)
+        self.assertEqual(deltas["after_numpy_exact_search"], 30)
+        self.assertEqual(deltas["after_lancedb_indexed_search"], 20)
+        self.assertEqual(deltas["after_query_and_recall"], 5)

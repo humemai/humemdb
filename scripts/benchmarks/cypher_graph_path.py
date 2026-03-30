@@ -8,40 +8,28 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 from typing import Callable
 
-from humemdb import HumemDB as _HumemDB
+from humemdb import HumemDB
 from humemdb.cypher import MatchNodePlan
 from humemdb.cypher import MatchRelationshipPlan
 from humemdb.cypher import _bind_plan_values
 from humemdb.cypher import _compile_match_plan
-from humemdb.cypher import ensure_graph_schema
+from humemdb.cypher import _ensure_graph_schema
 from humemdb.cypher import parse_cypher
-
-if TYPE_CHECKING:
-    from humemdb.db import HumemDB
-
-
-def _sqlite_engine(db: HumemDB):
-    return getattr(db, "_sqlite")
-
-
-def _duckdb_engine(db: HumemDB):
-    return getattr(db, "_duckdb")
 
 
 _GRAPH_INDEX_SET_SQL: dict[str, tuple[str, ...]] = {
     "baseline": (),
-    "phase11-node-prop-covering": (
+    "node-prop-covering": (
         "CREATE INDEX IF NOT EXISTS idx_graph_node_props_node_key_value_type_value "
         "ON graph_node_properties(node_id, key, value_type, value)",
     ),
-    "phase11-edge-prop-covering": (
+    "edge-prop-covering": (
         "CREATE INDEX IF NOT EXISTS idx_graph_edge_props_edge_key_value_type_value "
         "ON graph_edge_properties(edge_id, key, value_type, value)",
     ),
-    "phase11-targeted": (
+    "targeted-covering": (
         "CREATE INDEX IF NOT EXISTS idx_graph_node_props_node_key_value_type_value "
         "ON graph_node_properties(node_id, key, value_type, value)",
     ),
@@ -153,8 +141,9 @@ def _apply_graph_index_set(db: HumemDB, *, index_set: str) -> None:
     except KeyError as exc:
         raise ValueError(f"Unknown graph index set {index_set!r}.") from exc
 
+    sqlite = db._sqlite
     for statement in statements:
-        _sqlite_engine(db).execute(statement)
+        sqlite.execute(statement)
 
 
 def _workloads(dataset: GraphDataset) -> dict[str, QueryWorkload]:
@@ -556,7 +545,7 @@ def _seed_graph(
     tag_fanout: int,
     batch_size: int,
 ) -> tuple[GraphDataset, float]:
-    ensure_graph_schema(_sqlite_engine(db))
+    _ensure_graph_schema(db._sqlite)
     dataset = _dataset_counts(nodes, fanout, tag_fanout)
 
     started = time.perf_counter()
@@ -754,11 +743,12 @@ def _insert_nodes(
     node_rows: list[tuple[int, str]],
     property_rows: list[tuple[int, str, str | None, str]],
 ) -> None:
-    _sqlite_engine(db).executemany(
+    sqlite = db._sqlite
+    sqlite.executemany(
         "INSERT INTO graph_nodes (id, label) VALUES (?, ?)",
         node_rows,
     )
-    _sqlite_engine(db).executemany(
+    sqlite.executemany(
         (
             "INSERT INTO graph_node_properties (node_id, key, value, value_type) "
             "VALUES (?, ?, ?, ?)"
@@ -888,14 +878,15 @@ def _flush_edge_batches(
     edge_rows: list[tuple[int, str, int, int]],
     property_rows: list[tuple[int, str, str | None, str]],
 ) -> None:
-    _sqlite_engine(db).executemany(
+    sqlite = db._sqlite
+    sqlite.executemany(
         (
             "INSERT INTO graph_edges (id, type, from_node_id, to_node_id) "
             "VALUES (?, ?, ?, ?)"
         ),
         edge_rows,
     )
-    _sqlite_engine(db).executemany(
+    sqlite.executemany(
         (
             "INSERT INTO graph_edge_properties (edge_id, key, value, value_type) "
             "VALUES (?, ?, ?, ?)"
@@ -998,7 +989,7 @@ def _sqlite_plan_summary(
 ) -> dict[str, int | bool | list[str]]:
     """Return a summarized SQLite EXPLAIN QUERY PLAN payload for one compiled query."""
 
-    explain_rows = _sqlite_engine(db).execute(
+    explain_rows = db._sqlite.execute(
         f"EXPLAIN QUERY PLAN {sql}",
         params,
     ).rows
@@ -1045,10 +1036,9 @@ def main() -> None:
     }
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        sqlite_path = Path(tmpdir) / "graph.sqlite3"
-        duckdb_path = Path(tmpdir) / "graph.duckdb"
+        base_path = Path(tmpdir) / "graph"
 
-        with _HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+        with HumemDB(base_path) as db:
             dataset, seed_seconds = _seed_graph(
                 db,
                 nodes=args.nodes,
@@ -1106,7 +1096,7 @@ def main() -> None:
                 compiled = _compile_workload(workload)
 
                 sqlite_sql_summary = _time_callable(
-                    lambda compiled=compiled: _sqlite_engine(db).execute(
+                    lambda compiled=compiled: db._sqlite.execute(
                         compiled.sql,
                         compiled.params,
                     ),
@@ -1114,7 +1104,7 @@ def main() -> None:
                     repetitions=args.repetitions,
                 )
                 duckdb_sql_summary = _time_callable(
-                    lambda compiled=compiled: _duckdb_engine(db).execute(
+                    lambda compiled=compiled: db._duckdb.execute(
                         compiled.sql,
                         compiled.params,
                     ),

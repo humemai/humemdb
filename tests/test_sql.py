@@ -1,21 +1,21 @@
 from __future__ import annotations
 
-import importlib
 import tempfile
 import unittest
 from pathlib import Path
 
-from tests.support import humemdb_class, translate_sql
+from humemdb import HumemDB, translate_sql
+from humemdb.db import _plan_query
 
 
 class TestSQL(unittest.TestCase):
     def test_translate_sql_rewrites_postgres_cast_for_sqlite(self) -> None:
-        translated = translate_sql()("SELECT 1::INTEGER AS value", target="sqlite")
+        translated = translate_sql("SELECT 1::INTEGER AS value", target="sqlite")
 
         self.assertEqual(translated, "SELECT CAST(1 AS INTEGER) AS value")
 
     def test_translate_sql_rewrites_ilike_for_sqlite(self) -> None:
-        translated = translate_sql()(
+        translated = translate_sql(
             "SELECT 'Alice' ILIKE 'aLiCe' AS matched",
             target="sqlite",
         )
@@ -27,26 +27,25 @@ class TestSQL(unittest.TestCase):
 
     def test_translate_sql_rejects_invalid_postgres_like_sql(self) -> None:
         with self.assertRaises(ValueError):
-            translate_sql()("SELECT FROM", target="sqlite")
+            translate_sql("SELECT FROM", target="sqlite")
 
     def test_translate_sql_rejects_unsupported_statement_kind(self) -> None:
         with self.assertRaisesRegex(ValueError, "HumemSQL v0 only supports"):
-            translate_sql()("DROP TABLE users", target="sqlite")
+            translate_sql("DROP TABLE users", target="sqlite")
 
     def test_translate_sql_rejects_recursive_cte(self) -> None:
         with self.assertRaisesRegex(ValueError, "recursive CTEs"):
-            translate_sql()(
+            translate_sql(
                 "WITH RECURSIVE t(n) AS (SELECT 1) SELECT * FROM t",
                 target="sqlite",
             )
 
     def test_query_infers_sql_by_default_for_create_table(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 created = db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
                 )
@@ -64,12 +63,11 @@ class TestSQL(unittest.TestCase):
                 self.assertEqual(result.rows, (("Alice",),))
 
     def test_query_keeps_multiline_sql_create_table_on_sql_path(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 created = db.query(
                     "create\n table users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
                 )
@@ -77,25 +75,22 @@ class TestSQL(unittest.TestCase):
                 self.assertEqual(created.query_type, "sql")
 
     def test_sqlite_query_accepts_postgres_cast_syntax(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 result = db.query("SELECT 1::INTEGER AS value")
 
                 self.assertEqual(result.columns, ("value",))
                 self.assertEqual(result.rows, ((1,),))
 
     def test_duckdb_query_accepts_postgres_cast_syntax(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE TABLE events (id INTEGER PRIMARY KEY, kind TEXT NOT NULL)"
                 )
@@ -119,24 +114,22 @@ class TestSQL(unittest.TestCase):
                 self.assertEqual(result.rows, (("click", 2), ("view", 1)))
 
     def test_sqlite_query_accepts_postgres_ilike_syntax(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 result = db.query("SELECT 'Alice' ILIKE 'aLiCe' AS matched")
 
                 self.assertEqual(result.columns, ("matched",))
                 self.assertTrue(bool(result.rows[0][0]))
 
     def test_sql_query_supports_named_params_with_dollar_placeholders(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
                 )
@@ -156,23 +149,20 @@ class TestSQL(unittest.TestCase):
                 self.assertEqual(result.rows, ((1, "Alice"),))
 
     def test_sqlite_query_rejects_unsupported_humemsql_statement(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 with self.assertRaisesRegex(ValueError, "HumemSQL v0 only supports"):
                     db.query("DROP TABLE users")
 
     def test_duckdb_allows_read_only_cte_queries(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE TABLE metrics (name TEXT NOT NULL, value INTEGER NOT NULL)"
                 )
@@ -197,13 +187,11 @@ class TestSQL(unittest.TestCase):
                 self.assertEqual(result.rows, (("queries", 3), ("writes", 1)))
 
     def test_sql_query_supports_case_when_exists_runtime_shape(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, deleted_at TEXT)"
                 )
@@ -243,13 +231,11 @@ class TestSQL(unittest.TestCase):
                 self.assertEqual(result.rows, ((1, "buyer"), (2, "prospect")))
 
     def test_sql_query_supports_cte_and_union_runtime_shape(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+            with HumemDB(base_path) as db:
                 result = db.query(
                     (
                         "WITH regional_totals AS ("
@@ -266,13 +252,11 @@ class TestSQL(unittest.TestCase):
                 self.assertEqual(result.rows, (("west", 3), ("east", 2)))
 
     def test_sql_query_supports_cte_multi_join_runtime_shape(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE TABLE users ("
                     "id INTEGER PRIMARY KEY, segment TEXT, country_id INTEGER)"
@@ -365,13 +349,11 @@ class TestSQL(unittest.TestCase):
                 )
 
     def test_sql_query_supports_windowed_rank_cte_runtime_shape(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     (
                         "CREATE TABLE events ("
@@ -461,19 +443,14 @@ class TestSQL(unittest.TestCase):
     def test_internal_duckdb_sql_write_guard_still_rejects_non_read_only_plans(
         self,
     ) -> None:
-        HumemDB = humemdb_class()
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
-
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
                 )
-                plan = plan_query(
+                plan = _plan_query(
                     "INSERT INTO users (name) VALUES ($name)",
                     route="duckdb",
                     params={"name": "Alice"},
@@ -483,15 +460,14 @@ class TestSQL(unittest.TestCase):
                     ValueError,
                     "does not allow direct writes to DuckDB",
                 ):
-                    getattr(db, "_execute_sql_query_plan")(plan)
+                    db._execute_sql_query_plan(plan)
 
     def test_sql_rejects_positional_params(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
                 )
@@ -503,12 +479,11 @@ class TestSQL(unittest.TestCase):
                     )
 
     def test_sql_batch_rejects_positional_params(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
                 )

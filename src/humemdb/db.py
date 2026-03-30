@@ -21,6 +21,8 @@ frontend surfaces will expand.
 
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import contextmanager
 import csv
 from dataclasses import dataclass
 from functools import lru_cache
@@ -48,6 +50,7 @@ from ._vector_runtime import (
     ResolvedVectorCandidates as _ResolvedVectorCandidates,
     CandidateVectorQueryResult as _CandidateVectorQueryResult,
     CandidateVectorQueryPlan as _CandidateVectorQueryPlan,
+    CypherVectorQueryPlan as _CypherVectorQueryPlan,
     SQLVectorQueryPlan as _SQLVectorQueryPlan,
     TargetNamespacedVectorRow as _TargetNamespacedVectorRow,
     VECTOR_RESULT_COLUMNS as _VECTOR_RESULT_COLUMNS,
@@ -59,15 +62,26 @@ from ._vector_runtime import (
     plan_sql_vector_write_batch as _vectorrt_plan_sql_vector_write_batch,
 )
 from .cypher import (
-    CypherPlanShape as _CypherPlanShape,
+    CreateNodePlan,
+    CreateRelationshipFromSeparatePatternsPlan,
+    CreateRelationshipPlan,
+    DeleteNodePlan,
+    DeleteRelationshipPlan,
+    MatchCreateRelationshipBetweenNodesPlan,
+    MatchCreateRelationshipPlan,
+    SetNodePlan,
+    SetRelationshipPlan,
+    _CypherPlanShape as _CypherPlanShape,
     GraphPlan as _GraphPlan,
+    _bind_plan_values,
     _encode_property_value,
-    analyze_cypher_plan,
-    ensure_graph_schema,
-    execute_cypher,
+    _analyze_cypher_plan,
+    _ensure_graph_schema,
+    _execute_cypher,
+    _normalize_params,
 )
 from .cypher_frontend import lower_cypher_text as _lower_generated_cypher_text
-from .engines import DuckDBEngine, SQLiteEngine
+from .engines import _DuckDBEngine, _SQLiteEngine
 from .sql import (
     SQLTranslationPlan as _SQLTranslationPlan,
     translate_sql,
@@ -82,14 +96,32 @@ from .types import (
     Route,
 )
 from .vector import (
-    ExactVectorIndex,
+    _ExactVectorIndex,
+    IndexedVectorRuntimeConfig,
+    _LanceDBVectorIndex,
+    _NamedVectorIndex,
     VectorMetric,
-    ensure_vector_schema,
-    insert_vectors as insert_vector_rows,
-    load_filtered_vector_target_keys,
-    load_vector_matrix,
-    upsert_vectors,
-    upsert_vector_metadata,
+    _VectorSearchMatch,
+    _clear_vector_tombstones,
+    _delete_named_vector_index,
+    _delete_cold_vector_snapshot_metadata,
+    _delete_target_namespaced_vectors,
+    _ensure_vector_schema,
+    _insert_vectors,
+    _list_cold_vector_snapshot_metadata,
+    _load_cold_vector_snapshot_metadata,
+    _list_named_vector_indexes,
+    _load_named_vector_index,
+    _load_named_vector_index_for_metric,
+    _load_filtered_vector_target_keys,
+    _load_vector_tombstones,
+    _load_vector_matrix,
+    _merge_vector_search_matches,
+    _drop_lancedb_table,
+    _upsert_cold_vector_snapshot_metadata,
+    _upsert_named_vector_index,
+    _upsert_vectors,
+    _upsert_vector_metadata,
 )
 
 logger = logging.getLogger(__name__)
@@ -104,15 +136,205 @@ _CYPHER_UNWIND_PREFIX = re.compile(r"^UNWIND\b")
 _CYPHER_CALL_PREFIX = re.compile(r"^CALL\b")
 _CYPHER_RETURN_PREFIX = re.compile(r"^RETURN\b")
 _CYPHER_REMOVE_PREFIX = re.compile(r"^REMOVE\b")
+_VECTOR_INDEX_NAME_RE = r"[A-Za-z_][A-Za-z0-9_]*"
+_VECTOR_INDEX_METRIC_RE = r"cosine|dot|l2"
+_VECTOR_SQL_IDENTIFIER_RE = r"[A-Za-z_][A-Za-z0-9_\.]*"
+_PGVECTOR_OPERATOR_CLASS_RE = r"vector_cosine_ops|vector_ip_ops|vector_l2_ops"
+_SQL_CREATE_VECTOR_INDEX_RE = re.compile(
+    (
+        r"^\s*CREATE\s+INDEX\s+"
+        r"(?:(?P<if_not_exists>IF\s+NOT\s+EXISTS)\s+)?"
+        rf"(?P<name>{_VECTOR_INDEX_NAME_RE})\s+"
+        r"ON\s+VECTOR\s*\(\s*embedding\s*\)"
+        r"(?:\s+WITH\s*\(\s*metric\s*=\s*"
+        rf"(?P<metric>{_VECTOR_INDEX_METRIC_RE})\s*\))?\s*;?\s*$"
+    ),
+    re.IGNORECASE,
+)
+_SQL_CREATE_VECTOR_INDEX_PGVECTOR_RE = re.compile(
+    (
+        r"^\s*CREATE\s+INDEX\s+"
+        r"(?:(?P<if_not_exists>IF\s+NOT\s+EXISTS)\s+)?"
+        rf"(?P<name>{_VECTOR_INDEX_NAME_RE})\s+"
+        r"ON\s+"
+        rf"(?P<table>{_VECTOR_SQL_IDENTIFIER_RE})\s+"
+        r"USING\s+(?P<method>ivfpq)\s*"
+        r"\(\s*"
+        rf"(?P<column>{_VECTOR_SQL_IDENTIFIER_RE})\s+"
+        rf"(?P<operator_class>{_PGVECTOR_OPERATOR_CLASS_RE})\s*"
+        r"\)"
+        r"(?:\s+WITH\s*\(.*\))?\s*;?\s*$"
+    ),
+    re.IGNORECASE | re.DOTALL,
+)
+_SQL_REFRESH_VECTOR_INDEX_RE = re.compile(
+    rf"^\s*REFRESH\s+VECTOR\s+INDEX\s+(?P<name>{_VECTOR_INDEX_NAME_RE})\s*;?\s*$",
+    re.IGNORECASE,
+)
+_SQL_REBUILD_VECTOR_INDEX_RE = re.compile(
+    rf"^\s*REBUILD\s+VECTOR\s+INDEX\s+(?P<name>{_VECTOR_INDEX_NAME_RE})\s*;?\s*$",
+    re.IGNORECASE,
+)
+_SQL_DROP_VECTOR_INDEX_RE = re.compile(
+    (
+        r"^\s*DROP\s+INDEX\s+"
+        r"(?:(?P<if_exists>IF\s+EXISTS)\s+)?"
+        rf"(?P<name>{_VECTOR_INDEX_NAME_RE})\s*;?\s*$"
+    ),
+    re.IGNORECASE,
+)
+_SQL_ALTER_VECTOR_INDEX_PAUSE_MAINTENANCE_RE = re.compile(
+    (
+        r"^\s*ALTER\s+VECTOR\s+INDEX\s+"
+        rf"(?P<name>{_VECTOR_INDEX_NAME_RE})\s+"
+        r"PAUSE\s+MAINTENANCE\s*;?\s*$"
+    ),
+    re.IGNORECASE,
+)
+_SQL_ALTER_VECTOR_INDEX_RESUME_MAINTENANCE_RE = re.compile(
+    (
+        r"^\s*ALTER\s+VECTOR\s+INDEX\s+"
+        rf"(?P<name>{_VECTOR_INDEX_NAME_RE})\s+"
+        r"RESUME\s+MAINTENANCE\s*;?\s*$"
+    ),
+    re.IGNORECASE,
+)
+_SQL_LIST_VECTOR_INDEXES_RE = re.compile(
+    r"^\s*SELECT\s+\*\s+FROM\s+humemdb_vector_indexes\s*;?\s*$",
+    re.IGNORECASE,
+)
+_CYPHER_CREATE_VECTOR_INDEX_RE = re.compile(
+    (
+        r"^\s*CREATE\s+VECTOR\s+INDEX\s+"
+        r"(?:(?P<if_not_exists>IF\s+NOT\s+EXISTS)\s+)?"
+        rf"(?P<name>{_VECTOR_INDEX_NAME_RE})"
+        r"(?:\s+FOR\s+"
+        rf"(?P<metric>{_VECTOR_INDEX_METRIC_RE}))?\s*;?\s*$"
+    ),
+    re.IGNORECASE,
+)
+_CYPHER_CREATE_VECTOR_INDEX_NEO4J_RE = re.compile(
+    (
+        r"^\s*CREATE\s+VECTOR\s+INDEX\s+"
+        rf"(?P<name>{_VECTOR_INDEX_NAME_RE})\s+"
+        r"(?:(?P<if_not_exists>IF\s+NOT\s+EXISTS)\s+)?"
+        r"FOR\s*\(\s*"
+        rf"(?P<alias>{_VECTOR_INDEX_NAME_RE})\s*:\s*"
+        rf"(?P<label>{_VECTOR_INDEX_NAME_RE})\s*"
+        r"\)\s+ON\s*\(?\s*"
+        rf"(?P<property_alias>{_VECTOR_INDEX_NAME_RE})\."
+        rf"(?P<property>{_VECTOR_INDEX_NAME_RE})\s*\)?"
+        r"(?:\s+OPTIONS\s*\{(?P<options>.*)\})?\s*;?\s*$"
+    ),
+    re.IGNORECASE | re.DOTALL,
+)
+_CYPHER_SHOW_VECTOR_INDEXES_RE = re.compile(
+    r"^\s*SHOW\s+VECTOR\s+INDEXES\s*;?\s*$",
+    re.IGNORECASE,
+)
+_CYPHER_DROP_VECTOR_INDEX_RE = re.compile(
+    (
+        r"^\s*DROP\s+VECTOR\s+INDEX\s+"
+        r"(?:(?P<if_exists>IF\s+EXISTS)\s+)?"
+        rf"(?P<name>{_VECTOR_INDEX_NAME_RE})\s*;?\s*$"
+    ),
+    re.IGNORECASE,
+)
+_CYPHER_REFRESH_VECTOR_INDEX_RE = re.compile(
+    rf"^\s*REFRESH\s+VECTOR\s+INDEX\s+(?P<name>{_VECTOR_INDEX_NAME_RE})\s*;?\s*$",
+    re.IGNORECASE,
+)
+_CYPHER_REBUILD_VECTOR_INDEX_RE = re.compile(
+    rf"^\s*REBUILD\s+VECTOR\s+INDEX\s+(?P<name>{_VECTOR_INDEX_NAME_RE})\s*;?\s*$",
+    re.IGNORECASE,
+)
+_CYPHER_ALTER_VECTOR_INDEX_PAUSE_MAINTENANCE_RE = re.compile(
+    (
+        r"^\s*ALTER\s+VECTOR\s+INDEX\s+"
+        rf"(?P<name>{_VECTOR_INDEX_NAME_RE})\s+"
+        r"PAUSE\s+MAINTENANCE\s*;?\s*$"
+    ),
+    re.IGNORECASE,
+)
+_CYPHER_ALTER_VECTOR_INDEX_RESUME_MAINTENANCE_RE = re.compile(
+    (
+        r"^\s*ALTER\s+VECTOR\s+INDEX\s+"
+        rf"(?P<name>{_VECTOR_INDEX_NAME_RE})\s+"
+        r"RESUME\s+MAINTENANCE\s*;?\s*$"
+    ),
+    re.IGNORECASE,
+)
 
-DirectVectorMetadata: TypeAlias = Mapping[str, str | int | float | bool | None]
-DirectVectorRow: TypeAlias = (
+_DirectVectorMetadata: TypeAlias = Mapping[str, str | int | float | bool | None]
+_DirectVectorRow: TypeAlias = (
     Sequence[float]
     | tuple[int, Sequence[float]]
     | Mapping[str, object]
 )
-GraphImportPropertyType: TypeAlias = Literal["string", "integer", "real", "boolean"]
-WorkloadKind: TypeAlias = Literal[
+_GraphImportPropertyType: TypeAlias = Literal[
+    "string", "integer", "real", "boolean"
+]
+
+
+@dataclass(frozen=True, slots=True)
+class _ColdVectorRefreshResult:
+    """Completed background cold-snapshot build ready for promotion."""
+
+    metric: VectorMetric
+    epoch: int
+    index: _LanceDBVectorIndex
+    item_indexes: dict[tuple[str, str, int], int]
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedPublicVectorIndex:
+    """Resolved public vector index reference for lifecycle/admin operations."""
+
+    name: str
+    metric: VectorMetric
+    exists: bool
+
+
+def _build_cold_vector_refresh_result(
+    *,
+    metric: VectorMetric,
+    epoch: int,
+    item_ids: Any,
+    matrix: Any,
+    lance_path: Path,
+    config: Any,
+) -> _ColdVectorRefreshResult:
+    """Build one cold LanceDB snapshot from an immutable matrix copy."""
+
+    index = _LanceDBVectorIndex.from_matrix(
+        item_ids=item_ids,
+        matrix=matrix,
+        metric=metric,
+        lance_path=lance_path,
+        config=config,
+    )
+    item_indexes = {
+        (str(item_id[0]), str(item_id[1]), int(item_id[2])): index_value
+        for index_value, item_id in enumerate(index.item_ids.tolist())
+    }
+    return _ColdVectorRefreshResult(
+        metric=metric,
+        epoch=epoch,
+        index=index,
+        item_indexes=item_indexes,
+    )
+
+
+_VECTOR_RUNTIME_BACKGROUND_ERRORS = (
+    ImportError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+
+_WorkloadKind: TypeAlias = Literal[
     "transactional_read",
     "transactional_write",
     "analytical_read",
@@ -124,9 +346,17 @@ WorkloadKind: TypeAlias = Literal[
 
 @dataclass(frozen=True, slots=True)
 class _WorkloadProfile:
-    """Explainable workload classification derived from validated query structure."""
+    """Explainable workload classification derived from validated query structure.
 
-    kind: WorkloadKind
+    Attributes:
+        kind: Small routing-oriented workload family such as transactional read,
+            analytical read, graph read, or graph write.
+        is_read_only: Whether execution should avoid write-capable routes.
+        preferred_route: Engine route that currently best matches the workload.
+        reason: Human-readable explanation of why this classification won.
+    """
+
+    kind: _WorkloadKind
     is_read_only: bool
     preferred_route: Route
     reason: str
@@ -134,7 +364,14 @@ class _WorkloadProfile:
 
 @dataclass(frozen=True, slots=True)
 class _RouteDecision:
-    """Internal record of how one query route was selected."""
+    """Internal record of how one query route was selected.
+
+    Attributes:
+        selected_route: Concrete engine route chosen for execution.
+        source: Whether the route came from internal automatic routing or an
+            explicit internal override.
+        reason: Human-readable explanation for the final route choice.
+    """
 
     selected_route: Route
     source: Literal["automatic", "explicit"]
@@ -143,7 +380,19 @@ class _RouteDecision:
 
 @dataclass(frozen=True, slots=True)
 class _OlapRoutingRule:
-    """One benchmark-calibrated SQL shape family that should route to DuckDB."""
+    """One benchmark-calibrated SQL shape family that should route to DuckDB.
+
+    Attributes:
+        min_join_count: Minimum JOIN count required by the rule.
+        min_aggregate_count: Minimum aggregate-expression count required.
+        min_cte_count: Minimum CTE count required.
+        min_window_count: Minimum window-function count required.
+        min_exists_count: Minimum correlated `EXISTS` count required.
+        require_group_by: Whether the rule requires `GROUP BY`.
+        require_distinct: Whether the rule requires `DISTINCT`.
+        require_order_by_or_limit: Whether the rule requires `ORDER BY` or
+            `LIMIT`.
+    """
 
     min_join_count: int = 0
     min_aggregate_count: int = 0
@@ -157,7 +406,20 @@ class _OlapRoutingRule:
 
 @dataclass(frozen=True, slots=True)
 class _OlapRoutingThresholds:
-    """Benchmark-calibrated thresholds for admitting SQL OLAP reads to DuckDB."""
+    """Benchmark-calibrated thresholds for admitting SQL OLAP reads to DuckDB.
+
+    Attributes:
+        benchmark_calibrated: Whether these thresholds came from benchmark output
+            rather than conservative built-ins.
+        min_join_count: Default minimum JOIN count for DuckDB admission.
+        min_aggregate_count: Default minimum aggregate-expression count.
+        min_cte_count: Default minimum CTE count.
+        min_window_count: Default minimum window-function count.
+        require_order_by_or_limit: Whether broader SQL reads must also contain
+            `ORDER BY` or `LIMIT`.
+        rules: Optional more specific shape families layered on top of the coarse
+            thresholds.
+    """
 
     benchmark_calibrated: bool
     min_join_count: int = 0
@@ -175,7 +437,25 @@ _DEFAULT_OLAP_ROUTING_THRESHOLDS = _OlapRoutingThresholds(
 
 @dataclass(frozen=True, slots=True)
 class _QueryExecutionPlan:
-    """Thin internal plan for one public `db.query(...)` call."""
+    """Thin internal plan for one public `db.query(...)` call.
+
+    Attributes:
+        text: Original user query text.
+        route: Engine route selected for execution.
+        route_decision: Explanation of how the route was chosen.
+        query_type: Normalized internal query kind.
+        params: Normalized query parameters.
+        workload: Routing-oriented workload classification.
+        translated_text: Backend SQL emitted from the SQL translation layer when
+            applicable.
+        sql_plan: Lightweight SQL planning metadata when the query is SQL.
+        cypher_plan: Parsed Cypher plan when the query is Cypher.
+        cypher_shape: Lightweight Cypher shape metadata for routing and reporting.
+        vector_plan: Lowered vector candidate-query plan when the text expresses a
+            language-level vector search.
+        sql_is_read_only: Cached SQL read-only flag when the query went through the
+            SQL planner.
+    """
 
     text: str
     route: Route
@@ -193,7 +473,15 @@ class _QueryExecutionPlan:
 
 @dataclass(frozen=True, slots=True)
 class _BatchExecutionPlan:
-    """Thin internal plan for one public `executemany(...)` call."""
+    """Thin internal plan for one public `executemany(...)` call.
+
+    Attributes:
+        text: Original SQL statement text.
+        route: Engine route selected for execution.
+        params_seq: Normalized batch parameter sequence.
+        workload: Routing-oriented workload classification.
+        translated_text: Backend SQL emitted from the SQL translation layer.
+    """
 
     text: str
     route: Route
@@ -244,9 +532,10 @@ class HumemDB:
     """Main in-process entry point for HumemDB.
 
     Args:
-        sqlite_path: Path to the canonical SQLite database.
-        duckdb_path: Optional path to a DuckDB database file. If omitted, DuckDB uses
-            an in-memory database.
+        base_path: Public-facing base path for HumemDB storage. HumemDB derives
+            companion files as `<base>.sqlite3` and `<base>.duckdb` internally.
+            Missing parent directories and backing database files are created on first
+            use; existing database files are reopened.
         preload_vectors: Optional eager vector preload flag. Use `False` to keep the
             exact vector set lazy-loaded or `True` to warm it on open when vector data
             already exists.
@@ -258,23 +547,69 @@ class HumemDB:
 
     def __init__(
         self,
-        sqlite_path: str | Path,
-        duckdb_path: str | Path | None = None,
+        base_path: str | Path,
         *,
         preload_vectors: bool = False,
     ) -> None:
-        """Open the embedded engines and initialize lazy runtime state.
+        """Create or open HumemDB from one public-facing base path.
 
         Args:
-            sqlite_path: Path to the canonical SQLite database file.
-            duckdb_path: Optional path to a DuckDB file. When omitted, DuckDB uses an
-                in-memory database.
+            base_path: Public-facing base path for HumemDB storage. HumemDB derives
+                companion files as `<base>.sqlite3` and `<base>.duckdb` internally.
+                Missing parent directories and backing database files are created on
+                first use; existing database files are reopened.
             preload_vectors: Whether to warm the exact vector cache immediately when
                 vector storage already exists.
         """
 
-        self.sqlite_path = str(sqlite_path)
-        self.duckdb_path = None if duckdb_path is None else str(duckdb_path)
+        self._sqlite_path = ""
+        self._duckdb_path = None
+        self._graph_schema_ready = False
+        self._vector_schema_ready = False
+        self._vector_matrix_cache = None
+        self._vector_item_index_cache = None
+        self._vector_namespace_index_cache = None
+        self._vector_index_cache = {}
+        self._vector_runtime_config = IndexedVectorRuntimeConfig()
+        self._recent_vector_keys_cache = None
+        self._cold_vector_index_cache = {}
+        self._cold_vector_item_index_cache = {}
+        self._vector_tombstone_cache = None
+        self._cold_vector_refresh_executor = None
+        self._cold_vector_refresh_futures = {}
+        self._cold_vector_refresh_epoch = {}
+        self._cold_vector_snapshot_generation = {}
+
+        base = Path(base_path)
+        sqlite_path = base.with_suffix(".sqlite3")
+        duckdb_path = base.with_suffix(".duckdb")
+
+        self._initialize_runtime(
+            sqlite_path=sqlite_path,
+            duckdb_path=duckdb_path,
+            preload_vectors=preload_vectors,
+        )
+
+    def _initialize_runtime(
+        self,
+        *,
+        sqlite_path: Path,
+        duckdb_path: Path | None,
+        preload_vectors: bool,
+    ) -> None:
+        """Initialize embedded engines and lazy runtime state.
+
+        Args:
+            sqlite_path: Canonical SQLite backing path derived from the public base
+                path.
+            duckdb_path: Optional DuckDB backing path derived from the public base
+                path.
+            preload_vectors: Whether to warm the exact vector cache immediately when
+                vector tables already exist.
+        """
+
+        self._sqlite_path = str(sqlite_path)
+        self._duckdb_path = None if duckdb_path is None else str(duckdb_path)
         self._graph_schema_ready = False
         self._vector_schema_ready = False
         self._vector_matrix_cache: tuple[Any, Any] | None = None
@@ -282,47 +617,36 @@ class HumemDB:
         self._vector_namespace_index_cache: (
             dict[tuple[str, str], tuple[int, ...]] | None
         ) = None
-        self._vector_index_cache: dict[VectorMetric, ExactVectorIndex] = {}
+        self._vector_index_cache: dict[VectorMetric, _ExactVectorIndex] = {}
+        self._vector_runtime_config = IndexedVectorRuntimeConfig()
+        self._recent_vector_keys_cache: tuple[tuple[str, str, int], ...] | None = None
+        self._cold_vector_index_cache: dict[VectorMetric, _LanceDBVectorIndex] = {}
+        self._cold_vector_item_index_cache: (
+            dict[VectorMetric, dict[tuple[str, str, int], int]]
+        ) = {}
+        self._vector_tombstone_cache: (
+            dict[VectorMetric, set[tuple[str, str, int]]] | None
+        ) = None
+        self._cold_vector_refresh_executor: ThreadPoolExecutor | None = None
+        self._cold_vector_refresh_futures: (
+            dict[VectorMetric, Future[_ColdVectorRefreshResult]]
+        ) = {}
+        self._cold_vector_refresh_epoch: dict[VectorMetric, int] = {}
+        self._cold_vector_snapshot_generation: dict[VectorMetric, int] = {}
 
-        sqlite_path_obj = Path(self.sqlite_path)
+        sqlite_path_obj = Path(self._sqlite_path)
         sqlite_path_obj.parent.mkdir(parents=True, exist_ok=True)
 
-        self._sqlite = SQLiteEngine(str(sqlite_path_obj))
-        self._duckdb = DuckDBEngine(self.duckdb_path)
+        self._sqlite = _SQLiteEngine(str(sqlite_path_obj))
+        self._duckdb = _DuckDBEngine(self._duckdb_path)
         self._duckdb.attach_sqlite(str(sqlite_path_obj))
         logger.debug(
             "HumemDB initialized with sqlite_path=%s duckdb_path=%s",
-            self.sqlite_path,
-            self.duckdb_path,
+            self._sqlite_path,
+            self._duckdb_path,
         )
         if preload_vectors:
             self.preload_vectors()
-
-    @classmethod
-    def open(
-        cls,
-        base_path: str | Path,
-        *,
-        preload_vectors: bool = False,
-    ) -> HumemDB:
-        """Open HumemDB using one public-facing base path.
-
-        This derives companion storage files as `<base>.sqlite3` and
-        `<base>.duckdb`, which keeps public examples from teaching backend-specific
-        filenames directly.
-
-        Args:
-            base_path: Base path stem for the paired on-disk database files.
-            preload_vectors: Whether to warm the exact vector cache immediately when
-                vector storage already exists.
-        """
-
-        base = Path(base_path)
-        return cls(
-            sqlite_path=base.with_suffix(".sqlite3"),
-            duckdb_path=base.with_suffix(".duckdb"),
-            preload_vectors=preload_vectors,
-        )
 
     def query(
         self,
@@ -341,7 +665,8 @@ class HumemDB:
                 Vector intent is inferred from the query text itself. HumemSQL uses
                 PostgreSQL-like `ORDER BY embedding <->|<=>|<#> $query LIMIT ...`
                 forms. HumemCypher uses Neo4j-like
-                `SEARCH ... VECTOR INDEX embedding FOR $query LIMIT ...` forms.
+                `SEARCH ... VECTOR INDEX user_embedding_idx FOR $query LIMIT ...`
+                forms.
 
         Returns:
             A normalized `QueryResult`.
@@ -352,6 +677,10 @@ class HumemDB:
                 is planned for DuckDB.
         """
 
+        admin_result = self._execute_vector_index_admin_query(text=text, params=params)
+        if admin_result is not None:
+            return admin_result
+
         plan = _plan_query(
             text,
             route=None,
@@ -361,7 +690,7 @@ class HumemDB:
 
     def insert_vectors(
         self,
-        rows: Sequence[DirectVectorRow],
+        rows: Sequence[_DirectVectorRow],
     ) -> tuple[int, ...]:
         """Insert direct vectors into the canonical SQLite store.
 
@@ -388,21 +717,50 @@ class HumemDB:
             self._sqlite,
             rows,
         )
-        insert_vector_rows(
+        _insert_vectors(
             self._sqlite,
             normalized_rows,
             target="direct",
             namespace="",
         )
         if metadata_rows:
-            upsert_vector_metadata(
+            _upsert_vector_metadata(
                 self._sqlite,
                 metadata_rows,
                 target="direct",
                 namespace="",
             )
-        self._invalidate_vector_cache()
+        self._invalidate_exact_vector_cache()
+        self._maybe_schedule_cold_vector_refresh_after_write()
         return assigned_ids
+
+    def delete_vectors(
+        self,
+        target_ids: Sequence[int],
+    ) -> int:
+        """Delete direct vectors from the canonical SQLite store.
+
+        Args:
+            target_ids: Direct-vector ids to remove.
+
+        Returns:
+            Number of direct vectors deleted.
+        """
+
+        if not target_ids:
+            return 0
+
+        self._ensure_vector_schema()
+        deleted = _delete_target_namespaced_vectors(
+            self._sqlite,
+            tuple(("direct", "", int(target_id)) for target_id in target_ids),
+        )
+        if deleted == 0:
+            return 0
+        self._invalidate_exact_vector_cache()
+        self._clear_vector_tombstone_cache()
+        self._maybe_schedule_cold_vector_refresh_after_write()
+        return deleted
 
     def search_vectors(
         self,
@@ -412,7 +770,7 @@ class HumemDB:
         metric: VectorMetric = "cosine",
         filters: Mapping[str, str | int | float | bool | None] | None = None,
     ) -> QueryResult:
-        """Search the current SQLite-backed vector set with exact NumPy search.
+        """Search the current SQLite-backed vector set with the internal runtime.
 
         Args:
             query: Query embedding to rank against the current vector set.
@@ -425,9 +783,11 @@ class HumemDB:
             `(target, namespace, target_id, score)` rows.
 
         Notes:
-            `search_vectors(...)` is the public direct-vector search surface. Vector
-            search over SQL rows or graph nodes now lives on language-level
-            SQL and Cypher query syntax through `query(...)`.
+            `search_vectors(...)` is the public direct-vector search surface. Small
+            candidate sets stay on the exact NumPy path; larger ones can use the
+            internal indexed hot/cold runtime while SQLite remains the
+            canonical store. Vector search over SQL rows or graph nodes lives on
+            language-level SQL and Cypher query syntax through `query(...)`.
         """
 
         direct_plan = _plan_direct_vector_search(
@@ -437,12 +797,160 @@ class HumemDB:
             filters=filters,
         )
         resolved_candidates = self._resolve_direct_vector_search(direct_plan)
-        return self._execute_exact_vector_search(
+        return self._execute_vector_search(
             query=direct_plan.query,
             top_k=direct_plan.top_k,
             metric=direct_plan.metric,
             resolved_candidates=resolved_candidates,
         )
+
+    def inspect_vector_index(
+        self,
+        *,
+        metric: VectorMetric = "cosine",
+        index_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Return public lifecycle state for one metric-backed vector index."""
+
+        resolved = self._resolve_public_vector_index(
+            metric=metric,
+            index_name=index_name,
+        )
+        if resolved.exists:
+            state = self._public_vector_index_state(metric=resolved.metric)
+        else:
+            state = dict(self._inspect_vector_runtime(metric=resolved.metric))
+            state["name"] = resolved.name
+            state["enabled"] = True
+            state["maintenance_paused"] = False
+            state["state"] = (
+                "ready" if state["cold_snapshot_rows"] > 0 else "exact_only"
+            )
+        return state
+
+    def build_vector_index(
+        self,
+        *,
+        metric: VectorMetric = "cosine",
+        index_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Enable and build one named metric-backed cold vector index."""
+
+        resolved = self._resolve_public_vector_index(
+            metric=metric,
+            index_name=index_name,
+        )
+        self._ensure_public_vector_index_name(
+            metric=resolved.metric,
+            name=resolved.name,
+        )
+        self._build_public_vector_index(metric=resolved.metric, only_if_missing=True)
+        return self._public_vector_index_state(metric=resolved.metric)
+
+    def refresh_vector_index(
+        self,
+        *,
+        metric: VectorMetric = "cosine",
+        index_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Force one named metric-backed cold vector index to rebuild."""
+
+        resolved = self._resolve_public_vector_index(
+            metric=metric,
+            index_name=index_name,
+        )
+        self._ensure_public_vector_index_name(
+            metric=resolved.metric,
+            name=resolved.name,
+        )
+        self._build_public_vector_index(metric=resolved.metric, only_if_missing=False)
+        return self._public_vector_index_state(metric=resolved.metric)
+
+    def pause_vector_index(
+        self,
+        *,
+        metric: VectorMetric = "cosine",
+        index_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Pause automatic cold-tier maintenance for one named vector index."""
+
+        resolved = self._resolve_public_vector_index(
+            metric=metric,
+            index_name=index_name,
+        )
+        self._set_vector_index_maintenance_paused(
+            metric=resolved.metric,
+            index_name=resolved.name,
+            paused=True,
+        )
+        return self._public_vector_index_state(metric=resolved.metric)
+
+    def resume_vector_index(
+        self,
+        *,
+        metric: VectorMetric = "cosine",
+        index_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Resume automatic cold-tier maintenance for one named vector index."""
+
+        resolved = self._resolve_public_vector_index(
+            metric=metric,
+            index_name=index_name,
+        )
+        self._set_vector_index_maintenance_paused(
+            metric=resolved.metric,
+            index_name=resolved.name,
+            paused=False,
+        )
+        return self._public_vector_index_state(metric=resolved.metric)
+
+    @contextmanager
+    def deferred_vector_index_maintenance(
+        self,
+        *,
+        metric: VectorMetric = "cosine",
+        index_name: str | None = None,
+    ) -> Iterator[HumemDB]:
+        """Pause automatic cold-tier maintenance within one ingest block."""
+
+        self.pause_vector_index(metric=metric, index_name=index_name)
+        try:
+            yield self
+        finally:
+            self.resume_vector_index(metric=metric, index_name=index_name)
+
+    def drop_vector_index(
+        self,
+        *,
+        metric: VectorMetric = "cosine",
+        index_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Disable and remove one named metric-backed cold vector index."""
+
+        resolved = self._resolve_public_vector_index(
+            metric=metric,
+            index_name=index_name,
+        )
+        self._drop_public_vector_index(
+            metric=resolved.metric,
+            index_name=resolved.name,
+            disable=True,
+        )
+        return self._public_vector_index_state(metric=resolved.metric)
+
+    def await_vector_index_refresh(
+        self,
+        *,
+        metric: VectorMetric = "cosine",
+        index_name: str | None = None,
+    ) -> bool:
+        """Wait for one pending background refresh on the metric, if any."""
+
+        resolved = self._resolve_public_vector_index(
+            metric=metric,
+            index_name=index_name,
+        )
+        return self._await_vector_runtime_background_refresh(metric=resolved.metric)
 
     def set_vector_metadata(
         self,
@@ -462,7 +970,7 @@ class HumemDB:
             return 0
 
         self._ensure_vector_schema()
-        upsert_vector_metadata(
+        _upsert_vector_metadata(
             self._sqlite,
             rows,
             target="direct",
@@ -493,6 +1001,926 @@ class HumemDB:
 
         return self._vector_matrix_cache is not None
 
+    def _vector_index_enabled(self, *, metric: VectorMetric) -> bool:
+        """Return whether public cold-index lifecycle is enabled for one metric."""
+
+        self._ensure_vector_schema()
+        named_index = _load_named_vector_index_for_metric(self._sqlite, metric=metric)
+        if named_index is None:
+            return True
+        return named_index.enabled
+
+    def _vector_index_maintenance_paused(self, *, metric: VectorMetric) -> bool:
+        """Return whether automatic cold-tier maintenance is paused."""
+
+        self._ensure_vector_schema()
+        named_index = _load_named_vector_index_for_metric(self._sqlite, metric=metric)
+        if named_index is None:
+            return False
+        return named_index.maintenance_paused
+
+    def _set_vector_index_enabled(
+        self,
+        *,
+        metric: VectorMetric,
+        index_name: str | None = None,
+        enabled: bool,
+    ) -> None:
+        """Persist whether one metric's cold vector index should stay enabled."""
+
+        self._ensure_vector_schema()
+        resolved = self._resolve_public_vector_index(
+            metric=metric,
+            index_name=index_name,
+        )
+        _upsert_named_vector_index(
+            self._sqlite,
+            name=resolved.name,
+            metric=resolved.metric,
+            enabled=enabled,
+        )
+
+    def _set_vector_index_maintenance_paused(
+        self,
+        *,
+        metric: VectorMetric,
+        index_name: str | None = None,
+        paused: bool,
+    ) -> None:
+        """Persist whether automatic cold-tier refresh should stay paused."""
+
+        self._ensure_vector_schema()
+        resolved = self._resolve_public_vector_index(
+            metric=metric,
+            index_name=index_name,
+        )
+        _upsert_named_vector_index(
+            self._sqlite,
+            name=resolved.name,
+            metric=resolved.metric,
+            enabled=self._vector_index_enabled(metric=resolved.metric),
+            maintenance_paused=paused,
+        )
+        if paused and resolved.metric in self._cold_vector_refresh_futures:
+            self._cold_vector_refresh_epoch[resolved.metric] = (
+                self._cold_vector_refresh_epoch.get(resolved.metric, 0) + 1
+            )
+
+    def _resolve_public_vector_index(
+        self,
+        *,
+        metric: VectorMetric = "cosine",
+        index_name: str | None = None,
+    ) -> _ResolvedPublicVectorIndex:
+        """Resolve one public vector index reference by name or metric."""
+
+        self._ensure_vector_schema()
+        if index_name is not None:
+            named_index = _load_named_vector_index(self._sqlite, name=index_name)
+            if named_index is not None:
+                return _ResolvedPublicVectorIndex(
+                    name=named_index.name,
+                    metric=named_index.metric,
+                    exists=True,
+                )
+            return _ResolvedPublicVectorIndex(
+                name=index_name,
+                metric=metric,
+                exists=False,
+            )
+
+        named_index = _load_named_vector_index_for_metric(self._sqlite, metric=metric)
+        if named_index is not None:
+            return _ResolvedPublicVectorIndex(
+                name=named_index.name,
+                metric=named_index.metric,
+                exists=True,
+            )
+        raise ValueError(
+            "HumemDB vector index lifecycle methods now require an explicit "
+            f"index_name for metric {metric!r} until that named index exists."
+        )
+
+    def _ensure_public_vector_index_name(
+        self,
+        *,
+        metric: VectorMetric,
+        name: str,
+    ) -> _NamedVectorIndex:
+        """Persist the public name bound to one metric-backed vector index."""
+
+        self._ensure_vector_schema()
+        existing_by_name = _load_named_vector_index(self._sqlite, name=name)
+        if existing_by_name is not None:
+            if existing_by_name.metric != metric:
+                raise ValueError(
+                    f"Vector index {name!r} already targets metric "
+                    f"{existing_by_name.metric!r}, not {metric!r}."
+                )
+            _upsert_named_vector_index(
+                self._sqlite,
+                name=name,
+                metric=metric,
+                enabled=True,
+                maintenance_paused=existing_by_name.maintenance_paused,
+            )
+            refreshed = _load_named_vector_index(self._sqlite, name=name)
+            if refreshed is None:
+                raise AssertionError("Named vector index registration did not persist")
+            return refreshed
+
+        existing_for_metric = _load_named_vector_index_for_metric(
+            self._sqlite,
+            metric=metric,
+        )
+        if existing_for_metric is not None and existing_for_metric.name != name:
+            runtime_state = self._inspect_vector_runtime(metric=metric)
+            if existing_for_metric.enabled or runtime_state["cold_snapshot_rows"] > 0:
+                raise ValueError(
+                    f"Vector metric {metric!r} is already managed by index "
+                    f"{existing_for_metric.name!r}; drop it before creating {name!r}."
+                )
+            _delete_named_vector_index(self._sqlite, name=existing_for_metric.name)
+
+        maintenance_paused = (
+            existing_for_metric.maintenance_paused
+            if existing_for_metric is not None
+            else False
+        )
+        _upsert_named_vector_index(
+            self._sqlite,
+            name=name,
+            metric=metric,
+            enabled=True,
+            maintenance_paused=maintenance_paused,
+        )
+        created = _load_named_vector_index(self._sqlite, name=name)
+        if created is None:
+            raise AssertionError("Named vector index registration did not persist")
+        return created
+
+    def _metric_for_cypher_vector_query_index(self, index_name: str) -> VectorMetric:
+        """Resolve the metric used by one Cypher vector query index reference."""
+
+        resolved = self._resolve_public_vector_index(index_name=index_name)
+        return resolved.metric
+
+    def _current_cold_vector_snapshot_data(
+        self,
+        *,
+        require_threshold: bool,
+    ) -> tuple[Any, Any] | None:
+        """Return the current cold-tier matrix snapshot for one metric."""
+
+        if not self._has_vector_table():
+            return None
+
+        hot_keys = set(
+            self._recent_vector_keys(limit=self._vector_runtime_config.hot_max_rows)
+        )
+        item_ids, matrix = self._load_vector_matrix()
+        cold_indexes = [
+            index
+            for index, item_id in enumerate(item_ids.tolist())
+            if (str(item_id[0]), str(item_id[1]), int(item_id[2])) not in hot_keys
+        ]
+        if not cold_indexes:
+            return None
+        if require_threshold:
+            min_training_rows = (
+                self._vector_runtime_config.lancedb.minimum_rows_for_training()
+            )
+            required_rows = self._vector_runtime_config.cold_index_required_rows(
+                hot_rows=len(hot_keys),
+                minimum_training_rows=min_training_rows,
+            )
+            if len(cold_indexes) < required_rows:
+                return None
+        return item_ids[cold_indexes], matrix[cold_indexes]
+
+    def _drop_public_vector_index(
+        self,
+        *,
+        metric: VectorMetric,
+        index_name: str | None = None,
+        disable: bool,
+    ) -> None:
+        """Remove one metric's live cold snapshot and optionally disable rebuilds."""
+
+        self._ensure_vector_schema()
+        if disable:
+            resolved = self._resolve_public_vector_index(
+                metric=metric,
+                index_name=index_name,
+            )
+            _upsert_named_vector_index(
+                self._sqlite,
+                name=resolved.name,
+                metric=metric,
+                enabled=False,
+                maintenance_paused=False,
+            )
+
+        known_tables: set[str] = set()
+        cached = self._cold_vector_index_cache.pop(metric, None)
+        if cached is not None:
+            known_tables.add(cached.config.table_name)
+        self._cold_vector_item_index_cache.pop(metric, None)
+
+        metadata = _load_cold_vector_snapshot_metadata(self._sqlite, metric=metric)
+        if metadata is not None:
+            known_tables.add(metadata.table_name)
+        _delete_cold_vector_snapshot_metadata(self._sqlite, metric=metric)
+        _clear_vector_tombstones(self._sqlite, metric=metric)
+        self._clear_vector_tombstone_cache()
+
+        refresh_future = self._cold_vector_refresh_futures.get(metric)
+        if refresh_future is not None:
+            self._cold_vector_refresh_epoch[metric] = (
+                self._cold_vector_refresh_epoch.get(metric, 0) + 1
+            )
+
+        for table_name in known_tables:
+            try:
+                _drop_lancedb_table(
+                    lance_path=self._vector_lancedb_path(),
+                    table_name=table_name,
+                )
+            except _VECTOR_RUNTIME_BACKGROUND_ERRORS:
+                logger.debug(
+                    "Ignoring failed LanceDB cleanup table=%s",
+                    table_name,
+                    exc_info=True,
+                )
+
+    def _build_public_vector_index(
+        self,
+        *,
+        metric: VectorMetric,
+        only_if_missing: bool,
+    ) -> None:
+        """Enable and build or rebuild one metric's cold vector index synchronously."""
+
+        self._ensure_vector_schema()
+        self._set_vector_index_enabled(metric=metric, enabled=True)
+        self._maybe_promote_cold_vector_refresh(metric)
+        if only_if_missing:
+            existing = self._cold_vector_index_cache.get(metric)
+            if existing is None:
+                existing = self._load_persisted_cold_vector_index(metric=metric)
+            if existing is not None:
+                return
+
+        snapshot_data = self._current_cold_vector_snapshot_data(
+            require_threshold=True,
+        )
+        if snapshot_data is None:
+            self._drop_public_vector_index(metric=metric, disable=False)
+            return
+
+        item_ids, matrix = snapshot_data
+        refresh_result = _build_cold_vector_refresh_result(
+            metric=metric,
+            epoch=self._cold_vector_refresh_epoch.get(metric, 0),
+            item_ids=item_ids,
+            matrix=matrix,
+            lance_path=self._vector_lancedb_path(),
+            config=self._vector_runtime_config.lancedb.with_table_name(
+                self._cold_vector_table_name(metric=metric)
+            ),
+        )
+        previous = self._cold_vector_index_cache.get(metric)
+        if previous is None:
+            previous = self._load_persisted_cold_vector_index(metric=metric)
+        self._store_live_cold_snapshot(metric=metric, index=refresh_result.index)
+        _clear_vector_tombstones(self._sqlite, metric=metric)
+        self._clear_vector_tombstone_cache()
+        if (
+            previous is not None
+            and previous.config.table_name
+            != refresh_result.index.config.table_name
+        ):
+            try:
+                _drop_lancedb_table(
+                    lance_path=self._vector_lancedb_path(),
+                    table_name=previous.config.table_name,
+                )
+            except _VECTOR_RUNTIME_BACKGROUND_ERRORS:
+                logger.debug(
+                    "Ignoring failed cleanup for prior cold snapshot table=%s",
+                    previous.config.table_name,
+                    exc_info=True,
+                )
+
+    def _public_vector_index_state(
+        self,
+        *,
+        metric: VectorMetric,
+    ) -> dict[str, Any]:
+        """Return public lifecycle state for one metric's vector index."""
+
+        state = dict(self._inspect_vector_runtime(metric=metric))
+        enabled = self._vector_index_enabled(metric=metric)
+        maintenance_paused = self._vector_index_maintenance_paused(metric=metric)
+        resolved = self._resolve_public_vector_index(metric=metric)
+        state["name"] = resolved.name
+        state["enabled"] = enabled
+        state["maintenance_paused"] = maintenance_paused
+        if not enabled:
+            state["state"] = "disabled"
+        elif state["refresh_in_progress"]:
+            state["state"] = "refreshing"
+        elif state["cold_snapshot_rows"] > 0:
+            state["state"] = "ready"
+        else:
+            state["state"] = "exact_only"
+        return state
+
+    def _public_vector_index_rows(self) -> tuple[tuple[Any, ...], ...]:
+        """Return tabular public lifecycle rows for all visible vector indexes."""
+
+        self._ensure_vector_schema()
+        metrics = {
+            metadata.metric
+            for metadata in _list_cold_vector_snapshot_metadata(self._sqlite)
+        }
+        metrics.update(
+            named_index.metric
+            for named_index in _list_named_vector_indexes(self._sqlite)
+            if named_index.enabled
+        )
+        rows: list[tuple[Any, ...]] = []
+        for metric in sorted(metrics):
+            state = self._public_vector_index_state(metric=cast(VectorMetric, metric))
+            if not state["enabled"]:
+                continue
+            rows.append(
+                (
+                    state["name"],
+                    state["metric"],
+                    state["enabled"],
+                    state["state"],
+                    state["total_rows"],
+                    state["hot_rows"],
+                    state["cold_rows"],
+                    state["cold_snapshot_rows"],
+                    state["pending_cold_rows"],
+                    state["tombstone_rows"],
+                    state["refresh_trigger_rows"],
+                    state["refresh_in_progress"],
+                    state["cold_snapshot_table"],
+                    state["cold_snapshot_generation"],
+                    state["maintenance_paused"],
+                )
+            )
+        return tuple(rows)
+
+    def _vector_index_query_result(
+        self,
+        *,
+        rows: tuple[tuple[Any, ...], ...],
+        query_type: QueryType,
+    ) -> QueryResult:
+        """Return a normalized admin result for public vector index lifecycle APIs."""
+
+        return QueryResult(
+            rows=rows,
+            columns=(
+                "name",
+                "metric",
+                "enabled",
+                "state",
+                "total_rows",
+                "hot_rows",
+                "cold_rows",
+                "cold_snapshot_rows",
+                "pending_cold_rows",
+                "tombstone_rows",
+                "refresh_trigger_rows",
+                "refresh_in_progress",
+                "cold_snapshot_table",
+                "cold_snapshot_generation",
+                "maintenance_paused",
+            ),
+            route="sqlite",
+            query_type=query_type,
+            rowcount=len(rows),
+        )
+
+    def _execute_vector_index_admin_query(
+        self,
+        *,
+        text: str,
+        params: QueryParameters,
+    ) -> QueryResult | None:
+        """Execute one narrow public SQL/Cypher vector-index admin command."""
+
+        if params not in (None, {}):
+            return None
+
+        if _SQL_LIST_VECTOR_INDEXES_RE.match(text):
+            return self._vector_index_query_result(
+                rows=self._public_vector_index_rows(),
+                query_type="sql",
+            )
+
+        match = _SQL_CREATE_VECTOR_INDEX_PGVECTOR_RE.match(text)
+        if match is None:
+            match = _SQL_CREATE_VECTOR_INDEX_RE.match(text)
+        if match is not None:
+            index_name = match.group("name")
+            operator_class = match.groupdict().get("operator_class")
+            metric = _create_vector_index_metric(match.groupdict().get("metric"))
+            if operator_class is not None:
+                metric = _pgvector_operator_class_metric(operator_class)
+            existing = _load_named_vector_index(self._sqlite, name=index_name)
+            if existing is not None and (
+                existing.enabled
+                or metric in self._cold_vector_index_cache
+                or _load_cold_vector_snapshot_metadata(
+                    self._sqlite,
+                    metric=existing.metric,
+                )
+                is not None
+            ):
+                if match.group("if_not_exists") is None:
+                    raise ValueError(f"Vector index {index_name!r} already exists.")
+                return self._vector_index_query_result(
+                    rows=(self._vector_index_state_tuple(metric=existing.metric),),
+                    query_type="sql",
+                )
+            self._ensure_public_vector_index_name(metric=metric, name=index_name)
+            self._build_public_vector_index(metric=metric, only_if_missing=True)
+            return self._vector_index_query_result(
+                rows=(self._vector_index_state_tuple(metric=metric),),
+                query_type="sql",
+            )
+
+        match = _SQL_REFRESH_VECTOR_INDEX_RE.match(text)
+        if match is not None:
+            index_name = match.group("name")
+            resolved = self._resolve_public_vector_index(index_name=index_name)
+            if not resolved.exists:
+                raise ValueError(_unknown_vector_index_name_message(index_name))
+            self.refresh_vector_index(metric=resolved.metric, index_name=resolved.name)
+            return self._vector_index_query_result(
+                rows=(self._vector_index_state_tuple(metric=resolved.metric),),
+                query_type="sql",
+            )
+
+        match = _SQL_REBUILD_VECTOR_INDEX_RE.match(text)
+        if match is not None:
+            index_name = match.group("name")
+            resolved = self._resolve_public_vector_index(index_name=index_name)
+            if not resolved.exists:
+                raise ValueError(_unknown_vector_index_name_message(index_name))
+            self.build_vector_index(metric=resolved.metric, index_name=resolved.name)
+            return self._vector_index_query_result(
+                rows=(self._vector_index_state_tuple(metric=resolved.metric),),
+                query_type="sql",
+            )
+
+        match = _SQL_ALTER_VECTOR_INDEX_PAUSE_MAINTENANCE_RE.match(text)
+        if match is not None:
+            index_name = match.group("name")
+            resolved = self._resolve_public_vector_index(index_name=index_name)
+            if not resolved.exists:
+                raise ValueError(_unknown_vector_index_name_message(index_name))
+            self.pause_vector_index(metric=resolved.metric, index_name=resolved.name)
+            return self._vector_index_query_result(
+                rows=(self._vector_index_state_tuple(metric=resolved.metric),),
+                query_type="sql",
+            )
+
+        match = _SQL_ALTER_VECTOR_INDEX_RESUME_MAINTENANCE_RE.match(text)
+        if match is not None:
+            index_name = match.group("name")
+            resolved = self._resolve_public_vector_index(index_name=index_name)
+            if not resolved.exists:
+                raise ValueError(_unknown_vector_index_name_message(index_name))
+            self.resume_vector_index(metric=resolved.metric, index_name=resolved.name)
+            return self._vector_index_query_result(
+                rows=(self._vector_index_state_tuple(metric=resolved.metric),),
+                query_type="sql",
+            )
+
+        match = _SQL_DROP_VECTOR_INDEX_RE.match(text)
+        if match is not None:
+            index_name = match.group("name")
+            resolved = self._resolve_public_vector_index(index_name=index_name)
+            if not resolved.exists:
+                raise ValueError(_unknown_vector_index_name_message(index_name))
+            state = self._public_vector_index_state(metric=resolved.metric)
+            if not state["enabled"] and state["cold_snapshot_rows"] == 0:
+                if match.group("if_exists") is None:
+                    raise ValueError(f"Vector index {index_name!r} does not exist.")
+                return self._vector_index_query_result(
+                    rows=(self._vector_index_state_tuple(metric=resolved.metric),),
+                    query_type="sql",
+                )
+            self._drop_public_vector_index(
+                metric=resolved.metric,
+                index_name=resolved.name,
+                disable=True,
+            )
+            return self._vector_index_query_result(
+                rows=(self._vector_index_state_tuple(metric=resolved.metric),),
+                query_type="sql",
+            )
+
+        if _CYPHER_SHOW_VECTOR_INDEXES_RE.match(text):
+            return self._vector_index_query_result(
+                rows=self._public_vector_index_rows(),
+                query_type="cypher",
+            )
+
+        match = _CYPHER_CREATE_VECTOR_INDEX_NEO4J_RE.match(text)
+        if match is None:
+            match = _CYPHER_CREATE_VECTOR_INDEX_RE.match(text)
+        if match is not None:
+            index_name = match.group("name")
+            options = match.groupdict().get("options")
+            metric = _create_vector_index_metric(match.groupdict().get("metric"))
+            if options is not None:
+                metric = _neo4j_vector_similarity_metric(options)
+            existing = _load_named_vector_index(self._sqlite, name=index_name)
+            if existing is not None and (
+                existing.enabled
+                or metric in self._cold_vector_index_cache
+                or _load_cold_vector_snapshot_metadata(
+                    self._sqlite,
+                    metric=existing.metric,
+                )
+                is not None
+            ):
+                if match.group("if_not_exists") is None:
+                    raise ValueError(f"Vector index {index_name!r} already exists.")
+                return self._vector_index_query_result(
+                    rows=(self._vector_index_state_tuple(metric=existing.metric),),
+                    query_type="cypher",
+                )
+            self._ensure_public_vector_index_name(metric=metric, name=index_name)
+            self._build_public_vector_index(metric=metric, only_if_missing=True)
+            return self._vector_index_query_result(
+                rows=(self._vector_index_state_tuple(metric=metric),),
+                query_type="cypher",
+            )
+
+        match = _CYPHER_DROP_VECTOR_INDEX_RE.match(text)
+        if match is not None:
+            index_name = match.group("name")
+            resolved = self._resolve_public_vector_index(index_name=index_name)
+            if not resolved.exists:
+                raise ValueError(_unknown_vector_index_name_message(index_name))
+            state = self._public_vector_index_state(metric=resolved.metric)
+            if not state["enabled"] and state["cold_snapshot_rows"] == 0:
+                if match.group("if_exists") is None:
+                    raise ValueError(f"Vector index {index_name!r} does not exist.")
+                return self._vector_index_query_result(
+                    rows=(self._vector_index_state_tuple(metric=resolved.metric),),
+                    query_type="cypher",
+                )
+            self._drop_public_vector_index(
+                metric=resolved.metric,
+                index_name=resolved.name,
+                disable=True,
+            )
+            return self._vector_index_query_result(
+                rows=(self._vector_index_state_tuple(metric=resolved.metric),),
+                query_type="cypher",
+            )
+
+        match = _CYPHER_REFRESH_VECTOR_INDEX_RE.match(text)
+        if match is not None:
+            index_name = match.group("name")
+            resolved = self._resolve_public_vector_index(index_name=index_name)
+            if not resolved.exists:
+                raise ValueError(_unknown_vector_index_name_message(index_name))
+            self.refresh_vector_index(metric=resolved.metric, index_name=resolved.name)
+            return self._vector_index_query_result(
+                rows=(self._vector_index_state_tuple(metric=resolved.metric),),
+                query_type="cypher",
+            )
+
+        match = _CYPHER_REBUILD_VECTOR_INDEX_RE.match(text)
+        if match is not None:
+            index_name = match.group("name")
+            resolved = self._resolve_public_vector_index(index_name=index_name)
+            if not resolved.exists:
+                raise ValueError(_unknown_vector_index_name_message(index_name))
+            self.build_vector_index(metric=resolved.metric, index_name=resolved.name)
+            return self._vector_index_query_result(
+                rows=(self._vector_index_state_tuple(metric=resolved.metric),),
+                query_type="cypher",
+            )
+
+        match = _CYPHER_ALTER_VECTOR_INDEX_PAUSE_MAINTENANCE_RE.match(text)
+        if match is not None:
+            index_name = match.group("name")
+            resolved = self._resolve_public_vector_index(index_name=index_name)
+            if not resolved.exists:
+                raise ValueError(_unknown_vector_index_name_message(index_name))
+            self.pause_vector_index(metric=resolved.metric, index_name=resolved.name)
+            return self._vector_index_query_result(
+                rows=(self._vector_index_state_tuple(metric=resolved.metric),),
+                query_type="cypher",
+            )
+
+        match = _CYPHER_ALTER_VECTOR_INDEX_RESUME_MAINTENANCE_RE.match(text)
+        if match is not None:
+            index_name = match.group("name")
+            resolved = self._resolve_public_vector_index(index_name=index_name)
+            if not resolved.exists:
+                raise ValueError(_unknown_vector_index_name_message(index_name))
+            self.resume_vector_index(metric=resolved.metric, index_name=resolved.name)
+            return self._vector_index_query_result(
+                rows=(self._vector_index_state_tuple(metric=resolved.metric),),
+                query_type="cypher",
+            )
+
+        return None
+
+    def _vector_index_state_tuple(self, *, metric: VectorMetric) -> tuple[Any, ...]:
+        """Return one public lifecycle state row for the given metric."""
+
+        state = self._public_vector_index_state(metric=metric)
+        return (
+            state["name"],
+            state["metric"],
+            state["enabled"],
+            state["state"],
+            state["total_rows"],
+            state["hot_rows"],
+            state["cold_rows"],
+            state["cold_snapshot_rows"],
+            state["pending_cold_rows"],
+            state["tombstone_rows"],
+            state["refresh_trigger_rows"],
+            state["refresh_in_progress"],
+            state["cold_snapshot_table"],
+            state["cold_snapshot_generation"],
+            state["maintenance_paused"],
+        )
+
+    def _vector_tombstones(self, *, metric: VectorMetric) -> set[tuple[str, str, int]]:
+        """Return cached logical ids deleted since the metric's cold snapshot."""
+
+        cached = self._vector_tombstone_cache
+        if cached is not None:
+            metric_cached = cached.get(metric)
+            if metric_cached is not None:
+                return metric_cached
+        self._ensure_vector_schema()
+        metric_cached = set(_load_vector_tombstones(self._sqlite, metric=metric))
+        if cached is None:
+            cached = {}
+            self._vector_tombstone_cache = cached
+        cached[metric] = metric_cached
+        return metric_cached
+
+    def _clear_vector_tombstone_cache(self) -> None:
+        """Drop the cached tombstone set after vector lifecycle writes."""
+
+        self._vector_tombstone_cache = None
+
+    def _inspect_vector_runtime(
+        self,
+        *,
+        metric: VectorMetric = "cosine",
+    ) -> dict[str, Any]:
+        """Return internal hot/cold runtime state for debugging and tests."""
+
+        self._maybe_promote_cold_vector_refresh(metric)
+        if not self._has_vector_table():
+            return {
+                "metric": metric,
+                "total_rows": 0,
+                "hot_rows": 0,
+                "cold_rows": 0,
+                "cold_snapshot_rows": 0,
+                "pending_cold_rows": 0,
+                "tombstone_rows": 0,
+                "refresh_trigger_rows": 0,
+                "refresh_in_progress": False,
+                "cold_snapshot_table": None,
+                "cold_snapshot_generation": None,
+            }
+
+        hot_keys = set(
+            self._recent_vector_keys(limit=self._vector_runtime_config.hot_max_rows)
+        )
+        item_ids, _ = self._load_vector_matrix()
+        cached = self._cold_vector_index_cache.get(metric)
+        if cached is None:
+            cached = self._load_persisted_cold_vector_index(metric=metric)
+        cached_item_indexes = self._cold_vector_item_index_cache.get(metric, {})
+        tombstones = self._vector_tombstones(metric=metric)
+        cold_rows = 0
+        pending_cold_rows = 0
+        for item_id in item_ids.tolist():
+            key = (str(item_id[0]), str(item_id[1]), int(item_id[2]))
+            if key in hot_keys:
+                continue
+            cold_rows += 1
+            if key not in cached_item_indexes:
+                pending_cold_rows += 1
+
+        refresh_trigger_rows = 0
+        cold_snapshot_rows = 0
+        cold_snapshot_table = None
+        cold_snapshot_generation: int | None = None
+        tombstone_rows = 0
+        if cached is not None:
+            cold_snapshot_rows = int(cached.item_ids.size)
+            cold_snapshot_table = cached.config.table_name
+            metadata = _load_cold_vector_snapshot_metadata(self._sqlite, metric=metric)
+            if metadata is not None:
+                cold_snapshot_generation = metadata.generation
+            tombstone_rows = sum(
+                1 for item_id in tombstones if item_id in cached_item_indexes
+            )
+            refresh_trigger_rows = (
+                self._vector_runtime_config.cold_refresh_required_rows(
+                    cold_rows=cold_snapshot_rows,
+                )
+            )
+
+        refresh_future = self._cold_vector_refresh_futures.get(metric)
+        maintenance_paused = self._vector_index_maintenance_paused(metric=metric)
+        return {
+            "metric": metric,
+            "total_rows": int(item_ids.size),
+            "hot_rows": len(hot_keys),
+            "cold_rows": cold_rows,
+            "cold_snapshot_rows": cold_snapshot_rows,
+            "pending_cold_rows": pending_cold_rows,
+            "tombstone_rows": tombstone_rows,
+            "refresh_trigger_rows": refresh_trigger_rows,
+            "refresh_in_progress": (not maintenance_paused)
+            and refresh_future is not None
+            and not refresh_future.done(),
+            "cold_snapshot_table": cold_snapshot_table,
+            "cold_snapshot_generation": cold_snapshot_generation,
+        }
+
+    def _await_vector_runtime_background_refresh(
+        self,
+        *,
+        metric: VectorMetric = "cosine",
+    ) -> bool:
+        """Wait for one pending cold refresh and promote it when ready."""
+
+        refresh_future = self._cold_vector_refresh_futures.get(metric)
+        if refresh_future is None:
+            return False
+        refresh_future.result()
+        self._maybe_promote_cold_vector_refresh(metric)
+        return True
+
+    def _known_cold_snapshot_metrics(self) -> tuple[VectorMetric, ...]:
+        """Return metrics that currently have a live or persisted cold snapshot."""
+
+        self._ensure_vector_schema()
+        metrics = set(self._cold_vector_index_cache)
+        metrics.update(
+            cast(VectorMetric, metadata.metric)
+            for metadata in _list_cold_vector_snapshot_metadata(self._sqlite)
+        )
+        return tuple(sorted(metrics))
+
+    def _load_persisted_cold_vector_index(
+        self,
+        *,
+        metric: VectorMetric,
+    ) -> _LanceDBVectorIndex | None:
+        """Open one persisted cold ANN snapshot into the in-memory runtime cache."""
+
+        if not self._vector_index_enabled(metric=metric):
+            return None
+
+        cached = self._cold_vector_index_cache.get(metric)
+        if cached is not None:
+            return cached
+
+        metadata = _load_cold_vector_snapshot_metadata(self._sqlite, metric=metric)
+        if metadata is None:
+            return None
+
+        config = self._vector_runtime_config.lancedb.with_table_name(
+            metadata.table_name
+        )
+        try:
+            cached = _LanceDBVectorIndex.from_existing(
+                metric=metric,
+                lance_path=self._vector_lancedb_path(),
+                config=config,
+            )
+        except _VECTOR_RUNTIME_BACKGROUND_ERRORS:
+            logger.exception(
+                "Failed to reopen persisted cold LanceDB snapshot metric=%s",
+                metric,
+            )
+            _delete_cold_vector_snapshot_metadata(self._sqlite, metric=metric)
+            return None
+
+        self._cold_vector_snapshot_generation[metric] = max(
+            self._cold_vector_snapshot_generation.get(metric, 0),
+            metadata.generation,
+        )
+        self._cold_vector_index_cache[metric] = cached
+        self._cold_vector_item_index_cache[metric] = {
+            (str(item_id[0]), str(item_id[1]), int(item_id[2])): index
+            for index, item_id in enumerate(cached.item_ids.tolist())
+        }
+        return cached
+
+    def _cold_refresh_drift(
+        self,
+        *,
+        metric: VectorMetric,
+    ) -> tuple[int, Any, Any] | None:
+        """Return drift rows plus the current cold matrix snapshot for one metric."""
+
+        cached = self._cold_vector_index_cache.get(metric)
+        if cached is None:
+            cached = self._load_persisted_cold_vector_index(metric=metric)
+        if cached is None:
+            return None
+
+        hot_keys = set(
+            self._recent_vector_keys(limit=self._vector_runtime_config.hot_max_rows)
+        )
+        item_ids, matrix = self._load_vector_matrix()
+        cold_item_ids = [
+            (index, item_id)
+            for index, item_id in enumerate(item_ids.tolist())
+            if (str(item_id[0]), str(item_id[1]), int(item_id[2])) not in hot_keys
+        ]
+        cold_indexes = [index for index, _ in cold_item_ids]
+        cached_item_indexes = self._cold_vector_item_index_cache.get(metric, {})
+        pending_insert_rows = sum(
+            1
+            for _, item_id in cold_item_ids
+            if (str(item_id[0]), str(item_id[1]), int(item_id[2]))
+            not in cached_item_indexes
+        )
+        tombstone_rows = sum(
+            1
+            for item_id in self._vector_tombstones(metric=metric)
+            if item_id in cached_item_indexes
+        )
+        return (
+            pending_insert_rows + tombstone_rows,
+            item_ids[cold_indexes],
+            matrix[cold_indexes],
+        )
+
+    def _maybe_schedule_cold_vector_refresh_after_write(self) -> None:
+        """Schedule background refreshes for built cold snapshots after writes."""
+
+        for metric in self._known_cold_snapshot_metrics():
+            if self._vector_index_maintenance_paused(metric=metric):
+                continue
+            drift = self._cold_refresh_drift(metric=metric)
+            if drift is None:
+                continue
+            drift_rows, cold_item_ids, cold_matrix = drift
+            cached = self._cold_vector_index_cache.get(metric)
+            if cached is None:
+                continue
+            refresh_rows = self._vector_runtime_config.cold_refresh_required_rows(
+                cold_rows=int(cached.item_ids.size),
+            )
+            if drift_rows < refresh_rows:
+                continue
+            self._schedule_cold_vector_refresh(
+                metric=metric,
+                item_ids=cold_item_ids.copy(),
+                matrix=cold_matrix.copy(),
+            )
+
+    def _store_live_cold_snapshot(
+        self,
+        *,
+        metric: VectorMetric,
+        index: _LanceDBVectorIndex,
+    ) -> None:
+        """Cache and persist one live cold ANN snapshot for the given metric."""
+
+        self._cold_vector_index_cache[metric] = index
+        self._cold_vector_item_index_cache[metric] = {
+            (str(item_id[0]), str(item_id[1]), int(item_id[2])): item_index
+            for item_index, item_id in enumerate(index.item_ids.tolist())
+        }
+        generation = self._cold_vector_snapshot_generation.get(metric, 0)
+        _upsert_cold_vector_snapshot_metadata(
+            self._sqlite,
+            metric=metric,
+            table_name=index.config.table_name,
+            row_count=int(index.item_ids.size),
+            generation=generation,
+        )
+
     def _ensure_graph_schema(self) -> None:
         """Initialize the SQLite-backed graph tables on first Cypher use."""
 
@@ -500,7 +1928,7 @@ class HumemDB:
             return
 
         logger.debug("Initializing graph schema on first Cypher use")
-        ensure_graph_schema(self._sqlite)
+        _ensure_graph_schema(self._sqlite)
         self._graph_schema_ready = True
 
     def _ensure_vector_schema(self) -> None:
@@ -510,7 +1938,7 @@ class HumemDB:
             return
 
         logger.debug("Initializing vector schema on first vector use")
-        ensure_vector_schema(self._sqlite)
+        _ensure_vector_schema(self._sqlite)
         self._vector_schema_ready = True
 
     def _execute_vector_query(
@@ -534,21 +1962,54 @@ class HumemDB:
         if isinstance(vector_plan, _SQLVectorQueryPlan):
             logger.debug("Routing SQL-backed vector query to exact SQLite/NumPy path")
             public_query_type = "sql"
+            metric = vector_plan.metric
         else:
             logger.debug(
                 "Routing Cypher-backed vector query to exact SQLite/NumPy path"
             )
             public_query_type = "cypher"
+            metric = self._metric_for_cypher_vector_query_index(
+                vector_plan.index_name
+            )
         resolved_candidates = self._resolve_candidate_vector_query(
             vector_plan,
         )
-        return self._execute_exact_vector_search(
+        result = self._execute_vector_search(
             vector_plan.query,
             top_k=vector_plan.top_k,
-            metric=vector_plan.metric,
+            metric=metric,
             resolved_candidates=resolved_candidates,
             public_query_type=public_query_type,
         )
+        if (
+            isinstance(vector_plan, _CypherVectorQueryPlan)
+            and vector_plan.result_mode == "queryNodes"
+        ):
+            ordered_rows = list(result.rows)
+            for field, direction in reversed(vector_plan.order_items):
+                ordered_rows.sort(
+                    key=(
+                        (lambda row: row[2])
+                        if field == "node.id"
+                        else (lambda row: row[3])
+                    ),
+                    reverse=direction == "desc",
+                )
+            rows = tuple(
+                tuple(
+                    row[2] if item == "node.id" else row[3]
+                    for item in vector_plan.return_items
+                )
+                for row in ordered_rows
+            )
+            return QueryResult(
+                rows=rows,
+                columns=vector_plan.return_items,
+                route=result.route,
+                query_type="cypher",
+                rowcount=len(rows),
+            )
+        return result
 
     def _execute_query_plan(self, plan: _QueryExecutionPlan) -> QueryResult:
         """Dispatch one normalized query plan onto the correct execution path."""
@@ -603,7 +2064,7 @@ class HumemDB:
             plan.route,
             plan.workload.kind,
         )
-        result = execute_cypher(
+        result = _execute_cypher(
             plan.text,
             route=plan.route,
             params=plan.params,
@@ -612,7 +2073,21 @@ class HumemDB:
             plan=plan.cypher_plan,
         )
         if not plan.workload.is_read_only:
-            self._invalidate_vector_cache()
+            bound_plan = (
+                None
+                if plan.cypher_plan is None
+                else _bind_plan_values(
+                    plan.cypher_plan,
+                    _normalize_params(plan.params),
+                )
+            )
+            invalidation = self._cypher_vector_invalidation_mode(bound_plan)
+            if invalidation == "exact":
+                self._invalidate_exact_vector_cache()
+                self._clear_vector_tombstone_cache()
+                self._maybe_schedule_cold_vector_refresh_after_write()
+            elif invalidation == "full":
+                self._invalidate_vector_cache()
         return result
 
     def _execute_sql_query_plan(self, plan: _QueryExecutionPlan) -> QueryResult:
@@ -633,6 +2108,16 @@ class HumemDB:
                 write_plan.normalized_params,
                 query_type=plan.query_type,
             )
+            if write_plan.deleted_item_ids:
+                self._ensure_vector_schema()
+                deleted = _delete_target_namespaced_vectors(
+                    self._sqlite,
+                    write_plan.deleted_item_ids,
+                )
+                if deleted:
+                    self._invalidate_exact_vector_cache()
+                    self._clear_vector_tombstone_cache()
+                    self._maybe_schedule_cold_vector_refresh_after_write()
             if write_plan.vector_rows:
                 self._ensure_vector_schema()
                 if write_plan.vector_mode == "insert":
@@ -650,7 +2135,12 @@ class HumemDB:
                     resolved_vector_rows,
                     mode=write_plan.vector_mode or "insert",
                 )
-                self._invalidate_vector_cache()
+                if write_plan.vector_mode == "insert":
+                    self._invalidate_exact_vector_cache()
+                    self._clear_vector_tombstone_cache()
+                    self._maybe_schedule_cold_vector_refresh_after_write()
+                else:
+                    self._invalidate_vector_cache()
             self._invalidate_vector_cache_for_sql(plan.text, translated_text)
             return result
 
@@ -711,7 +2201,9 @@ class HumemDB:
                     resolved_vector_rows,
                     mode="insert",
                 )
-                self._invalidate_vector_cache()
+                self._invalidate_exact_vector_cache()
+                self._clear_vector_tombstone_cache()
+                self._maybe_schedule_cold_vector_refresh_after_write()
                 self._invalidate_vector_cache_for_sql(plan.text, plan.translated_text)
                 return QueryResult(
                     rows=(),
@@ -732,7 +2224,9 @@ class HumemDB:
                     cast(list[_TargetNamespacedVectorRow], batch_plan.vector_rows),
                     mode="insert",
                 )
-                self._invalidate_vector_cache()
+                self._invalidate_exact_vector_cache()
+                self._clear_vector_tombstone_cache()
+                self._maybe_schedule_cold_vector_refresh_after_write()
             self._invalidate_vector_cache_for_sql(plan.text, plan.translated_text)
             return result
 
@@ -744,6 +2238,152 @@ class HumemDB:
             )
 
         raise ValueError(f"Unsupported route: {plan.route!r}")
+
+    def _execute_vector_search(
+        self,
+        query: Sequence[float],
+        *,
+        top_k: int,
+        metric: VectorMetric,
+        resolved_candidates: _ResolvedVectorCandidates,
+        public_query_type: QueryType | None = None,
+    ) -> QueryResult:
+        """Execute one vector search using the current exact or indexed runtime."""
+
+        if len(resolved_candidates.candidate_indexes) == 0:
+            return QueryResult(
+                rows=(),
+                columns=_VECTOR_RESULT_COLUMNS,
+                route="sqlite",
+                query_type=public_query_type,
+                rowcount=0,
+            )
+
+        if (
+            resolved_candidates.candidate_count
+            <= self._vector_runtime_config.hot_max_rows
+        ):
+            return self._execute_exact_vector_search(
+                query,
+                top_k=top_k,
+                metric=metric,
+                resolved_candidates=resolved_candidates,
+                public_query_type=public_query_type,
+            )
+
+        logger.debug(
+            (
+                "Routing vector search to indexed tiered runtime target=%s "
+                "namespace=%s candidate_count=%s hot_max_rows=%s"
+            ),
+            resolved_candidates.target,
+            resolved_candidates.namespace,
+            resolved_candidates.candidate_count,
+            self._vector_runtime_config.hot_max_rows,
+        )
+        return self._execute_tiered_vector_search(
+            query,
+            top_k=top_k,
+            metric=metric,
+            resolved_candidates=resolved_candidates,
+            public_query_type=public_query_type,
+        )
+
+    def _execute_tiered_vector_search(
+        self,
+        query: Sequence[float],
+        *,
+        top_k: int,
+        metric: VectorMetric,
+        resolved_candidates: _ResolvedVectorCandidates,
+        public_query_type: QueryType | None = None,
+    ) -> QueryResult:
+        """Execute one hot/cold vector search and merge tier-local hits."""
+
+        hot_keys = set(
+            self._recent_vector_keys(limit=self._vector_runtime_config.hot_max_rows)
+        )
+        if not hot_keys:
+            return self._execute_exact_vector_search(
+                query,
+                top_k=top_k,
+                metric=metric,
+                resolved_candidates=resolved_candidates,
+                public_query_type=public_query_type,
+            )
+
+        item_ids, _ = self._load_vector_matrix()
+        item_id_rows = item_ids.tolist()
+        hot_candidate_indexes: list[int] = []
+        cold_candidate_rows: list[tuple[tuple[str, str, int], int]] = []
+        for candidate_index in resolved_candidates.candidate_indexes:
+            item_id = item_id_rows[int(candidate_index)]
+            key = (str(item_id[0]), str(item_id[1]), int(item_id[2]))
+            if key in hot_keys:
+                hot_candidate_indexes.append(int(candidate_index))
+            else:
+                cold_candidate_rows.append((key, int(candidate_index)))
+
+        buffered_top_k = self._vector_runtime_config.buffered_top_k(top_k)
+        hot_matches: tuple[_VectorSearchMatch, ...] = ()
+        if hot_candidate_indexes:
+            hot_matches = self._vector_index_for(metric=metric).search(
+                query,
+                top_k=min(buffered_top_k, len(hot_candidate_indexes)),
+                candidate_indexes=tuple(hot_candidate_indexes),
+            )
+
+        cold_matches: tuple[_VectorSearchMatch, ...] = ()
+        pending_cold_matches: tuple[_VectorSearchMatch, ...] = ()
+        if cold_candidate_rows:
+            cold_index = self._cold_vector_index_for(metric=metric)
+            if cold_index is None:
+                return self._execute_exact_vector_search(
+                    query,
+                    top_k=top_k,
+                    metric=metric,
+                    resolved_candidates=resolved_candidates,
+                    public_query_type=public_query_type,
+                )
+            cold_item_indexes = self._cold_vector_item_index_cache.get(metric, {})
+            cold_candidate_indexes: list[int] = []
+            pending_candidate_indexes: list[int] = []
+            for candidate_key, candidate_index in cold_candidate_rows:
+                cold_candidate_index = cold_item_indexes.get(candidate_key)
+                if cold_candidate_index is None:
+                    pending_candidate_indexes.append(candidate_index)
+                else:
+                    cold_candidate_indexes.append(cold_candidate_index)
+            if cold_candidate_indexes:
+                cold_matches = cold_index.search(
+                    query,
+                    top_k=min(buffered_top_k, len(cold_candidate_indexes)),
+                    candidate_indexes=tuple(sorted(set(cold_candidate_indexes))),
+                )
+            if pending_candidate_indexes:
+                pending_cold_matches = self._vector_index_for(metric=metric).search(
+                    query,
+                    top_k=min(buffered_top_k, len(pending_candidate_indexes)),
+                    candidate_indexes=tuple(sorted(set(pending_candidate_indexes))),
+                )
+
+        matches = _merge_vector_search_matches(
+            hot_matches,
+            pending_cold_matches,
+            cold_matches,
+            top_k=top_k,
+        )
+        rows = tuple(
+            (match.target, match.namespace, match.target_id, match.score)
+            for match in matches
+        )
+        return QueryResult(
+            rows=rows,
+            columns=_VECTOR_RESULT_COLUMNS,
+            route="sqlite",
+            query_type=public_query_type,
+            rowcount=len(rows),
+        )
 
     def _execute_exact_vector_search(
         self,
@@ -795,7 +2435,7 @@ class HumemDB:
         self,
         *,
         metric: VectorMetric,
-    ) -> ExactVectorIndex:
+    ) -> _ExactVectorIndex:
         """Load and cache one exact vector index per metric."""
 
         cached = self._vector_index_cache.get(metric)
@@ -803,9 +2443,131 @@ class HumemDB:
             return cached
 
         item_ids, matrix = self._load_vector_matrix()
-        cached = ExactVectorIndex(item_ids=item_ids, matrix=matrix, metric=metric)
+        cached = _ExactVectorIndex(item_ids=item_ids, matrix=matrix, metric=metric)
         self._vector_index_cache[metric] = cached
         return cached
+
+    def _cold_vector_index_for(
+        self,
+        *,
+        metric: VectorMetric,
+    ) -> _LanceDBVectorIndex | None:
+        """Load and cache one cold-tier LanceDB index per metric."""
+
+        if not self._vector_index_enabled(metric=metric):
+            return None
+        if self._vector_index_maintenance_paused(metric=metric):
+            return None
+
+        self._maybe_promote_cold_vector_refresh(metric)
+
+        cached = self._cold_vector_index_cache.get(metric)
+        if cached is not None:
+            return cached
+        cached = self._load_persisted_cold_vector_index(metric=metric)
+        if cached is not None:
+            return cached
+        if self._vector_index_maintenance_paused(metric=metric):
+            return None
+
+        hot_keys = set(
+            self._recent_vector_keys(limit=self._vector_runtime_config.hot_max_rows)
+        )
+        item_ids, matrix = self._load_vector_matrix()
+        cold_item_ids = [
+            (index, item_id)
+            for index, item_id in enumerate(item_ids.tolist())
+            if (str(item_id[0]), str(item_id[1]), int(item_id[2])) not in hot_keys
+        ]
+        cold_indexes = [index for index, _ in cold_item_ids]
+        if not cold_indexes:
+            return None
+
+        min_training_rows = (
+            self._vector_runtime_config.lancedb.minimum_rows_for_training()
+        )
+        required_rows = self._vector_runtime_config.cold_index_required_rows(
+            hot_rows=len(hot_keys),
+            minimum_training_rows=min_training_rows,
+        )
+        if len(cold_indexes) < required_rows:
+            logger.debug(
+                (
+                    "Skipping cold LanceDB build metric=%s cold_rows=%s "
+                    "required_rows=%s hot_rows=%s"
+                ),
+                metric,
+                len(cold_indexes),
+                required_rows,
+                len(hot_keys),
+            )
+            return None
+
+        config = self._vector_runtime_config.lancedb.with_table_name(
+            self._cold_vector_table_name(metric=metric)
+        )
+        cached = _LanceDBVectorIndex.from_matrix(
+            item_ids=item_ids[cold_indexes],
+            matrix=matrix[cold_indexes],
+            metric=metric,
+            lance_path=self._vector_lancedb_path(),
+            config=config,
+        )
+        self._store_live_cold_snapshot(metric=metric, index=cached)
+        _clear_vector_tombstones(self._sqlite, metric=metric)
+        self._clear_vector_tombstone_cache()
+        return cached
+
+    def _cold_candidate_indexes_for(
+        self,
+        *,
+        metric: VectorMetric,
+        candidate_keys: Sequence[tuple[str, str, int]],
+    ) -> tuple[int, ...]:
+        """Map logical candidate keys onto one cached cold-tier index."""
+
+        cold_item_indexes = self._cold_vector_item_index_cache.get(metric)
+        if cold_item_indexes is None:
+            return ()
+
+        resolved_indexes = {
+            cold_item_indexes[item_id]
+            for item_id in candidate_keys
+            if item_id in cold_item_indexes
+        }
+        return tuple(sorted(resolved_indexes))
+
+    def _recent_vector_keys(
+        self,
+        *,
+        limit: int,
+    ) -> tuple[tuple[str, str, int], ...]:
+        """Return the most recently inserted logical vector keys."""
+
+        cached = self._recent_vector_keys_cache
+        if cached is not None and len(cached) == limit:
+            return cached
+
+        self._ensure_vector_schema()
+        result = self._sqlite.execute(
+            (
+                "SELECT target, namespace, target_id "
+                "FROM vector_entries ORDER BY vector_id DESC LIMIT ?"
+            ),
+            params=(int(limit),),
+            query_type="vector",
+        )
+        cached = tuple(
+            (str(row[0]), str(row[1]), int(row[2]))
+            for row in result.rows
+        )
+        self._recent_vector_keys_cache = cached
+        return cached
+
+    def _vector_lancedb_path(self) -> Path:
+        """Return the on-disk LanceDB path for the current SQLite database."""
+
+        return Path(self._sqlite_path).with_suffix(".vectors.lancedb")
 
     def _load_vector_matrix(self) -> tuple[Any, Any]:
         """Load and cache the current vector set from SQLite."""
@@ -814,7 +2576,7 @@ class HumemDB:
             return self._vector_matrix_cache
 
         self._ensure_vector_schema()
-        cached = load_vector_matrix(self._sqlite)
+        cached = _load_vector_matrix(self._sqlite)
         self._vector_matrix_cache = cached
         self._prime_vector_lookup_caches(cached[0])
         return cached
@@ -913,7 +2675,7 @@ class HumemDB:
 
         self._ensure_vector_schema()
         candidate_keys = tuple(
-            load_filtered_vector_target_keys(
+            _load_filtered_vector_target_keys(
                 self._sqlite,
                 plan.filters,
                 target="direct",
@@ -1012,13 +2774,45 @@ class HumemDB:
         )
         return bool(result.rows)
 
-    def _invalidate_vector_cache(self) -> None:
-        """Drop cached exact vector data after vector storage changes."""
+    def _invalidate_exact_vector_cache(self) -> None:
+        """Drop exact-search caches while preserving any reusable cold snapshot."""
 
         self._vector_matrix_cache = None
         self._vector_item_index_cache = None
         self._vector_namespace_index_cache = None
+        self._recent_vector_keys_cache = None
         self._vector_index_cache.clear()
+
+    def _invalidate_cold_vector_cache(self) -> None:
+        """Drop cached cold-tier indexed state."""
+
+        for cached in self._cold_vector_index_cache.values():
+            try:
+                _drop_lancedb_table(
+                    lance_path=self._vector_lancedb_path(),
+                    table_name=cached.config.table_name,
+                )
+            except _VECTOR_RUNTIME_BACKGROUND_ERRORS:
+                logger.debug(
+                    "Ignoring failed LanceDB cleanup table=%s",
+                    cached.config.table_name,
+                    exc_info=True,
+                )
+        self._cold_vector_index_cache.clear()
+        self._cold_vector_item_index_cache.clear()
+        _delete_cold_vector_snapshot_metadata(self._sqlite)
+        _clear_vector_tombstones(self._sqlite)
+        self._clear_vector_tombstone_cache()
+        for metric in tuple(self._cold_vector_refresh_futures):
+            self._cold_vector_refresh_epoch[metric] = (
+                self._cold_vector_refresh_epoch.get(metric, 0) + 1
+            )
+
+    def _invalidate_vector_cache(self) -> None:
+        """Drop cached exact vector data after vector storage changes."""
+
+        self._invalidate_exact_vector_cache()
+        self._invalidate_cold_vector_cache()
 
     def _invalidate_vector_cache_for_sql(
         self,
@@ -1056,8 +2850,15 @@ class HumemDB:
     def transaction(self) -> _TransactionContext:
         """Return a transaction context manager for the canonical SQLite store.
 
+        Use this when multiple writes must succeed or fail as one unit, such as several
+        dependent `query(...)` calls or one `executemany(...)` batch that should commit
+        atomically. Single standalone writes already auto-commit when no explicit
+        transaction is active, so wrapping one ordinary insert, update, or delete is
+        usually unnecessary. Read-only queries do not need `transaction()`.
+
         A successful context commits on exit. An exception inside the context triggers a
-        rollback before the exception continues to propagate.
+        rollback before the exception continues to propagate. Explicit transactions are
+        not nestable.
 
         Returns:
             A `_TransactionContext` bound to SQLite.
@@ -1179,7 +2980,7 @@ class HumemDB:
         *,
         id_column: str,
         property_columns: Sequence[str] | None = None,
-        property_types: Mapping[str, GraphImportPropertyType] | None = None,
+        property_types: Mapping[str, _GraphImportPropertyType] | None = None,
         header: bool = True,
         delimiter: str = ",",
         chunk_size: int = 1000,
@@ -1294,7 +3095,7 @@ class HumemDB:
         source_id_column: str,
         target_id_column: str,
         property_columns: Sequence[str] | None = None,
-        property_types: Mapping[str, GraphImportPropertyType] | None = None,
+        property_types: Mapping[str, _GraphImportPropertyType] | None = None,
         header: bool = True,
         delimiter: str = ",",
         chunk_size: int = 1000,
@@ -1390,7 +3191,7 @@ class HumemDB:
                     )
                     if len(edge_rows) >= chunk_size:
                         _write_imported_graph_edges(
-                            self._sqlite,
+                            sqlite=self._sqlite,
                             edge_rows=edge_rows,
                             property_rows=property_rows,
                         )
@@ -1400,7 +3201,7 @@ class HumemDB:
 
                 if edge_rows:
                     _write_imported_graph_edges(
-                        self._sqlite,
+                        sqlite=self._sqlite,
                         edge_rows=edge_rows,
                         property_rows=property_rows,
                     )
@@ -1422,8 +3223,133 @@ class HumemDB:
         """
 
         logger.debug("Closing HumemDB connections")
+        if self._cold_vector_refresh_executor is not None:
+            self._cold_vector_refresh_executor.shutdown(wait=True)
         self._sqlite.close()
         self._duckdb.close()
+
+    def _cypher_vector_invalidation_mode(
+        self,
+        plan: _GraphPlan | None,
+    ) -> Literal["none", "exact", "full"]:
+        """Classify how one Cypher write affects the vector runtime caches."""
+
+        if plan is None:
+            return "full"
+        if isinstance(plan, CreateNodePlan):
+            return "exact" if _node_pattern_has_vector_property(plan.node) else "none"
+        if isinstance(plan, CreateRelationshipPlan):
+            return (
+                "exact"
+                if _node_pattern_has_vector_property(plan.left)
+                or _node_pattern_has_vector_property(plan.right)
+                else "none"
+            )
+        if isinstance(plan, CreateRelationshipFromSeparatePatternsPlan):
+            return (
+                "exact"
+                if _node_pattern_has_vector_property(plan.first_node)
+                or _node_pattern_has_vector_property(plan.second_node)
+                else "none"
+            )
+        if isinstance(
+            plan,
+            (MatchCreateRelationshipPlan, MatchCreateRelationshipBetweenNodesPlan),
+        ):
+            return "none"
+        if isinstance(plan, SetNodePlan):
+            return "full" if _set_plan_has_vector_assignment(plan) else "none"
+        if isinstance(plan, SetRelationshipPlan):
+            return "none"
+        if isinstance(plan, DeleteNodePlan):
+            return "exact"
+        if isinstance(plan, DeleteRelationshipPlan):
+            return "none"
+        return "full"
+
+    def _cold_vector_table_name(self, *, metric: VectorMetric) -> str:
+        """Return the next versioned table name for one cold snapshot build."""
+
+        generation = self._cold_vector_snapshot_generation.get(metric, 0) + 1
+        self._cold_vector_snapshot_generation[metric] = generation
+        return f"cold_{metric}_v{generation}"
+
+    def _schedule_cold_vector_refresh(
+        self,
+        *,
+        metric: VectorMetric,
+        item_ids: Any,
+        matrix: Any,
+    ) -> None:
+        """Start one background cold-snapshot refresh when none is already active."""
+
+        refresh_future = self._cold_vector_refresh_futures.get(metric)
+        if refresh_future is not None and not refresh_future.done():
+            return
+        if self._cold_vector_refresh_executor is None:
+            self._cold_vector_refresh_executor = ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="humemdb-vector-refresh",
+            )
+        epoch = self._cold_vector_refresh_epoch.get(metric, 0)
+        config = self._vector_runtime_config.lancedb.with_table_name(
+            self._cold_vector_table_name(metric=metric)
+        )
+        self._cold_vector_refresh_futures[metric] = (
+            self._cold_vector_refresh_executor.submit(
+                _build_cold_vector_refresh_result,
+                metric=metric,
+                epoch=epoch,
+                item_ids=item_ids,
+                matrix=matrix,
+                lance_path=self._vector_lancedb_path(),
+                config=config,
+            )
+        )
+
+    def _maybe_promote_cold_vector_refresh(self, metric: VectorMetric) -> None:
+        """Promote one completed background cold refresh if it is still valid."""
+
+        refresh_future = self._cold_vector_refresh_futures.get(metric)
+        if refresh_future is None or not refresh_future.done():
+            return
+        del self._cold_vector_refresh_futures[metric]
+        if refresh_future.cancelled():
+            return
+        try:
+            refresh_result = refresh_future.result()
+        except _VECTOR_RUNTIME_BACKGROUND_ERRORS:
+            logger.exception("Cold LanceDB refresh failed metric=%s", metric)
+            return
+        if refresh_result.epoch != self._cold_vector_refresh_epoch.get(metric, 0):
+            try:
+                _drop_lancedb_table(
+                    lance_path=self._vector_lancedb_path(),
+                    table_name=refresh_result.index.config.table_name,
+                )
+            except _VECTOR_RUNTIME_BACKGROUND_ERRORS:
+                logger.debug(
+                    "Ignoring failed cleanup for stale cold refresh table=%s",
+                    refresh_result.index.config.table_name,
+                    exc_info=True,
+                )
+            return
+        previous = self._cold_vector_index_cache.get(metric)
+        self._store_live_cold_snapshot(metric=metric, index=refresh_result.index)
+        _clear_vector_tombstones(self._sqlite, metric=metric)
+        self._clear_vector_tombstone_cache()
+        if previous is not None:
+            try:
+                _drop_lancedb_table(
+                    lance_path=self._vector_lancedb_path(),
+                    table_name=previous.config.table_name,
+                )
+            except _VECTOR_RUNTIME_BACKGROUND_ERRORS:
+                logger.debug(
+                    "Ignoring failed cleanup for prior cold snapshot table=%s",
+                    previous.config.table_name,
+                    exc_info=True,
+                )
 
     def __enter__(self) -> HumemDB:
         """Return `self` for context-manager usage.
@@ -1500,6 +3426,61 @@ class _TransactionContext:
             return
 
         self.db.rollback()
+
+
+def _unknown_vector_index_name_message(name: str) -> str:
+    """Return the shared error message for unsupported public index names."""
+
+    return (
+        "HumemDB vector index admin commands require a created named vector "
+        f"index; got {name!r}."
+    )
+
+
+def _create_vector_index_metric(metric_text: str | None) -> VectorMetric:
+    """Return the metric requested by one CREATE VECTOR INDEX statement."""
+
+    if metric_text is None:
+        return "cosine"
+    normalized = str(metric_text).lower()
+    if normalized not in {"cosine", "dot", "l2"}:
+        raise ValueError(
+            "HumemDB vector indexes support only metrics 'cosine', 'dot', and 'l2'."
+        )
+    return cast(VectorMetric, normalized)
+
+
+def _pgvector_operator_class_metric(operator_class_text: str) -> VectorMetric:
+    """Return the metric implied by one pgvector operator class."""
+
+    normalized = str(operator_class_text).lower()
+    mapping: dict[str, VectorMetric] = {
+        "vector_cosine_ops": "cosine",
+        "vector_ip_ops": "dot",
+        "vector_l2_ops": "l2",
+    }
+    if normalized not in mapping:
+        raise ValueError(
+            "HumemDB pgvector-like SQL index DDL currently supports only "
+            "vector_cosine_ops, vector_ip_ops, and vector_l2_ops."
+        )
+    return mapping[normalized]
+
+
+def _neo4j_vector_similarity_metric(options_text: str) -> VectorMetric:
+    """Return the metric implied by one narrow Neo4j-like OPTIONS payload."""
+
+    similarity_match = re.search(
+        r"`?vector\.similarity_function`?\s*:\s*['\"](?P<metric>cosine|euclidean)['\"]",
+        options_text,
+        flags=re.IGNORECASE,
+    )
+    if similarity_match is None:
+        return "cosine"
+    normalized = str(similarity_match.group("metric")).lower()
+    if normalized == "euclidean":
+        return "l2"
+    return cast(VectorMetric, normalized)
 
 
 def _infer_query_type(text: str) -> InternalQueryType:
@@ -1597,7 +3578,7 @@ def _plan_cypher_query(text: str) -> tuple[_GraphPlan, _CypherPlanShape]:
     """
 
     plan = _lower_generated_cypher_text(text)
-    return plan, analyze_cypher_plan(plan)
+    return plan, _analyze_cypher_plan(plan)
 
 
 def _resolve_route_decision(
@@ -1984,14 +3965,14 @@ def _normalize_graph_import_columns(
 
 
 def _normalize_graph_import_property_types(
-    property_types: Mapping[str, GraphImportPropertyType] | None,
-) -> dict[str, GraphImportPropertyType]:
+    property_types: Mapping[str, _GraphImportPropertyType] | None,
+) -> dict[str, _GraphImportPropertyType]:
     """Normalize graph import property type overrides."""
 
     if property_types is None:
         return {}
 
-    normalized: dict[str, GraphImportPropertyType] = {}
+    normalized: dict[str, _GraphImportPropertyType] = {}
     for key, value in property_types.items():
         if not key:
             raise ValueError(
@@ -2212,7 +4193,7 @@ def _build_graph_property_rows(
     owner_id: int,
     columns: Sequence[str],
     row: Mapping[str, str],
-    property_types: Mapping[str, GraphImportPropertyType],
+    property_types: Mapping[str, _GraphImportPropertyType],
 ) -> list[tuple[int, str, object, str]]:
     """Encode one CSV row into graph property-table writes."""
 
@@ -2229,7 +4210,7 @@ def _build_graph_property_rows(
 
 def _coerce_graph_import_value(
     raw_value: str,
-    value_type: GraphImportPropertyType,
+    value_type: _GraphImportPropertyType,
 ) -> str | int | float | bool | None:
     """Coerce one CSV field into the typed graph property value model."""
 
@@ -2250,7 +4231,7 @@ def _coerce_graph_import_value(
 
 
 def _write_imported_graph_nodes(
-    sqlite: SQLiteEngine,
+    sqlite: _SQLiteEngine,
     *,
     node_rows: Sequence[tuple[int, str]],
     property_rows: Sequence[tuple[int, str, object, str]],
@@ -2273,7 +4254,7 @@ def _write_imported_graph_nodes(
         )
 
 
-def _next_graph_edge_id(sqlite: SQLiteEngine) -> int:
+def _next_graph_edge_id(sqlite: _SQLiteEngine) -> int:
     """Return the next explicit edge id for graph edge import."""
 
     row = sqlite.execute(
@@ -2286,7 +4267,7 @@ def _next_graph_edge_id(sqlite: SQLiteEngine) -> int:
 
 
 def _write_imported_graph_edges(
-    sqlite: SQLiteEngine,
+    sqlite: _SQLiteEngine,
     *,
     edge_rows: Sequence[tuple[int, str, int, int]],
     property_rows: Sequence[tuple[int, str, object, str]],
@@ -2342,7 +4323,7 @@ def _row_is_empty(values: Iterable[object]) -> bool:
 
 
 def _write_target_namespaced_vector_rows(
-    sqlite: SQLiteEngine,
+    sqlite: _SQLiteEngine,
     vector_rows: Sequence[tuple[str, str, int, Sequence[float]]],
     *,
     mode: str,
@@ -2355,18 +4336,18 @@ def _write_target_namespaced_vector_rows(
 
     for (target, namespace), rows in grouped.items():
         if mode == "insert":
-            insert_vector_rows(sqlite, rows, target=target, namespace=namespace)
+            _insert_vectors(sqlite, rows, target=target, namespace=namespace)
         else:
-            upsert_vectors(sqlite, rows, target=target, namespace=namespace)
+            _upsert_vectors(sqlite, rows, target=target, namespace=namespace)
 
 
 def _normalize_direct_vector_rows(
-    sqlite: SQLiteEngine,
-    rows: Sequence[DirectVectorRow],
+    sqlite: _SQLiteEngine,
+    rows: Sequence[_DirectVectorRow],
 ) -> tuple[
     list[tuple[int, Sequence[float]]],
     tuple[int, ...],
-    list[tuple[int, DirectVectorMetadata]],
+    list[tuple[int, _DirectVectorMetadata]],
 ]:
     """Normalize direct vector inserts into stored rows plus optional metadata.
 
@@ -2381,7 +4362,7 @@ def _normalize_direct_vector_rows(
     """
 
     normalized: list[
-        tuple[int | None, Sequence[float], DirectVectorMetadata | None]
+        tuple[int | None, Sequence[float], _DirectVectorMetadata | None]
     ] = []
     explicit_ids: list[int] = []
     for row in rows:
@@ -2409,7 +4390,7 @@ def _normalize_direct_vector_rows(
     next_id = _next_direct_target_id(sqlite, floor=max(explicit_ids, default=0))
     assigned_ids: list[int] = []
     resolved_rows: list[tuple[int, Sequence[float]]] = []
-    metadata_rows: list[tuple[int, DirectVectorMetadata]] = []
+    metadata_rows: list[tuple[int, _DirectVectorMetadata]] = []
     for target_id, vector, metadata in normalized:
         if target_id is None:
             target_id = next_id
@@ -2423,8 +4404,8 @@ def _normalize_direct_vector_rows(
 
 
 def _direct_vector_record(
-    row: DirectVectorRow,
-) -> tuple[int | None, Sequence[float], DirectVectorMetadata | None] | None:
+    row: _DirectVectorRow,
+) -> tuple[int | None, Sequence[float], _DirectVectorMetadata | None] | None:
     """Return one direct-vector record mapping if the row uses record syntax.
 
     Args:
@@ -2467,7 +4448,7 @@ def _direct_vector_record(
         )
 
     raw_metadata = row.get("metadata")
-    metadata: DirectVectorMetadata | None
+    metadata: _DirectVectorMetadata | None
     if raw_metadata is None:
         metadata = None
     elif isinstance(raw_metadata, Mapping):
@@ -2523,7 +4504,7 @@ def _plain_direct_vector(
     return cast(Sequence[float], row)
 
 
-def _next_direct_target_id(sqlite: SQLiteEngine, *, floor: int) -> int:
+def _next_direct_target_id(sqlite: _SQLiteEngine, *, floor: int) -> int:
     """Return the next auto-assigned direct target id, starting from 1."""
 
     result = sqlite.execute(
@@ -2540,7 +4521,7 @@ def _next_direct_target_id(sqlite: SQLiteEngine, *, floor: int) -> int:
 
 
 def _resolved_sql_vector_rows_after_insert(
-    sqlite: SQLiteEngine,
+    sqlite: _SQLiteEngine,
     vector_rows: Sequence[_PendingTargetNamespacedVectorRow],
 ) -> list[_TargetNamespacedVectorRow]:
     """Resolve SQLite-assigned row ids for freshly inserted SQL-owned vectors."""
@@ -2561,3 +4542,21 @@ def _resolved_sql_vector_rows_after_insert(
         resolved.append((target, namespace, int(target_id), vector))
 
     return resolved
+
+
+def _node_pattern_has_vector_property(node: Any) -> bool:
+    """Return whether one bound node pattern contains a vector property value."""
+
+    return any(
+        _encode_property_value(cast(Any, value))[1] == "vector"
+        for _, value in node.properties
+    )
+
+
+def _set_plan_has_vector_assignment(plan: SetNodePlan) -> bool:
+    """Return whether one Cypher SET node plan writes any vector property."""
+
+    return any(
+        _encode_property_value(cast(Any, assignment.value))[1] == "vector"
+        for assignment in plan.assignments
+    )

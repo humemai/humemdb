@@ -6,19 +6,22 @@ from pathlib import Path
 
 import numpy as np
 
-from tests.support import humemdb_class, vector_module
-
-
-def sqlite_engine(db):
-    return getattr(db, "_sqlite")
+from humemdb import HumemDB
+from humemdb.vector import (
+    _ExactVectorIndex,
+    ScalarQuantizedVectorIndex,
+    decode_vector_blob,
+    encode_vector_blob,
+    _ensure_vector_schema,
+    _insert_vectors,
+    _load_vector_matrix,
+)
 
 
 class TestVectorCore(unittest.TestCase):
     def test_vector_blob_roundtrip(self) -> None:
-        vector = vector_module()
-
-        blob = vector.encode_vector_blob([1.5, -2.0, 3.25])
-        decoded = vector.decode_vector_blob(blob, dimension=3)
+        blob = encode_vector_blob([1.5, -2.0, 3.25])
+        decoded = decode_vector_blob(blob, dimension=3)
 
         np.testing.assert_allclose(
             decoded,
@@ -26,9 +29,7 @@ class TestVectorCore(unittest.TestCase):
         )
 
     def test_exact_vector_index_returns_expected_cosine_order(self) -> None:
-        vector = vector_module()
-
-        index = vector.ExactVectorIndex(
+        index = _ExactVectorIndex(
             item_ids=np.array(
                 [
                     ("direct", "", 101),
@@ -53,9 +54,7 @@ class TestVectorCore(unittest.TestCase):
         self.assertEqual(tuple(match.target_id for match in result), (101, 102))
 
     def test_exact_vector_index_supports_candidate_filtering(self) -> None:
-        vector = vector_module()
-
-        index = vector.ExactVectorIndex(
+        index = _ExactVectorIndex(
             item_ids=np.array(
                 [
                     ("direct", "", 1),
@@ -82,17 +81,12 @@ class TestVectorCore(unittest.TestCase):
     def test_scalar_quantized_vector_index_keeps_top_match_on_simple_input(
         self,
     ) -> None:
-        vector = vector_module()
-
-        index = vector.ScalarQuantizedVectorIndex.from_matrix(
-            item_ids=np.array(
-                [
-                    ("direct", "", 11),
-                    ("direct", "", 12),
-                    ("direct", "", 13),
-                ],
-                dtype=object,
-            ),
+        index = ScalarQuantizedVectorIndex.from_matrix(
+            item_ids=[
+                ("direct", "", 11),
+                ("direct", "", 12),
+                ("direct", "", 13),
+            ],
             matrix=np.array(
                 [
                     [1.0, 0.0, 0.0],
@@ -109,24 +103,22 @@ class TestVectorCore(unittest.TestCase):
         self.assertEqual(result[0].target_id, 11)
 
     def test_vector_sqlite_roundtrip_loads_vector_set(self) -> None:
-        vector = vector_module()
-        HumemDB = humemdb_class()
-
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
-                vector.ensure_vector_schema(sqlite_engine(db))
+            with HumemDB(base_path) as db:
+                sqlite = db._sqlite
+                _ensure_vector_schema(sqlite)
                 with db.transaction():
-                    vector.insert_vectors(
-                        sqlite_engine(db),
+                    _insert_vectors(
+                        sqlite,
                         [
                             (1, [1.0, 0.0]),
                             (2, [0.0, 1.0]),
                         ],
                     )
 
-                item_ids, matrix = vector.load_vector_matrix(sqlite_engine(db))
+                item_ids, matrix = _load_vector_matrix(sqlite)
 
         self.assertEqual(
             item_ids.tolist(),

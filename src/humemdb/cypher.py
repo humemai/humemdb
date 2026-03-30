@@ -27,13 +27,13 @@ from typing import Literal, TypeGuard, cast
 
 import numpy as np
 
-from .engines import DuckDBEngine, SQLiteEngine
+from .engines import _DuckDBEngine, _SQLiteEngine
 from .types import QueryParameters, QueryResult, Route
 from .vector import (
     _GRAPH_NODE_VECTOR_DELETE_TRIGGER_SQL,
-    ensure_vector_schema,
-    insert_vectors as insert_vector_rows,
-    upsert_vectors,
+    _ensure_vector_schema,
+    _insert_vectors,
+    _upsert_vectors,
 )
 
 logger = logging.getLogger(__name__)
@@ -41,13 +41,13 @@ logger = logging.getLogger(__name__)
 _CYPHER_CREATE_PREFIX = re.compile(r"^CREATE\b")
 _CYPHER_MATCH_PREFIX = re.compile(r"^MATCH\b")
 
-ScalarPropertyValue = str | int | float | bool | None
-VectorPropertyValue = tuple[float, ...]
-PropertyValue = ScalarPropertyValue | VectorPropertyValue
+_ScalarPropertyValue = str | int | float | bool | None
+_VectorPropertyValue = tuple[float, ...]
+PropertyValue = _ScalarPropertyValue | _VectorPropertyValue
 
 
 @dataclass(frozen=True, slots=True)
-class ParameterRef:
+class _ParameterRef:
     """Named Cypher parameter reference such as `$name`.
 
     Attributes:
@@ -57,39 +57,54 @@ class ParameterRef:
     name: str
 
 
-CypherValue = PropertyValue | ParameterRef
+CypherValue = PropertyValue | _ParameterRef
 PropertyItems = tuple[tuple[str, CypherValue], ...]
-ScalarQueryParam = str | int | float | bool | None
-CypherVectorLimitRef = int | str
+_ScalarQueryParam = str | int | float | bool | None
+_CypherVectorLimitRef = int | str
 
 
 @dataclass(frozen=True, slots=True)
 class _EncodedNodePropertyWrite:
-    """Encoded graph node property write plus optional vector payload."""
+    """Encoded graph node property write plus optional vector payload.
+
+    Attributes:
+        key: Graph property key to persist.
+        encoded_value: SQLite-storable scalar representation for the property.
+        value_type: Narrow type tag used by the graph property tables.
+        vector_value: Optional detached vector payload when the property also feeds
+            graph-node vector storage.
+    """
 
     key: str
     encoded_value: object
     value_type: str
-    vector_value: VectorPropertyValue | None = None
+    vector_value: _VectorPropertyValue | None = None
 
 
 @dataclass(frozen=True, slots=True)
-class CypherVectorQueryAnalysis:
-    """Parsed analysis for one narrow Cypher vector SEARCH query."""
+class _CypherVectorQueryAnalysis:
+    """Parsed analysis for one narrow Cypher vector procedure query.
+
+    Attributes:
+        candidate_query_text: Cypher candidate query text synthesized from the
+            post-procedure filtering clauses.
+        index_name: Referenced vector index identifier.
+        query_param_name: Mapping key that supplies the query embedding.
+        limit_ref: Integer limit literal or parameter name referenced by the
+            procedure call.
+        result_mode: Whether execution should keep the current normalized vector
+            result shape or project the narrow `queryNodes` return subset.
+        return_items: Requested return items for the narrow `queryNodes` subset.
+        order_items: Requested order items for the narrow `queryNodes` subset.
+    """
 
     candidate_query_text: str
-    query_param_name: str
-    limit_ref: CypherVectorLimitRef
-
-
-@dataclass(frozen=True, slots=True)
-class CypherVectorSearchClause:
-    """Parsed `SEARCH alias IN (VECTOR INDEX ... FOR ... LIMIT ...)` clause."""
-
-    alias: str
     index_name: str
     query_param_name: str
-    limit_ref: CypherVectorLimitRef
+    limit_ref: _CypherVectorLimitRef
+    result_mode: Literal["normalized", "queryNodes"] = "normalized"
+    return_items: tuple[str, ...] = ()
+    order_items: tuple[tuple[str, Literal["asc", "desc"]], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,7 +251,15 @@ class CreateRelationshipPlan:
 
 @dataclass(frozen=True, slots=True)
 class CreateRelationshipFromSeparatePatternsPlan:
-    """Plan for a narrow multi-pattern CREATE with two nodes and one edge."""
+    """Plan for a narrow multi-pattern CREATE with two nodes and one edge.
+
+    Attributes:
+        first_node: First standalone node pattern created by the statement.
+        second_node: Second standalone node pattern created by the statement.
+        left: Left endpoint node referenced by the relationship pattern.
+        relationship: Relationship pattern to create between the endpoints.
+        right: Right endpoint node referenced by the relationship pattern.
+    """
 
     first_node: NodePattern
     second_node: NodePattern
@@ -247,7 +270,15 @@ class CreateRelationshipFromSeparatePatternsPlan:
 
 @dataclass(frozen=True, slots=True)
 class MatchCreateRelationshipPlan:
-    """Plan for matching one node binding and creating one relationship pattern."""
+    """Plan for matching one node binding and creating one relationship pattern.
+
+    Attributes:
+        match_node: Existing node pattern that anchors the match step.
+        predicates: Additional predicates that narrow the matched node set.
+        left: Left endpoint node pattern used by the relationship creation.
+        relationship: Relationship pattern to create.
+        right: Right endpoint node pattern used by the relationship creation.
+    """
 
     match_node: NodePattern
     predicates: tuple[Predicate, ...]
@@ -258,7 +289,16 @@ class MatchCreateRelationshipPlan:
 
 @dataclass(frozen=True, slots=True)
 class MatchCreateRelationshipBetweenNodesPlan:
-    """Plan for matching two existing nodes and creating one relationship."""
+    """Plan for matching two existing nodes and creating one relationship.
+
+    Attributes:
+        left_match: Existing node pattern that resolves the left endpoint.
+        right_match: Existing node pattern that resolves the right endpoint.
+        predicates: Additional predicates that narrow the matched endpoint set.
+        left: Left endpoint node pattern used during relationship creation.
+        relationship: Relationship pattern to create between the endpoints.
+        right: Right endpoint node pattern used during relationship creation.
+    """
 
     left_match: NodePattern
     right_match: NodePattern
@@ -365,7 +405,13 @@ class SetRelationshipPlan:
 
 @dataclass(frozen=True, slots=True)
 class DeleteNodePlan:
-    """Plan for matching labeled nodes and deleting them with detach semantics."""
+    """Plan for matching labeled nodes and deleting them with detach semantics.
+
+    Attributes:
+        node: Node pattern used to select nodes for deletion.
+        predicates: Additional predicates that narrow the target node set.
+        detach: Whether connected relationships should also be removed.
+    """
 
     node: NodePattern
     predicates: tuple[Predicate, ...]
@@ -374,7 +420,14 @@ class DeleteNodePlan:
 
 @dataclass(frozen=True, slots=True)
 class DeleteRelationshipPlan:
-    """Plan for matching one relationship and deleting it."""
+    """Plan for matching one relationship and deleting it.
+
+    Attributes:
+        left: Left endpoint node pattern used to anchor the match.
+        relationship: Relationship pattern to delete.
+        right: Right endpoint node pattern used to anchor the match.
+        predicates: Additional predicates that narrow the target relationship set.
+    """
 
     left: NodePattern
     relationship: RelationshipPattern
@@ -383,8 +436,19 @@ class DeleteRelationshipPlan:
 
 
 @dataclass(frozen=True, slots=True)
-class CypherPlanShape:
-    """Lightweight metadata derived from one parsed Cypher plan."""
+class _CypherPlanShape:
+    """Lightweight metadata derived from one parsed Cypher plan.
+
+    Attributes:
+        plan_name: Concrete parsed plan class name.
+        is_read_only: Whether the parsed plan performs reads only.
+        pattern_kind: Whether the plan centers on node or relationship patterns.
+        predicate_count: Number of explicit `WHERE` predicates in the plan.
+        has_inline_properties: Whether the plan includes inline node or
+            relationship property maps.
+        has_order_by: Whether the plan contains an `ORDER BY` clause.
+        has_limit: Whether the plan contains a `LIMIT` clause.
+    """
 
     plan_name: str
     is_read_only: bool
@@ -497,7 +561,7 @@ _GRAPH_SCHEMA_SQL = (
 )
 
 
-def ensure_graph_schema(sqlite: SQLiteEngine) -> None:
+def _ensure_graph_schema(sqlite: _SQLiteEngine) -> None:
     """Create the SQLite-backed graph storage tables if they do not exist yet.
 
     Args:
@@ -516,13 +580,13 @@ def ensure_graph_schema(sqlite: SQLiteEngine) -> None:
         sqlite.execute(_GRAPH_NODE_VECTOR_DELETE_TRIGGER_SQL, query_type="cypher")
 
 
-def execute_cypher(
+def _execute_cypher(
     text: str,
     *,
     route: Route,
     params: QueryParameters,
-    sqlite: SQLiteEngine,
-    duckdb: DuckDBEngine,
+    sqlite: _SQLiteEngine,
+    duckdb: _DuckDBEngine,
     plan: GraphPlan | None = None,
 ) -> QueryResult:
     """Execute a minimal Cypher statement through the HumemDB graph path.
@@ -646,7 +710,7 @@ def execute_cypher(
 
 
 def _execute_cypher_write_atomically(
-    sqlite: SQLiteEngine,
+    sqlite: _SQLiteEngine,
     execute_write: Callable[[], QueryResult],
 ) -> QueryResult:
     """Execute one logical Cypher write in a single SQLite transaction."""
@@ -709,126 +773,262 @@ def parse_cypher(text: str) -> GraphPlan:
     )
 
 
-def analyze_cypher_vector_query(text: str) -> CypherVectorQueryAnalysis | None:
-    """Return parsed metadata for one narrow Cypher SEARCH vector query."""
+def analyze_cypher_vector_query(text: str) -> _CypherVectorQueryAnalysis | None:
+    """Return parsed metadata for one narrow Cypher vector query."""
 
     statement = text.strip().rstrip(";").strip()
     if not statement:
         return None
+    return _analyze_cypher_query_nodes_call(statement)
 
-    match_match = _CYPHER_MATCH_PREFIX.match(statement)
-    if match_match is None:
+
+def _analyze_cypher_query_nodes_call(
+    statement: str,
+) -> _CypherVectorQueryAnalysis | None:
+    """Return parsed metadata for narrow `CALL db.index.vector.queryNodes(...)`."""
+
+    lowered = statement.casefold()
+    if not lowered.startswith("call db.index.vector.querynodes"):
         return None
 
-    search_index = _find_keyword(statement, "search")
-    if search_index is None:
+    prefix_match = re.match(
+        r"^CALL\s+db\.index\.vector\.queryNodes\s*\(",
+        statement,
+        flags=re.IGNORECASE,
+    )
+    if prefix_match is None:
         return None
 
-    return_index = _find_keyword(statement, "return")
-    if return_index is None or return_index < search_index:
-        raise ValueError(
-            "HumemCypher v0 SEARCH queries require SEARCH ... RETURN ... in that order."
-        )
-
-    match_body = statement[match_match.end():search_index].strip()
-    search_text = statement[search_index + len("search"):return_index].strip()
-    return_clause = statement[return_index + len("return"):].strip()
-    if not match_body or not search_text or not return_clause:
-        raise ValueError(
-            "HumemCypher v0 SEARCH queries require MATCH, SEARCH, and RETURN clauses."
-        )
-
-    search_clause = _parse_cypher_vector_search_clause(search_text)
-    if search_clause.index_name.casefold() != "embedding":
-        raise ValueError(
-            "HumemCypher v0 SEARCH queries currently require VECTOR INDEX embedding."
-        )
-
-    candidate_query_text = f"MATCH {match_body} RETURN {return_clause}"
-    candidate_plan = parse_cypher(candidate_query_text)
-    if search_clause.alias not in _match_plan_node_aliases(candidate_plan):
-        raise ValueError(
-            "HumemCypher v0 SEARCH queries must target a matched node alias."
-        )
-
-    return CypherVectorQueryAnalysis(
-        candidate_query_text=candidate_query_text,
-        query_param_name=search_clause.query_param_name,
-        limit_ref=search_clause.limit_ref,
+    args_text, remainder = _consume_balanced_parenthesized(
+        statement[prefix_match.end() - 1:]
     )
-
-
-def _parse_cypher_vector_search_clause(text: str) -> CypherVectorSearchClause:
-    """Parse one narrow Cypher `SEARCH ... IN (VECTOR INDEX ... FOR ... LIMIT ...)`."""
-
-    clause = text.strip()
-    if not clause:
+    if args_text is None:
         raise ValueError(
-            "HumemCypher v0 SEARCH queries currently require "
-            "SEARCH alias IN (VECTOR INDEX embedding FOR $query LIMIT ...)."
+            "HumemCypher v0 vector procedure queries currently require "
+            "CALL db.index.vector.queryNodes('user_embedding_idx', 10, $query) "
+            "YIELD node, score RETURN node.id, score."
         )
 
-    in_index = _find_keyword(clause, "in")
-    if in_index is None:
+    args = _split_top_level_commas(args_text)
+    if len(args) != 3:
         raise ValueError(
-            "HumemCypher v0 SEARCH queries currently require "
-            "SEARCH alias IN (VECTOR INDEX embedding FOR $query LIMIT ...)."
+            "HumemCypher v0 vector procedure queries currently require "
+            "CALL db.index.vector.queryNodes('user_embedding_idx', 10, $query) "
+            "YIELD node, score RETURN node.id, score."
         )
 
-    alias = _parse_cypher_identifier_token(clause[:in_index].strip(), "SEARCH alias")
-    container_text = clause[in_index + len("in"):].strip()
-    if not container_text.startswith("(") or not container_text.endswith(")"):
-        raise ValueError(
-            "HumemCypher v0 SEARCH queries currently require "
-            "SEARCH alias IN (VECTOR INDEX embedding FOR $query LIMIT ...)."
-        )
-
-    body = container_text[1:-1].strip()
-    vector_index_text = _consume_keyword_prefix(body, "vector")
-    index_text = _consume_keyword_prefix(vector_index_text, "index")
-
-    for_index = _find_keyword(index_text, "for")
-    if for_index is None:
-        raise ValueError(
-            "HumemCypher v0 SEARCH queries currently require "
-            "SEARCH alias IN (VECTOR INDEX embedding FOR $query LIMIT ...)."
-        )
-    index_name = _parse_cypher_identifier_token(
-        index_text[:for_index].strip(),
-        "VECTOR INDEX name",
-    )
-
-    for_text = index_text[for_index + len("for"):].strip()
-    limit_index = _find_keyword(for_text, "limit")
-    if limit_index is None:
-        raise ValueError(
-            "HumemCypher v0 SEARCH queries currently require "
-            "SEARCH alias IN (VECTOR INDEX embedding FOR $query LIMIT ...)."
-        )
-
-    query_token = for_text[:limit_index].strip()
+    index_name = _parse_cypher_string_literal(args[0].strip(), "index name")
+    limit_ref = _parse_cypher_vector_limit_ref(args[1].strip())
+    query_token = args[2].strip()
     if not re.fullmatch(rf"\${_IDENTIFIER}", query_token):
         raise ValueError(
-            "HumemCypher v0 SEARCH queries currently require the query vector "
-            "to come from a named parameter."
+            "HumemCypher v0 vector procedure queries currently require the query "
+            "vector to come from a named parameter."
         )
 
-    limit_ref = _parse_cypher_vector_limit_ref(
-        for_text[limit_index + len("limit"):].strip()
+    remainder = remainder.strip()
+    yield_match = re.match(r"^YIELD\b", remainder, flags=re.IGNORECASE)
+    if yield_match is None:
+        raise ValueError(
+            "HumemCypher v0 vector procedure queries currently require "
+            "YIELD node, score RETURN node.id, score."
+        )
+    return_index = _find_keyword(remainder, "return")
+    if return_index is None:
+        raise ValueError(
+            "HumemCypher v0 vector procedure queries currently require "
+            "YIELD node, score RETURN node.id, score."
+        )
+
+    yield_tail = remainder[yield_match.end():return_index].strip()
+    yielded_match = re.match(
+        r"^node\s*,\s*score\b(?P<tail>.*)$",
+        yield_tail,
+        flags=re.IGNORECASE | re.DOTALL,
     )
-    return CypherVectorSearchClause(
-        alias=alias,
+    if yielded_match is None:
+        raise ValueError(
+            "HumemCypher v0 vector procedure queries currently require "
+            "YIELD node, score in that order."
+        )
+    post_yield_text = yielded_match.group("tail").strip()
+    return_text = remainder[return_index + len("return"):].strip()
+
+    candidate_query_text = _query_nodes_candidate_query_text(post_yield_text)
+    candidate_plan = parse_cypher(candidate_query_text)
+    if "node" not in _match_plan_node_aliases(candidate_plan):
+        raise ValueError(
+            "HumemCypher v0 vector procedure queries must keep the yielded "
+            "node alias bound as `node` when adding MATCH filters."
+        )
+
+    return_text, order_text = _split_query_nodes_return_and_order(return_text)
+
+    return_items = tuple(
+        item.strip() for item in return_text.split(",") if item.strip()
+    )
+    if not return_items:
+        raise ValueError(
+            "HumemCypher v0 vector procedure queries currently require a RETURN "
+            "clause over node.id and/or score."
+        )
+    for item in return_items:
+        if item not in {"node.id", "score"}:
+            raise ValueError(
+                "HumemCypher v0 vector procedure queries currently support only "
+                "RETURN node.id and score."
+            )
+
+    order_items = _parse_query_nodes_order_items(order_text)
+
+    return _CypherVectorQueryAnalysis(
+        candidate_query_text=candidate_query_text,
         index_name=index_name,
         query_param_name=query_token[1:],
         limit_ref=limit_ref,
+        result_mode="queryNodes",
+        return_items=return_items,
+        order_items=order_items,
     )
 
 
-def analyze_cypher_plan(plan: GraphPlan) -> CypherPlanShape:
+def _query_nodes_candidate_query_text(post_yield_text: str) -> str:
+    """Build one candidate Cypher query from post-procedure filter clauses."""
+
+    filter_text = post_yield_text.strip()
+    if not filter_text:
+        return "MATCH (node) RETURN node.id"
+    if filter_text.upper().startswith("WHERE "):
+        return f"MATCH (node) WHERE {filter_text[6:]} RETURN node.id"
+    if filter_text.upper().startswith("MATCH "):
+        return f"MATCH {filter_text[6:]} RETURN node.id"
+    raise ValueError(
+        "HumemCypher v0 vector procedure queries currently support only "
+        "optional WHERE ... or MATCH ... [WHERE ...] between YIELD and RETURN."
+    )
+
+
+def _split_query_nodes_return_and_order(text: str) -> tuple[str, str | None]:
+    """Split one `RETURN ... [ORDER BY ...]` tail for vector procedure queries."""
+
+    match = re.search(r"\bORDER\s+BY\b", text, flags=re.IGNORECASE)
+    if match is None:
+        return text.strip(), None
+    return text[:match.start()].strip(), text[match.end():].strip()
+
+
+def _parse_query_nodes_order_items(
+    text: str | None,
+) -> tuple[tuple[str, Literal["asc", "desc"]], ...]:
+    """Parse one narrow `ORDER BY` clause for vector procedure queries."""
+
+    if text is None:
+        return ()
+    if not text:
+        raise ValueError("HumemCypher v0 ORDER BY clauses cannot be empty.")
+
+    items: list[tuple[str, Literal["asc", "desc"]]] = []
+    for raw_item in _split_comma_separated(text):
+        item_text = raw_item.strip()
+        parts = item_text.rsplit(None, 1)
+        direction: Literal["asc", "desc"] = "asc"
+        target = item_text
+        if len(parts) == 2 and parts[1].lower() in {"asc", "desc"}:
+            target = parts[0]
+            direction = cast(Literal["asc", "desc"], parts[1].lower())
+        if target not in {"node.id", "score"}:
+            raise ValueError(
+                "HumemCypher v0 vector procedure ORDER BY currently supports only "
+                "node.id and score."
+            )
+        items.append((target, direction))
+    return tuple(items)
+
+
+def _consume_balanced_parenthesized(text: str) -> tuple[str | None, str]:
+    """Return text inside one balanced leading parenthesized group."""
+
+    if not text.startswith("("):
+        return None, text
+    depth = 0
+    in_string = False
+    string_quote = ""
+    for index, char in enumerate(text):
+        if in_string:
+            if char == string_quote:
+                in_string = False
+            continue
+        if char in {"'", '"'}:
+            in_string = True
+            string_quote = char
+            continue
+        if char == "(":
+            depth += 1
+            continue
+        if char == ")":
+            depth -= 1
+            if depth == 0:
+                return text[1:index], text[index + 1:]
+    return None, text
+
+
+def _split_top_level_commas(text: str) -> tuple[str, ...]:
+    """Split one comma-delimited argument list while respecting strings."""
+
+    parts: list[str] = []
+    current: list[str] = []
+    in_string = False
+    string_quote = ""
+    depth = 0
+    for char in text:
+        if in_string:
+            current.append(char)
+            if char == string_quote:
+                in_string = False
+            continue
+        if char in {"'", '"'}:
+            in_string = True
+            string_quote = char
+            current.append(char)
+            continue
+        if char in "([{":
+            depth += 1
+            current.append(char)
+            continue
+        if char in ")]}":
+            depth -= 1
+            current.append(char)
+            continue
+        if char == "," and depth == 0:
+            parts.append("".join(current).strip())
+            current = []
+            continue
+        current.append(char)
+    parts.append("".join(current).strip())
+    return tuple(part for part in parts if part)
+
+
+def _parse_cypher_string_literal(token: str, label: str) -> str:
+    """Parse one narrow quoted Cypher string literal."""
+
+    if len(token) < 2 or token[0] not in {"'", '"'} or token[-1] != token[0]:
+        raise ValueError(
+            f"HumemCypher v0 vector procedure queries require one quoted {label}."
+        )
+    value = token[1:-1]
+    if not re.fullmatch(_IDENTIFIER, value):
+        raise ValueError(
+            "HumemCypher v0 vector procedure queries require one "
+            f"identifier-like {label}."
+        )
+    return value
+
+
+def _analyze_cypher_plan(plan: GraphPlan) -> _CypherPlanShape:
     """Return lightweight structural metadata for one parsed Cypher plan."""
 
     if isinstance(plan, CreateNodePlan):
-        return CypherPlanShape(
+        return _CypherPlanShape(
             plan_name=type(plan).__name__,
             is_read_only=False,
             pattern_kind="node",
@@ -839,7 +1039,7 @@ def analyze_cypher_plan(plan: GraphPlan) -> CypherPlanShape:
         )
 
     if isinstance(plan, CreateRelationshipPlan):
-        return CypherPlanShape(
+        return _CypherPlanShape(
             plan_name=type(plan).__name__,
             is_read_only=False,
             pattern_kind="relationship",
@@ -854,7 +1054,7 @@ def analyze_cypher_plan(plan: GraphPlan) -> CypherPlanShape:
         )
 
     if isinstance(plan, CreateRelationshipFromSeparatePatternsPlan):
-        return CypherPlanShape(
+        return _CypherPlanShape(
             plan_name=type(plan).__name__,
             is_read_only=False,
             pattern_kind="relationship",
@@ -869,7 +1069,7 @@ def analyze_cypher_plan(plan: GraphPlan) -> CypherPlanShape:
         )
 
     if isinstance(plan, MatchCreateRelationshipPlan):
-        return CypherPlanShape(
+        return _CypherPlanShape(
             plan_name=type(plan).__name__,
             is_read_only=False,
             pattern_kind="relationship",
@@ -885,7 +1085,7 @@ def analyze_cypher_plan(plan: GraphPlan) -> CypherPlanShape:
         )
 
     if isinstance(plan, MatchCreateRelationshipBetweenNodesPlan):
-        return CypherPlanShape(
+        return _CypherPlanShape(
             plan_name=type(plan).__name__,
             is_read_only=False,
             pattern_kind="relationship",
@@ -902,7 +1102,7 @@ def analyze_cypher_plan(plan: GraphPlan) -> CypherPlanShape:
         )
 
     if isinstance(plan, MatchNodePlan):
-        return CypherPlanShape(
+        return _CypherPlanShape(
             plan_name=type(plan).__name__,
             is_read_only=True,
             pattern_kind="node",
@@ -913,7 +1113,7 @@ def analyze_cypher_plan(plan: GraphPlan) -> CypherPlanShape:
         )
 
     if isinstance(plan, MatchRelationshipPlan):
-        return CypherPlanShape(
+        return _CypherPlanShape(
             plan_name=type(plan).__name__,
             is_read_only=True,
             pattern_kind="relationship",
@@ -928,7 +1128,7 @@ def analyze_cypher_plan(plan: GraphPlan) -> CypherPlanShape:
         )
 
     if isinstance(plan, SetRelationshipPlan):
-        return CypherPlanShape(
+        return _CypherPlanShape(
             plan_name=type(plan).__name__,
             is_read_only=False,
             pattern_kind="relationship",
@@ -943,7 +1143,7 @@ def analyze_cypher_plan(plan: GraphPlan) -> CypherPlanShape:
         )
 
     if isinstance(plan, DeleteRelationshipPlan):
-        return CypherPlanShape(
+        return _CypherPlanShape(
             plan_name=type(plan).__name__,
             is_read_only=False,
             pattern_kind="relationship",
@@ -958,7 +1158,7 @@ def analyze_cypher_plan(plan: GraphPlan) -> CypherPlanShape:
         )
 
     if isinstance(plan, DeleteNodePlan):
-        return CypherPlanShape(
+        return _CypherPlanShape(
             plan_name=type(plan).__name__,
             is_read_only=False,
             pattern_kind="node",
@@ -968,7 +1168,7 @@ def analyze_cypher_plan(plan: GraphPlan) -> CypherPlanShape:
             has_limit=False,
         )
 
-    return CypherPlanShape(
+    return _CypherPlanShape(
         plan_name=type(plan).__name__,
         is_read_only=False,
         pattern_kind="node",
@@ -1181,7 +1381,7 @@ def _parse_match(body: str) -> GraphPlan:
 def _match_plan_node_aliases(
     plan: GraphPlan,
 ) -> tuple[str, ...]:
-    """Return node aliases that a Cypher SEARCH query may legally target."""
+    """Return node aliases that remain available inside one Cypher match plan."""
 
     if isinstance(plan, MatchNodePlan):
         return (plan.node.alias,)
@@ -1500,7 +1700,7 @@ def _execute_create_plan(
         | CreateRelationshipPlan
         | CreateRelationshipFromSeparatePatternsPlan
     ),
-    sqlite: SQLiteEngine,
+    sqlite: _SQLiteEngine,
 ) -> QueryResult:
     """Execute one CREATE plan against the SQLite-backed graph tables."""
 
@@ -1579,7 +1779,7 @@ def _create_relationship_uses_distinct_nodes(plan: CreateRelationshipPlan) -> bo
 
 def _execute_set_node_plan(
     plan: SetNodePlan,
-    sqlite: SQLiteEngine,
+    sqlite: _SQLiteEngine,
 ) -> QueryResult:
     """Execute a narrow MATCH ... SET node-property update."""
 
@@ -1624,7 +1824,7 @@ def _execute_set_node_plan(
 
 def _execute_set_relationship_plan(
     plan: SetRelationshipPlan,
-    sqlite: SQLiteEngine,
+    sqlite: _SQLiteEngine,
 ) -> QueryResult:
     """Execute a narrow MATCH ... SET relationship-property update."""
 
@@ -1677,7 +1877,7 @@ def _execute_set_relationship_plan(
 
 def _execute_delete_node_plan(
     plan: DeleteNodePlan,
-    sqlite: SQLiteEngine,
+    sqlite: _SQLiteEngine,
 ) -> QueryResult:
     """Execute a narrow MATCH ... DETACH DELETE node statement."""
 
@@ -1709,7 +1909,7 @@ def _execute_delete_node_plan(
 
 def _execute_delete_relationship_plan(
     plan: DeleteRelationshipPlan,
-    sqlite: SQLiteEngine,
+    sqlite: _SQLiteEngine,
 ) -> QueryResult:
     """Execute a narrow MATCH ... DELETE relationship statement."""
 
@@ -1750,7 +1950,7 @@ def _execute_delete_relationship_plan(
 
 def _execute_match_create_relationship_plan(
     plan: MatchCreateRelationshipPlan,
-    sqlite: SQLiteEngine,
+    sqlite: _SQLiteEngine,
 ) -> QueryResult:
     """Execute a narrow MATCH single-node ... CREATE relationship statement."""
 
@@ -1789,7 +1989,7 @@ def _execute_match_create_relationship_plan(
 
 def _execute_match_create_relationship_between_nodes_plan(
     plan: MatchCreateRelationshipBetweenNodesPlan,
-    sqlite: SQLiteEngine,
+    sqlite: _SQLiteEngine,
 ) -> QueryResult:
     """Execute a narrow MATCH two-node ... CREATE relationship statement."""
 
@@ -1873,7 +2073,7 @@ def _execute_match_create_relationship_between_nodes_plan(
 
 
 def _resolve_match_create_endpoint_node_id(
-    sqlite: SQLiteEngine,
+    sqlite: _SQLiteEngine,
     *,
     endpoint: NodePattern,
     match_node: NodePattern,
@@ -3017,7 +3217,7 @@ def _compile_property_predicate_filter(
         "IS NULL",
         "IS NOT NULL",
     ],
-    value: ScalarQueryParam,
+    value: _ScalarQueryParam,
     filter_index: int,
 ) -> tuple[str, tuple[object, ...]]:
     """Compile one property predicate into a typed EXISTS filter."""
@@ -3140,7 +3340,7 @@ def _compile_property_predicate_filter(
     )
 
 
-def _coerce_numeric_predicate_value(value: ScalarQueryParam) -> int | float:
+def _coerce_numeric_predicate_value(value: _ScalarQueryParam) -> int | float:
     """Convert one scalar predicate value into a numeric comparison literal."""
 
     if isinstance(value, bool):
@@ -3295,7 +3495,7 @@ def _decode_match_result(
     )
 
 
-def _insert_node(sqlite: SQLiteEngine, node: NodePattern) -> int:
+def _insert_node(sqlite: _SQLiteEngine, node: NodePattern) -> int:
     """Insert one labeled node plus its properties into the graph store."""
 
     if node.label is None:
@@ -3326,7 +3526,7 @@ def _insert_node(sqlite: SQLiteEngine, node: NodePattern) -> int:
 
 
 def _insert_edge(
-    sqlite: SQLiteEngine,
+    sqlite: _SQLiteEngine,
     relationship: RelationshipPattern,
     left_id: int,
     right_id: int,
@@ -3374,7 +3574,7 @@ def _insert_edge(
 
 
 def _upsert_node_property(
-    sqlite: SQLiteEngine,
+    sqlite: _SQLiteEngine,
     node_id: int,
     key: str,
     value: PropertyValue,
@@ -3405,7 +3605,7 @@ def _plan_node_property_writes(
                 encoded_value=encoded_value,
                 value_type=value_type,
                 vector_value=(
-                    cast(VectorPropertyValue, property_value)
+                    cast(_VectorPropertyValue, property_value)
                     if value_type == "vector"
                     else None
                 ),
@@ -3416,7 +3616,7 @@ def _plan_node_property_writes(
 
 
 def _persist_node_property_writes(
-    sqlite: SQLiteEngine,
+    sqlite: _SQLiteEngine,
     node_id: int,
     property_writes: tuple[_EncodedNodePropertyWrite, ...],
     *,
@@ -3473,7 +3673,7 @@ def _persist_node_property_writes(
 
 
 def _validate_node_vector_property_writes(
-    sqlite: SQLiteEngine,
+    sqlite: _SQLiteEngine,
     node_id: int,
     property_writes: tuple[_EncodedNodePropertyWrite, ...],
     *,
@@ -3518,19 +3718,19 @@ def _validate_node_vector_property_writes(
 
 
 def _sync_graph_node_vectors(
-    sqlite: SQLiteEngine,
+    sqlite: _SQLiteEngine,
     vector_rows: Sequence[tuple[int, Sequence[float]]],
     *,
     mode: Literal["insert", "upsert"],
 ) -> None:
     """Persist graph-node vectors for encoded Cypher node-property writes."""
 
-    ensure_vector_schema(sqlite)
+    _ensure_vector_schema(sqlite)
     if mode == "insert":
-        insert_vector_rows(sqlite, vector_rows, target="graph_node", namespace="")
+        _insert_vectors(sqlite, vector_rows, target="graph_node", namespace="")
         return
 
-    upsert_vectors(
+    _upsert_vectors(
         sqlite,
         vector_rows,
         target="graph_node",
@@ -3839,9 +4039,21 @@ class _BooleanPredicateParser:
         self._index = 0
 
     def has_more_tokens(self) -> bool:
+        """Return whether unconsumed boolean-expression tokens remain."""
+
         return self._index < len(self._tokens)
 
     def parse_expression(self) -> list[list[str]]:
+        """Parse the full token stream into OR-of-AND predicate groups.
+
+        Returns:
+            A disjunctive-normal-form list where each inner list is one AND group of
+            comparison expressions.
+
+        Raises:
+            ValueError: If the token stream does not contain any valid predicates.
+        """
+
         groups = self._parse_or_expression()
         if not groups:
             raise ValueError("HumemCypher v0 WHERE clauses cannot be empty.")
@@ -4008,7 +4220,7 @@ def _parse_literal(text: str) -> CypherValue:
             raise ValueError(
                 f"HumemCypher v0 parameter names must be identifiers; got {text!r}."
             )
-        return ParameterRef(parameter_name)
+        return _ParameterRef(parameter_name)
 
     if len(text) >= 2 and text[0] == "'" and text[-1] == "'":
         return text[1:-1].replace("\\'", "'")
@@ -4271,7 +4483,7 @@ def _resolve_cypher_value(
 ) -> PropertyValue:
     """Resolve one Cypher literal-or-parameter into a concrete bound value."""
 
-    if not isinstance(value, ParameterRef):
+    if not isinstance(value, _ParameterRef):
         return value
 
     if value.name not in params:
@@ -4295,12 +4507,12 @@ def _resolve_cypher_value(
 def _require_property_value(value: CypherValue) -> PropertyValue:
     """Return one already-bound Cypher value as a concrete property value."""
 
-    if isinstance(value, ParameterRef):
+    if isinstance(value, _ParameterRef):
         raise ValueError("HumemCypher v0 encountered an unbound parameter value.")
     return value
 
 
-def _require_scalar_query_param(value: CypherValue) -> ScalarQueryParam:
+def _require_scalar_query_param(value: CypherValue) -> _ScalarQueryParam:
     """Return one already-bound Cypher value that is valid as a scalar SQL param."""
 
     resolved = _require_property_value(value)
@@ -4432,10 +4644,7 @@ def _consume_keyword_prefix(text: str, keyword: str) -> str:
     stripped = text.strip()
     match = re.match(rf"^{keyword}\b", stripped, flags=re.IGNORECASE)
     if match is None:
-        raise ValueError(
-            "HumemCypher v0 SEARCH queries currently require "
-            "SEARCH alias IN (VECTOR INDEX embedding FOR $query LIMIT ...)."
-        )
+        raise ValueError(f"HumemCypher v0 expected leading keyword {keyword!r}.")
     return stripped[match.end():].strip()
 
 
@@ -4447,19 +4656,17 @@ def _parse_cypher_identifier_token(text: str, label: str) -> str:
     return text
 
 
-def _parse_cypher_vector_limit_ref(text: str) -> CypherVectorLimitRef:
-    """Parse one Cypher vector SEARCH limit token into a literal or param ref."""
+def _parse_cypher_vector_limit_ref(text: str) -> _CypherVectorLimitRef:
+    """Parse one Cypher vector limit token into a literal or param ref."""
 
     if not text:
-        raise ValueError(
-            "HumemCypher v0 SEARCH queries currently require a LIMIT value."
-        )
+        raise ValueError("HumemCypher v0 vector queries currently require a LIMIT value.")
     if re.fullmatch(r"\d+", text):
         return int(text)
     if re.fullmatch(rf"\${_IDENTIFIER}", text):
         return text[1:]
     raise ValueError(
-        "HumemCypher v0 SEARCH queries currently require literal or "
+        "HumemCypher v0 vector queries currently require literal or "
         "parameterized LIMIT."
     )
 

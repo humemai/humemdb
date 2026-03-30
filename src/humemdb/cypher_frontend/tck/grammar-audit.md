@@ -1,6 +1,6 @@
 # Cypher Grammar Audit
 
-This note records a narrow Phase 9 audit of HumemDB's vendored
+This note records a narrow audit of HumemDB's vendored
 `src/humemdb/cypher_frontend/grammar/Cypher.g4` against the local openCypher
 reference checkout at `/mnt/ssd2/repos/openCypher/grammar/openCypher.bnf`.
 
@@ -105,11 +105,11 @@ These are the most concrete grammar-level differences noticed during the narrow 
   clause syntax for the admitted `CREATE`, `MATCH`, `WHERE`, `RETURN`, `SET`, and
   relationship-direction families.
 - The audit did find a specific broader-surface drift point around inline pattern
-  `WHERE`, which should be remembered if Phase 9 expands grammar breadth further.
+  `WHERE`, which should be remembered if grammar breadth expands further.
 
 ## Follow-Up
 
-If Phase 9 expands beyond today's admitted subset, the next useful checks are:
+If parser support expands beyond today's admitted subset, the next useful checks are:
 
 1. audit pattern predicates and path-pattern productions clause-by-clause
 2. compare admitted behavior against local TCK scenarios, not just grammar shape

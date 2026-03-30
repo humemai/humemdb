@@ -4,7 +4,7 @@
 
 Purpose:
 
-- measure the first Phase 12 ingestion family built on top of the canonical SQLite
+- measure the first public ingestion family built on top of the canonical SQLite
   write path
 - compare the public CSV import APIs against the realistic manual alternatives the
   team would otherwise use today
@@ -26,26 +26,26 @@ python scripts/benchmarks/csv_ingest.py \
 What it reports:
 
 - relational ingest timings for:
-  - `import_table(...)`
-  - `staging_normalize`, which loads CSV rows into a permissive staging table first
+    - `import_table(...)`
+    - `staging_normalize`, which loads CSV rows into a permissive staging table first
     and then normalizes them into the final relational table with one set-based SQLite
     insert
-  - manual CSV parsing plus public `db.executemany(...)`
-  - manual CSV parsing plus internal SQLite `executemany(...)` as a lower bound
+    - manual CSV parsing plus public `db.executemany(...)`
+    - manual CSV parsing plus internal SQLite `executemany(...)` as a lower bound
 - graph node ingest timings for:
-  - `import_nodes(...)`
-  - repeated public Cypher `db.query(...)` writes inside one transaction
-  - internal SQLite graph-table batch writes as a lower bound
+    - `import_nodes(...)`
+    - repeated public Cypher `db.query(...)` writes inside one transaction
+    - internal SQLite graph-table batch writes as a lower bound
 - graph edge ingest timings for:
-  - `import_edges(...)`
-  - repeated public Cypher `db.query(...)` writes inside one transaction
-  - internal SQLite graph-table batch writes as a lower bound
+    - `import_edges(...)`
+    - repeated public Cypher `db.query(...)` writes inside one transaction
+    - internal SQLite graph-table batch writes as a lower bound
 - post-ingest count-query timing summaries for each comparison path
 
 Current design note on `staging_normalize`:
 
 - `staging_normalize` is intentionally table-first today
-- it exists to measure one realistic Phase 12 follow-on path where raw CSV lands in a
+- it exists to measure one realistic follow-on path where raw CSV lands in a
   permissive staging table and then moves into the final relational schema through one
   set-based SQLite normalization step
 - graph ingest is benchmarked directly through `import_nodes(...)` and
@@ -112,4 +112,4 @@ Current interpretation:
   worse, especially for edges where they are still more than `6x` slower than the
   internal lower bound at `100k` and `1M`
 - the completed direct-import plus staged-relational runs are strong enough to treat
-  the first public ingestion family as benchmark-validated for this phase
+  the first public ingestion family as benchmark-validated for the current release bar

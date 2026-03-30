@@ -1,399 +1,525 @@
 {
   "cypher": [
     {
+      "comparison_group": null,
+      "cypher_features": null,
       "family": "edge",
       "first_duckdb_scale": null,
+      "order_variant": null,
       "selectivity": "medium",
       "shape": "selective_relationship_expand",
+      "sqlite_plan_summary": null,
       "winners": [
         {
-          "duckdb_mean_ms": 172.57605834553638,
+          "duckdb_mean_ms": 162.32142380128303,
           "scale": 100000,
-          "sqlite_mean_ms": 40.815277180323996,
+          "sqlite_mean_ms": 39.81651629631718,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 1035.8571390000482,
+          "duckdb_mean_ms": 1167.9670671001077,
           "scale": 1000000,
-          "sqlite_mean_ms": 440.71407088389,
+          "sqlite_mean_ms": 422.04682792847353,
           "winner": "sqlite"
         }
       ],
       "workload": "author_expand"
     },
     {
+      "comparison_group": null,
+      "cypher_features": null,
       "family": "edge",
       "first_duckdb_scale": null,
+      "order_variant": null,
       "selectivity": "medium",
       "shape": "ordered_relationship_expand",
+      "sqlite_plan_summary": null,
       "winners": [
         {
-          "duckdb_mean_ms": 192.00601040696105,
+          "duckdb_mean_ms": 184.90655052786073,
           "scale": 100000,
-          "sqlite_mean_ms": 70.68851450458169,
+          "sqlite_mean_ms": 68.1850955200692,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 1214.323106687516,
+          "duckdb_mean_ms": 1380.1143307549257,
           "scale": 1000000,
-          "sqlite_mean_ms": 716.7033342023691,
+          "sqlite_mean_ms": 683.2744952601691,
           "winner": "sqlite"
         }
       ],
       "workload": "author_expand_ordered"
     },
     {
+      "comparison_group": null,
+      "cypher_features": null,
       "family": "node",
       "first_duckdb_scale": null,
+      "order_variant": null,
       "selectivity": "high",
       "shape": "anchored_node_lookup",
+      "sqlite_plan_summary": null,
       "winners": [
         {
-          "duckdb_mean_ms": 152.58867728213468,
+          "duckdb_mean_ms": 150.18328465521336,
           "scale": 100000,
-          "sqlite_mean_ms": 0.08068699389696121,
+          "sqlite_mean_ms": 0.07136709367235501,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 988.6477390925089,
+          "duckdb_mean_ms": 1137.1036778825026,
           "scale": 1000000,
-          "sqlite_mean_ms": 0.07740672056873639,
+          "sqlite_mean_ms": 0.07266054550806682,
           "winner": "sqlite"
         }
       ],
       "workload": "document_lookup"
     },
     {
+      "comparison_group": null,
+      "cypher_features": null,
       "family": "edge",
       "first_duckdb_scale": 1000000,
+      "order_variant": null,
       "selectivity": "low",
       "shape": "broad_relationship_expand",
+      "sqlite_plan_summary": null,
       "winners": [
         {
-          "duckdb_mean_ms": 182.38490447402,
+          "duckdb_mean_ms": 172.95962867016593,
           "scale": 100000,
-          "sqlite_mean_ms": 143.88446152831116,
+          "sqlite_mean_ms": 141.09162039433917,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 1049.1748061031103,
+          "duckdb_mean_ms": 1191.9822913284104,
           "scale": 1000000,
-          "sqlite_mean_ms": 1494.7196159822245,
+          "sqlite_mean_ms": 1521.117547682176,
           "winner": "duckdb"
         }
       ],
       "workload": "social_expand"
     },
     {
+      "comparison_group": null,
+      "cypher_features": null,
       "family": "edge",
       "first_duckdb_scale": null,
+      "order_variant": null,
       "selectivity": "low",
       "shape": "anonymous_endpoint_expand",
+      "sqlite_plan_summary": null,
       "winners": [
         {
-          "duckdb_mean_ms": 179.9321862248083,
+          "duckdb_mean_ms": 183.00835586463413,
           "scale": 100000,
-          "sqlite_mean_ms": 25.01497712607185,
+          "sqlite_mean_ms": 28.4947264008224,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 964.2777730089923,
+          "duckdb_mean_ms": 1145.4280902010698,
           "scale": 1000000,
-          "sqlite_mean_ms": 253.02367703989148,
+          "sqlite_mean_ms": 244.26162584374347,
           "winner": "sqlite"
         }
       ],
       "workload": "social_expand_anonymous_endpoints"
     },
     {
+      "comparison_group": null,
+      "cypher_features": null,
       "family": "edge",
       "first_duckdb_scale": null,
+      "order_variant": null,
       "selectivity": "low",
-      "shape": "ordered_relationship_expand",
+      "shape": "offset_relationship_expand",
+      "sqlite_plan_summary": null,
       "winners": [
         {
-          "duckdb_mean_ms": 200.25348849594593,
+          "duckdb_mean_ms": 181.55642179772258,
           "scale": 100000,
-          "sqlite_mean_ms": 29.508139472454786,
+          "sqlite_mean_ms": 25.083396894236405,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 1204.5317183559139,
+          "duckdb_mean_ms": 1319.5610617597897,
           "scale": 1000000,
-          "sqlite_mean_ms": 264.3377703304092,
+          "sqlite_mean_ms": 249.21078622962037,
+          "winner": "sqlite"
+        }
+      ],
+      "workload": "social_expand_offset"
+    },
+    {
+      "comparison_group": null,
+      "cypher_features": null,
+      "family": "edge",
+      "first_duckdb_scale": null,
+      "order_variant": null,
+      "selectivity": "low",
+      "shape": "ordered_relationship_expand",
+      "sqlite_plan_summary": null,
+      "winners": [
+        {
+          "duckdb_mean_ms": 191.32972803587714,
+          "scale": 100000,
+          "sqlite_mean_ms": 27.552683527270954,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 1360.4955016635358,
+          "scale": 1000000,
+          "sqlite_mean_ms": 259.18669952079654,
           "winner": "sqlite"
         }
       ],
       "workload": "social_expand_ordered"
     },
     {
+      "comparison_group": null,
+      "cypher_features": null,
       "family": "edge",
       "first_duckdb_scale": null,
+      "order_variant": null,
       "selectivity": "low",
       "shape": "relationship_type_alternation",
+      "sqlite_plan_summary": null,
       "winners": [
         {
-          "duckdb_mean_ms": 169.11088954657316,
+          "duckdb_mean_ms": 180.20417153214416,
           "scale": 100000,
-          "sqlite_mean_ms": 29.024324224640925,
+          "sqlite_mean_ms": 29.948570455114048,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 1182.640654190133,
+          "duckdb_mean_ms": 1410.5002850604553,
           "scale": 1000000,
-          "sqlite_mean_ms": 297.92041378095746,
+          "sqlite_mean_ms": 296.3793453139563,
           "winner": "sqlite"
         }
       ],
       "workload": "social_expand_type_alternation"
     },
     {
+      "comparison_group": null,
+      "cypher_features": null,
       "family": "edge",
       "first_duckdb_scale": null,
+      "order_variant": null,
       "selectivity": "very_low",
       "shape": "full_relationship_expand",
+      "sqlite_plan_summary": null,
       "winners": [
         {
-          "duckdb_mean_ms": 107.61904607837398,
+          "duckdb_mean_ms": 106.81291871393721,
           "scale": 100000,
-          "sqlite_mean_ms": 12.586045544594526,
+          "sqlite_mean_ms": 11.745271583398184,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 627.2920325088004,
+          "duckdb_mean_ms": 740.0050102733076,
           "scale": 1000000,
-          "sqlite_mean_ms": 13.078167103230953,
+          "sqlite_mean_ms": 12.538169976323843,
           "winner": "sqlite"
         }
       ],
       "workload": "social_expand_unfiltered"
     },
     {
+      "comparison_group": null,
+      "cypher_features": null,
       "family": "edge",
       "first_duckdb_scale": null,
+      "order_variant": null,
       "selectivity": "low",
       "shape": "untyped_relationship_expand",
+      "sqlite_plan_summary": null,
       "winners": [
         {
-          "duckdb_mean_ms": 175.16225716099143,
+          "duckdb_mean_ms": 174.99403096735477,
           "scale": 100000,
-          "sqlite_mean_ms": 22.483605581025284,
+          "sqlite_mean_ms": 22.595956921577454,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 1015.1222733159859,
+          "duckdb_mean_ms": 1175.684264395386,
           "scale": 1000000,
-          "sqlite_mean_ms": 233.05100901052356,
+          "sqlite_mean_ms": 228.18054957315326,
           "winner": "sqlite"
         }
       ],
       "workload": "social_expand_untyped"
     },
     {
+      "comparison_group": null,
+      "cypher_features": null,
       "family": "edge",
       "first_duckdb_scale": 100000,
+      "order_variant": null,
       "selectivity": "medium",
       "shape": "mixed_boolean_expand",
+      "sqlite_plan_summary": null,
       "winners": [
         {
-          "duckdb_mean_ms": 241.40613339841366,
+          "duckdb_mean_ms": 257.11947043115896,
           "scale": 100000,
-          "sqlite_mean_ms": 496.8941278445224,
+          "sqlite_mean_ms": 484.240573986123,
           "winner": "duckdb"
         },
         {
-          "duckdb_mean_ms": 1680.9499867570896,
+          "duckdb_mean_ms": 1932.9329876539607,
           "scale": 1000000,
-          "sqlite_mean_ms": 5054.924479375283,
+          "sqlite_mean_ms": 5019.856875141461,
           "winner": "duckdb"
         }
       ],
       "workload": "social_mixed_boolean"
     },
     {
+      "comparison_group": null,
+      "cypher_features": null,
       "family": "edge",
       "first_duckdb_scale": null,
+      "order_variant": null,
       "selectivity": "low",
       "shape": "reverse_relationship_expand",
+      "sqlite_plan_summary": null,
       "winners": [
         {
-          "duckdb_mean_ms": 184.72077247376242,
+          "duckdb_mean_ms": 186.98682946463427,
           "scale": 100000,
-          "sqlite_mean_ms": 26.567712736626465,
+          "sqlite_mean_ms": 26.406947212914627,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 1142.1141512691975,
+          "duckdb_mean_ms": 1375.9588192527492,
           "scale": 1000000,
-          "sqlite_mean_ms": 266.50030274565023,
+          "sqlite_mean_ms": 254.4407034292817,
           "winner": "sqlite"
         }
       ],
       "workload": "social_reverse_expand_ordered"
     },
     {
+      "comparison_group": null,
+      "cypher_features": null,
       "family": "edge",
-      "first_duckdb_scale": 1000000,
+      "first_duckdb_scale": null,
+      "order_variant": null,
       "selectivity": "medium",
       "shape": "relationship_property_anchor",
+      "sqlite_plan_summary": null,
       "winners": [
         {
-          "duckdb_mean_ms": 187.89445624376336,
+          "duckdb_mean_ms": 185.7247130634884,
           "scale": 100000,
-          "sqlite_mean_ms": 109.23323795820276,
+          "sqlite_mean_ms": 107.20658969754975,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 1127.9384661465883,
+          "duckdb_mean_ms": 1290.6157945593197,
           "scale": 1000000,
-          "sqlite_mean_ms": 1192.0159407891333,
-          "winner": "duckdb"
+          "sqlite_mean_ms": 1166.4838233652215,
+          "winner": "sqlite"
         }
       ],
       "workload": "social_reverse_since_anchor"
     },
     {
+      "comparison_group": null,
+      "cypher_features": null,
       "family": "edge",
       "first_duckdb_scale": null,
+      "order_variant": null,
       "selectivity": "high",
       "shape": "selective_relationship_expand",
+      "sqlite_plan_summary": null,
       "winners": [
         {
-          "duckdb_mean_ms": 165.5441508628428,
+          "duckdb_mean_ms": 156.51779792581996,
           "scale": 100000,
-          "sqlite_mean_ms": 8.816249668598175,
+          "sqlite_mean_ms": 8.131504990160465,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 982.4517133335272,
+          "duckdb_mean_ms": 1128.5035119702418,
           "scale": 1000000,
-          "sqlite_mean_ms": 90.58776668583353,
+          "sqlite_mean_ms": 92.17097299794357,
           "winner": "sqlite"
         }
       ],
       "workload": "tagged_expand"
     },
     {
+      "comparison_group": null,
+      "cypher_features": null,
       "family": "edge",
       "first_duckdb_scale": null,
+      "order_variant": null,
       "selectivity": "low",
       "shape": "topic_fanout_expand",
+      "sqlite_plan_summary": null,
       "winners": [
         {
-          "duckdb_mean_ms": 138.79164742926756,
+          "duckdb_mean_ms": 131.47852461164197,
           "scale": 100000,
-          "sqlite_mean_ms": 16.851309997340042,
+          "sqlite_mean_ms": 16.11153952156504,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 830.5440677019457,
+          "duckdb_mean_ms": 959.285099680225,
           "scale": 1000000,
-          "sqlite_mean_ms": 177.52255654583374,
+          "sqlite_mean_ms": 181.6057787897686,
           "winner": "sqlite"
         }
       ],
       "workload": "tagged_topic_fanout"
     },
     {
+      "comparison_group": null,
+      "cypher_features": null,
       "family": "node",
       "first_duckdb_scale": null,
+      "order_variant": null,
       "selectivity": "high",
       "shape": "anchored_node_lookup",
+      "sqlite_plan_summary": null,
       "winners": [
         {
-          "duckdb_mean_ms": 129.1400920599699,
+          "duckdb_mean_ms": 124.76177327334881,
           "scale": 100000,
-          "sqlite_mean_ms": 0.06843342756231625,
+          "sqlite_mean_ms": 0.06900355219841003,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 790.0678281051418,
+          "duckdb_mean_ms": 917.3704177762071,
           "scale": 1000000,
-          "sqlite_mean_ms": 0.07831367353598277,
+          "sqlite_mean_ms": 0.08219340816140175,
           "winner": "sqlite"
         }
       ],
       "workload": "team_lookup"
     },
     {
+      "comparison_group": null,
+      "cypher_features": null,
       "family": "edge",
       "first_duckdb_scale": null,
+      "order_variant": null,
       "selectivity": "medium",
       "shape": "membership_expand",
+      "sqlite_plan_summary": null,
       "winners": [
         {
-          "duckdb_mean_ms": 171.49039808039865,
+          "duckdb_mean_ms": 165.45729183902344,
           "scale": 100000,
-          "sqlite_mean_ms": 11.125467407206694,
+          "sqlite_mean_ms": 10.606014945854744,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 1023.5017921465139,
+          "duckdb_mean_ms": 1156.694730433325,
           "scale": 1000000,
-          "sqlite_mean_ms": 113.5046686977148,
+          "sqlite_mean_ms": 112.98390214021008,
           "winner": "sqlite"
         }
       ],
       "workload": "team_membership_expand"
     },
     {
+      "comparison_group": null,
+      "cypher_features": null,
       "family": "edge",
       "first_duckdb_scale": null,
+      "order_variant": null,
       "selectivity": "medium",
       "shape": "ordered_membership_expand",
+      "sqlite_plan_summary": null,
       "winners": [
         {
-          "duckdb_mean_ms": 192.11724726483226,
+          "duckdb_mean_ms": 185.27162168174982,
           "scale": 100000,
-          "sqlite_mean_ms": 20.361891792466242,
+          "sqlite_mean_ms": 19.707786074529093,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 1211.2558159666758,
+          "duckdb_mean_ms": 1407.3744737543166,
           "scale": 1000000,
-          "sqlite_mean_ms": 189.8720103005568,
+          "sqlite_mean_ms": 192.30063073337078,
           "winner": "sqlite"
         }
       ],
       "workload": "team_membership_ordered"
     },
     {
+      "comparison_group": null,
+      "cypher_features": null,
       "family": "node",
       "first_duckdb_scale": null,
+      "order_variant": null,
       "selectivity": "high",
       "shape": "anchored_node_lookup",
+      "sqlite_plan_summary": null,
       "winners": [
         {
-          "duckdb_mean_ms": 141.84767799451947,
+          "duckdb_mean_ms": 125.4751089339455,
           "scale": 100000,
-          "sqlite_mean_ms": 0.06294048701723416,
+          "sqlite_mean_ms": 0.06360700353980064,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 800.1540109204749,
+          "duckdb_mean_ms": 952.2305109227697,
           "scale": 1000000,
-          "sqlite_mean_ms": 0.06338364134232204,
+          "sqlite_mean_ms": 0.06896040091911952,
           "winner": "sqlite"
         }
       ],
       "workload": "topic_lookup"
     },
     {
+      "comparison_group": null,
+      "cypher_features": null,
       "family": "node",
-      "first_duckdb_scale": null,
-      "selectivity": "high",
-      "shape": "anchored_node_lookup",
+      "first_duckdb_scale": 1000000,
+      "order_variant": null,
+      "selectivity": "medium",
+      "shape": "distinct_paginated_projection",
+      "sqlite_plan_summary": null,
       "winners": [
         {
-          "duckdb_mean_ms": 155.47150388980904,
+          "duckdb_mean_ms": 79.51564233129223,
           "scale": 100000,
-          "sqlite_mean_ms": 0.07684668526053429,
+          "sqlite_mean_ms": 55.96432633077105,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 1018.6053986350696,
+          "duckdb_mean_ms": 554.7626384844383,
           "scale": 1000000,
-          "sqlite_mean_ms": 0.11339349051316579,
+          "sqlite_mean_ms": 586.2938530432681,
+          "winner": "duckdb"
+        }
+      ],
+      "workload": "user_distinct_region_offset"
+    },
+    {
+      "comparison_group": null,
+      "cypher_features": null,
+      "family": "node",
+      "first_duckdb_scale": null,
+      "order_variant": null,
+      "selectivity": "high",
+      "shape": "anchored_node_lookup",
+      "sqlite_plan_summary": null,
+      "winners": [
+        {
+          "duckdb_mean_ms": 150.91718981663385,
+          "scale": 100000,
+          "sqlite_mean_ms": 0.07441376025478046,
+          "winner": "sqlite"
+        },
+        {
+          "duckdb_mean_ms": 1153.245538007468,
+          "scale": 1000000,
+          "sqlite_mean_ms": 0.07211013386646907,
           "winner": "sqlite"
         }
       ],
@@ -401,6 +527,15 @@
     }
   ],
   "recommended_runtime": {
+    "cypher_graph_index_diagnostics": {
+      "candidate_index_workloads": [],
+      "direct_type_filter_workloads": [],
+      "edge_property_anchor_workloads": [],
+      "node_property_anchor_workloads": [],
+      "property_join_heavy_workloads": [],
+      "sort_cost_overhead": [],
+      "temp_btree_workloads": []
+    },
     "sql_olap_thresholds": {
       "benchmark_calibrated": true,
       "evidence": {
@@ -464,6 +599,26 @@
         {
           "min_aggregate_count": 0,
           "min_cte_count": 0,
+          "min_exists_count": 1,
+          "min_join_count": 0,
+          "min_window_count": 0,
+          "require_distinct": false,
+          "require_group_by": false,
+          "require_order_by_or_limit": true
+        },
+        {
+          "min_aggregate_count": 1,
+          "min_cte_count": 0,
+          "min_exists_count": 1,
+          "min_join_count": 0,
+          "min_window_count": 0,
+          "require_distinct": false,
+          "require_group_by": false,
+          "require_order_by_or_limit": false
+        },
+        {
+          "min_aggregate_count": 0,
+          "min_cte_count": 0,
           "min_exists_count": 0,
           "min_join_count": 0,
           "min_window_count": 1,
@@ -484,6 +639,7 @@
       "sql_features": {
         "aggregate_count": 0,
         "cte_count": 0,
+        "exists_count": 0,
         "has_distinct": true,
         "has_group_by": false,
         "has_limit": false,
@@ -495,21 +651,21 @@
       },
       "winners": [
         {
-          "duckdb_mean_ms": 1.5752821539839108,
+          "duckdb_mean_ms": 1.3852093058327835,
           "scale": 10000,
-          "sqlite_mean_ms": 0.41502155363559723,
+          "sqlite_mean_ms": 0.39406120777130127,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 4.489054903388023,
+          "duckdb_mean_ms": 3.526330770303806,
           "scale": 100000,
-          "sqlite_mean_ms": 2.239514452715715,
+          "sqlite_mean_ms": 2.0708108010391393,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 17.159977617363136,
+          "duckdb_mean_ms": 15.310497799267372,
           "scale": 1000000,
-          "sqlite_mean_ms": 23.407912502686184,
+          "sqlite_mean_ms": 20.924299489706755,
           "winner": "duckdb"
         }
       ],
@@ -523,6 +679,7 @@
       "sql_features": {
         "aggregate_count": 1,
         "cte_count": 0,
+        "exists_count": 0,
         "has_distinct": false,
         "has_group_by": true,
         "has_limit": false,
@@ -534,21 +691,21 @@
       },
       "winners": [
         {
-          "duckdb_mean_ms": 2.2759681257108846,
+          "duckdb_mean_ms": 1.7176566955943902,
           "scale": 10000,
-          "sqlite_mean_ms": 1.4574516875048478,
+          "sqlite_mean_ms": 1.210045845558246,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 5.027070331076781,
+          "duckdb_mean_ms": 4.351562354713678,
           "scale": 100000,
-          "sqlite_mean_ms": 6.329311057925224,
+          "sqlite_mean_ms": 6.261202972382307,
           "winner": "duckdb"
         },
         {
-          "duckdb_mean_ms": 19.97661730274558,
+          "duckdb_mean_ms": 17.885111272335052,
           "scale": 1000000,
-          "sqlite_mean_ms": 40.52170319482684,
+          "sqlite_mean_ms": 36.34708747267723,
           "winner": "duckdb"
         }
       ],
@@ -562,6 +719,7 @@
       "sql_features": {
         "aggregate_count": 1,
         "cte_count": 0,
+        "exists_count": 0,
         "has_distinct": false,
         "has_group_by": true,
         "has_limit": false,
@@ -573,21 +731,21 @@
       },
       "winners": [
         {
-          "duckdb_mean_ms": 2.426427944252888,
+          "duckdb_mean_ms": 2.0724108132223287,
           "scale": 10000,
-          "sqlite_mean_ms": 0.03749364987015724,
+          "sqlite_mean_ms": 0.0353070596853892,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 6.183281075209379,
+          "duckdb_mean_ms": 5.460884732504685,
           "scale": 100000,
-          "sqlite_mean_ms": 0.0781404475371043,
+          "sqlite_mean_ms": 0.06264013548692067,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 25.061454623937607,
+          "duckdb_mean_ms": 23.69463009138902,
           "scale": 1000000,
-          "sqlite_mean_ms": 0.13739351804057756,
+          "sqlite_mean_ms": 0.1399169365564982,
           "winner": "sqlite"
         }
       ],
@@ -601,6 +759,7 @@
       "sql_features": {
         "aggregate_count": 0,
         "cte_count": 0,
+        "exists_count": 0,
         "has_distinct": false,
         "has_group_by": false,
         "has_limit": true,
@@ -612,21 +771,21 @@
       },
       "winners": [
         {
-          "duckdb_mean_ms": 3.0654401828845343,
+          "duckdb_mean_ms": 2.7027957451840243,
           "scale": 10000,
-          "sqlite_mean_ms": 0.029416910062233608,
+          "sqlite_mean_ms": 0.02337371309598287,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 18.352408582965534,
+          "duckdb_mean_ms": 16.80976788823803,
           "scale": 100000,
-          "sqlite_mean_ms": 0.19149063155055046,
+          "sqlite_mean_ms": 0.1886469932893912,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 65.33014712234338,
+          "duckdb_mean_ms": 65.09080405036609,
           "scale": 1000000,
-          "sqlite_mean_ms": 5.271237653990586,
+          "sqlite_mean_ms": 4.876446599761645,
           "winner": "sqlite"
         }
       ],
@@ -640,6 +799,7 @@
       "sql_features": {
         "aggregate_count": 1,
         "cte_count": 0,
+        "exists_count": 0,
         "has_distinct": false,
         "has_group_by": true,
         "has_limit": false,
@@ -651,21 +811,21 @@
       },
       "winners": [
         {
-          "duckdb_mean_ms": 3.2635809232791266,
+          "duckdb_mean_ms": 2.846845891326666,
           "scale": 10000,
-          "sqlite_mean_ms": 4.802332725375891,
+          "sqlite_mean_ms": 4.492755513638258,
           "winner": "duckdb"
         },
         {
-          "duckdb_mean_ms": 17.749463208019733,
+          "duckdb_mean_ms": 16.197903547436,
           "scale": 100000,
-          "sqlite_mean_ms": 59.98552870005369,
+          "sqlite_mean_ms": 57.05851735547185,
           "winner": "duckdb"
         },
         {
-          "duckdb_mean_ms": 68.3921673335135,
+          "duckdb_mean_ms": 63.56068762640159,
           "scale": 1000000,
-          "sqlite_mean_ms": 672.779296990484,
+          "sqlite_mean_ms": 669.8142373934388,
           "winner": "duckdb"
         }
       ],
@@ -679,6 +839,7 @@
       "sql_features": {
         "aggregate_count": 1,
         "cte_count": 0,
+        "exists_count": 0,
         "has_distinct": false,
         "has_group_by": true,
         "has_limit": true,
@@ -690,21 +851,21 @@
       },
       "winners": [
         {
-          "duckdb_mean_ms": 3.072430224468311,
+          "duckdb_mean_ms": 2.1969514588514962,
           "scale": 10000,
-          "sqlite_mean_ms": 3.7742525649567447,
+          "sqlite_mean_ms": 3.3274500941236815,
           "winner": "duckdb"
         },
         {
-          "duckdb_mean_ms": 14.762563165277243,
+          "duckdb_mean_ms": 13.325587380677462,
           "scale": 100000,
-          "sqlite_mean_ms": 41.87804087996483,
+          "sqlite_mean_ms": 39.50403444468975,
           "winner": "duckdb"
         },
         {
-          "duckdb_mean_ms": 68.5122072075804,
+          "duckdb_mean_ms": 61.93760735914111,
           "scale": 1000000,
-          "sqlite_mean_ms": 436.2839333092173,
+          "sqlite_mean_ms": 435.841115967681,
           "winner": "duckdb"
         }
       ],
@@ -718,6 +879,7 @@
       "sql_features": {
         "aggregate_count": 2,
         "cte_count": 1,
+        "exists_count": 0,
         "has_distinct": false,
         "has_group_by": true,
         "has_limit": true,
@@ -729,21 +891,21 @@
       },
       "winners": [
         {
-          "duckdb_mean_ms": 3.9692833088338375,
+          "duckdb_mean_ms": 2.827525914957126,
           "scale": 10000,
-          "sqlite_mean_ms": 9.277537930756807,
+          "sqlite_mean_ms": 8.754901277522245,
           "winner": "duckdb"
         },
         {
-          "duckdb_mean_ms": 23.787453460196655,
+          "duckdb_mean_ms": 22.108125345160563,
           "scale": 100000,
-          "sqlite_mean_ms": 116.85457034036517,
+          "sqlite_mean_ms": 113.31848970924814,
           "winner": "duckdb"
         },
         {
-          "duckdb_mean_ms": 72.27263040840626,
+          "duckdb_mean_ms": 74.1273023498555,
           "scale": 1000000,
-          "sqlite_mean_ms": 2120.68992604812,
+          "sqlite_mean_ms": 1875.435066409409,
           "winner": "duckdb"
         }
       ],
@@ -757,6 +919,7 @@
       "sql_features": {
         "aggregate_count": 1,
         "cte_count": 0,
+        "exists_count": 1,
         "has_distinct": false,
         "has_group_by": false,
         "has_limit": false,
@@ -768,21 +931,21 @@
       },
       "winners": [
         {
-          "duckdb_mean_ms": 2.817236352711916,
+          "duckdb_mean_ms": 2.2728845166663327,
           "scale": 10000,
-          "sqlite_mean_ms": 3.281377566357454,
+          "sqlite_mean_ms": 3.0981830010811486,
           "winner": "duckdb"
         },
         {
-          "duckdb_mean_ms": 14.09558393061161,
+          "duckdb_mean_ms": 11.582540813833475,
           "scale": 100000,
-          "sqlite_mean_ms": 33.36587889740864,
+          "sqlite_mean_ms": 31.750458447883524,
           "winner": "duckdb"
         },
         {
-          "duckdb_mean_ms": 62.430800714840494,
+          "duckdb_mean_ms": 57.9719883389771,
           "scale": 1000000,
-          "sqlite_mean_ms": 355.691015565147,
+          "sqlite_mean_ms": 340.58343262101215,
           "winner": "duckdb"
         }
       ],
@@ -796,6 +959,7 @@
       "sql_features": {
         "aggregate_count": 1,
         "cte_count": 0,
+        "exists_count": 0,
         "has_distinct": false,
         "has_group_by": false,
         "has_limit": false,
@@ -807,21 +971,21 @@
       },
       "winners": [
         {
-          "duckdb_mean_ms": 1.531135446081559,
+          "duckdb_mean_ms": 1.3552028685808182,
           "scale": 10000,
-          "sqlite_mean_ms": 0.20841105530659357,
+          "sqlite_mean_ms": 0.20344695076346397,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 10.677259415388107,
+          "duckdb_mean_ms": 9.681263472884893,
           "scale": 100000,
-          "sqlite_mean_ms": 1.6710689912239711,
+          "sqlite_mean_ms": 1.5842799718181293,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 54.08928527807196,
+          "duckdb_mean_ms": 44.426027995844684,
           "scale": 1000000,
-          "sqlite_mean_ms": 3.233000636100769,
+          "sqlite_mean_ms": 3.2664434984326363,
           "winner": "sqlite"
         }
       ],
@@ -835,6 +999,7 @@
       "sql_features": {
         "aggregate_count": 0,
         "cte_count": 0,
+        "exists_count": 0,
         "has_distinct": false,
         "has_group_by": false,
         "has_limit": false,
@@ -846,21 +1011,21 @@
       },
       "winners": [
         {
-          "duckdb_mean_ms": 1.4082480532427628,
+          "duckdb_mean_ms": 1.3806697291632493,
           "scale": 10000,
-          "sqlite_mean_ms": 0.008547212928533554,
+          "sqlite_mean_ms": 0.011569975564877192,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 13.125347594420115,
+          "duckdb_mean_ms": 11.46260043606162,
           "scale": 100000,
-          "sqlite_mean_ms": 0.008680081615845362,
+          "sqlite_mean_ms": 0.008459823826948801,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 104.77216014017661,
+          "duckdb_mean_ms": 100.51694667587678,
           "scale": 1000000,
-          "sqlite_mean_ms": 0.01362695669134458,
+          "sqlite_mean_ms": 0.00909327839811643,
           "winner": "sqlite"
         }
       ],
@@ -874,6 +1039,7 @@
       "sql_features": {
         "aggregate_count": 1,
         "cte_count": 0,
+        "exists_count": 0,
         "has_distinct": false,
         "has_group_by": true,
         "has_limit": false,
@@ -885,21 +1051,21 @@
       },
       "winners": [
         {
-          "duckdb_mean_ms": 3.436491514245669,
+          "duckdb_mean_ms": 2.6592621579766273,
           "scale": 10000,
-          "sqlite_mean_ms": 4.543231800198555,
+          "sqlite_mean_ms": 3.979384743918975,
           "winner": "duckdb"
         },
         {
-          "duckdb_mean_ms": 17.2059644634525,
+          "duckdb_mean_ms": 15.912029581765335,
           "scale": 100000,
-          "sqlite_mean_ms": 64.94801522543032,
+          "sqlite_mean_ms": 60.161963726083435,
           "winner": "duckdb"
         },
         {
-          "duckdb_mean_ms": 65.94054230178396,
+          "duckdb_mean_ms": 62.397644855082035,
           "scale": 1000000,
-          "sqlite_mean_ms": 725.4605243603388,
+          "sqlite_mean_ms": 694.0939074071745,
           "winner": "duckdb"
         }
       ],
@@ -913,6 +1079,7 @@
       "sql_features": {
         "aggregate_count": 0,
         "cte_count": 0,
+        "exists_count": 0,
         "has_distinct": false,
         "has_group_by": false,
         "has_limit": true,
@@ -924,21 +1091,21 @@
       },
       "winners": [
         {
-          "duckdb_mean_ms": 2.274431133021911,
+          "duckdb_mean_ms": 2.3488450484971204,
           "scale": 10000,
-          "sqlite_mean_ms": 0.08664373308420181,
+          "sqlite_mean_ms": 0.06623317797978719,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 18.507375692327816,
+          "duckdb_mean_ms": 15.949132697035868,
           "scale": 100000,
-          "sqlite_mean_ms": 0.27413060888648033,
+          "sqlite_mean_ms": 0.2652706267933051,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 61.70988750333587,
+          "duckdb_mean_ms": 55.447484056154885,
           "scale": 1000000,
-          "sqlite_mean_ms": 2.2457240459819636,
+          "sqlite_mean_ms": 2.2060812140504518,
           "winner": "sqlite"
         }
       ],
@@ -952,6 +1119,7 @@
       "sql_features": {
         "aggregate_count": 0,
         "cte_count": 0,
+        "exists_count": 0,
         "has_distinct": false,
         "has_group_by": false,
         "has_limit": false,
@@ -963,21 +1131,21 @@
       },
       "winners": [
         {
-          "duckdb_mean_ms": 3.592615326245626,
+          "duckdb_mean_ms": 3.1456734674672284,
           "scale": 10000,
-          "sqlite_mean_ms": 14.662279436985651,
+          "sqlite_mean_ms": 14.279482730974754,
           "winner": "duckdb"
         },
         {
-          "duckdb_mean_ms": 21.096177554378908,
+          "duckdb_mean_ms": 18.096360688408215,
           "scale": 100000,
-          "sqlite_mean_ms": 135.58448028440276,
+          "sqlite_mean_ms": 130.79683218772212,
           "winner": "duckdb"
         },
         {
-          "duckdb_mean_ms": 117.89746722206473,
+          "duckdb_mean_ms": 94.22631375491619,
           "scale": 1000000,
-          "sqlite_mean_ms": 1325.1748884407182,
+          "sqlite_mean_ms": 1294.8601827956736,
           "winner": "duckdb"
         }
       ],
@@ -991,6 +1159,7 @@
       "sql_features": {
         "aggregate_count": 2,
         "cte_count": 0,
+        "exists_count": 0,
         "has_distinct": false,
         "has_group_by": true,
         "has_limit": true,
@@ -1002,21 +1171,21 @@
       },
       "winners": [
         {
-          "duckdb_mean_ms": 1.7201560549438,
+          "duckdb_mean_ms": 1.124679110944271,
           "scale": 10000,
-          "sqlite_mean_ms": 0.24704774841666222,
+          "sqlite_mean_ms": 0.23825683941443762,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 2.6510825070242086,
+          "duckdb_mean_ms": 2.3962249979376793,
           "scale": 100000,
-          "sqlite_mean_ms": 0.9099999442696571,
+          "sqlite_mean_ms": 0.8749452730019888,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 17.4085086522003,
+          "duckdb_mean_ms": 16.901631684352953,
           "scale": 1000000,
-          "sqlite_mean_ms": 22.214094332108896,
+          "sqlite_mean_ms": 21.477140641460817,
           "winner": "duckdb"
         }
       ],
@@ -1030,6 +1199,7 @@
       "sql_features": {
         "aggregate_count": 0,
         "cte_count": 0,
+        "exists_count": 1,
         "has_distinct": false,
         "has_group_by": false,
         "has_limit": true,
@@ -1041,21 +1211,21 @@
       },
       "winners": [
         {
-          "duckdb_mean_ms": 2.108117410292228,
+          "duckdb_mean_ms": 1.4878329820930958,
           "scale": 10000,
-          "sqlite_mean_ms": 0.9587733075022697,
+          "sqlite_mean_ms": 0.8889517436424891,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 4.491955041885376,
+          "duckdb_mean_ms": 3.8692946545779705,
           "scale": 100000,
-          "sqlite_mean_ms": 4.103034113844235,
+          "sqlite_mean_ms": 3.862168174237013,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 28.376352197180193,
+          "duckdb_mean_ms": 25.715138607968886,
           "scale": 1000000,
-          "sqlite_mean_ms": 44.22493247936169,
+          "sqlite_mean_ms": 41.80263836557666,
           "winner": "duckdb"
         }
       ],
@@ -1069,6 +1239,7 @@
       "sql_features": {
         "aggregate_count": 0,
         "cte_count": 0,
+        "exists_count": 0,
         "has_distinct": false,
         "has_group_by": false,
         "has_limit": true,
@@ -1080,65 +1251,26 @@
       },
       "winners": [
         {
-          "duckdb_mean_ms": 1.8008328042924404,
+          "duckdb_mean_ms": 1.5169098041951656,
           "scale": 10000,
-          "sqlite_mean_ms": 0.2609843698640664,
+          "sqlite_mean_ms": 0.25686031828324,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 4.188887309283018,
+          "duckdb_mean_ms": 4.028598001847665,
           "scale": 100000,
-          "sqlite_mean_ms": 1.2548972542087238,
+          "sqlite_mean_ms": 1.211852456132571,
           "winner": "sqlite"
         },
         {
-          "duckdb_mean_ms": 27.131867905457813,
+          "duckdb_mean_ms": 25.98090594013532,
           "scale": 1000000,
-          "sqlite_mean_ms": 37.30302909389138,
+          "sqlite_mean_ms": 34.872816720356546,
           "winner": "duckdb"
         }
       ],
       "workload": "memory_owner_join_lookup"
     }
   ],
-  "thread_limit": "default",
-  "vector": [
-    {
-      "dimensions": 256,
-      "family": "vector",
-      "first_indexed_scale": null,
-      "shape": "candidate_filtered_ann",
-      "top_k": 10,
-      "winners": [
-        {
-          "filtered_candidate_count": 1001,
-          "lancedb_indexed_filtered_mean_ms": 1.1726968611280124,
-          "lancedb_indexed_filtered_recall": 0.30625,
-          "numpy_f32_filtered_mean_ms": 0.08858393994159997,
-          "scale": 2000,
-          "strategy": "default",
-          "winner": "numpy_exact"
-        },
-        {
-          "filtered_candidate_count": 5001,
-          "lancedb_indexed_filtered_mean_ms": 1.3102729086919378,
-          "lancedb_indexed_filtered_recall": 0.2,
-          "numpy_f32_filtered_mean_ms": 3.000073387132337,
-          "scale": 10000,
-          "strategy": "default",
-          "winner": "numpy_exact"
-        },
-        {
-          "filtered_candidate_count": 25001,
-          "lancedb_indexed_filtered_mean_ms": 1.5513841935899109,
-          "lancedb_indexed_filtered_recall": 0.18125,
-          "numpy_f32_filtered_mean_ms": 6.267469657662635,
-          "scale": 50000,
-          "strategy": "default",
-          "winner": "numpy_exact"
-        }
-      ],
-      "workload": "vector_dims256_topk10"
-    }
-  ]
+  "thread_limit": "8"
 }

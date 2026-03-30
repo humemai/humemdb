@@ -45,9 +45,47 @@ PendingTargetNamespacedVectorRow: TypeAlias = tuple[
 ]
 
 
+def _expr_args(expression: Any) -> Mapping[str, Any]:
+    """Return parsed expression args or an empty mapping."""
+
+    return cast(Mapping[str, Any], getattr(expression, "args", {}))
+
+
+def _expr_arg(expression: Any, name: str) -> Any:
+    """Return one named parsed expression arg when present."""
+
+    return _expr_args(expression).get(name)
+
+
+def _expr_expressions(expression: Any) -> tuple[Any, ...]:
+    """Return parsed child expressions as a tuple."""
+
+    return tuple(cast(Sequence[Any], getattr(expression, "expressions", ())))
+
+
+def _expr_name(expression: Any) -> Any:
+    """Return one parsed expression name when present."""
+
+    return getattr(expression, "name", None)
+
+
+def _expr_this(expression: Any) -> Any:
+    """Return the parsed `this` child when present."""
+
+    return getattr(expression, "this", None)
+
+
 @dataclass(frozen=True, slots=True)
 class SQLCandidateQueryPlan:
-    """Thin internal plan for one SQL candidate query in vector search."""
+    """Thin internal plan for one SQL candidate query in vector search.
+
+    Attributes:
+        text: Candidate SQL query text without the vector ordering clause.
+        route: Fixed engine route used for candidate execution.
+        target: Logical vector target such as `sql_row`.
+        namespace: Logical namespace such as the owning SQL table name.
+        params: Candidate-query parameters after vector-only params are removed.
+    """
 
     text: str
     route: Route
@@ -58,7 +96,15 @@ class SQLCandidateQueryPlan:
 
 @dataclass(frozen=True, slots=True)
 class CypherCandidateQueryPlan:
-    """Thin internal plan for one Cypher candidate query in vector search."""
+    """Thin internal plan for one Cypher candidate query in vector search.
+
+    Attributes:
+        text: Candidate Cypher query text synthesized from the public vector procedure.
+        route: Fixed engine route used for candidate execution.
+        target: Logical vector target such as `graph_node`.
+        namespace: Logical namespace attached to the target.
+        params: Candidate-query parameters after vector-only params are removed.
+    """
 
     text: str
     route: Route
@@ -69,7 +115,14 @@ class CypherCandidateQueryPlan:
 
 @dataclass(frozen=True, slots=True)
 class SQLVectorQueryPlan:
-    """Internal plan for one SQL-backed candidate-query vector execution."""
+    """Internal plan for one SQL-backed candidate-query vector execution.
+
+    Attributes:
+        candidate_query: SQL query used to define candidate row ids.
+        query: Query embedding to rank candidates against.
+        top_k: Maximum number of ranked matches to return.
+        metric: Vector similarity metric.
+    """
 
     candidate_query: SQLCandidateQueryPlan
     query: Sequence[float]
@@ -79,12 +132,26 @@ class SQLVectorQueryPlan:
 
 @dataclass(frozen=True, slots=True)
 class CypherVectorQueryPlan:
-    """Internal plan for one Cypher-backed candidate-query vector execution."""
+    """Internal plan for one Cypher-backed candidate-query vector execution.
+
+    Attributes:
+        candidate_query: Cypher query used to define candidate node ids.
+        query: Query embedding to rank candidates against.
+        top_k: Maximum number of ranked matches to return.
+        index_name: Referenced vector index identifier.
+        result_mode: Whether to keep the existing normalized vector result shape or
+            project the narrow `queryNodes` return subset.
+        return_items: Requested `queryNodes` return items in output order.
+        order_items: Requested `queryNodes` order items in evaluation order.
+    """
 
     candidate_query: CypherCandidateQueryPlan
     query: Sequence[float]
     top_k: int
-    metric: VectorMetric
+    index_name: str
+    result_mode: Literal["normalized", "queryNodes"] = "normalized"
+    return_items: tuple[str, ...] = ()
+    order_items: tuple[tuple[str, Literal["asc", "desc"]], ...] = ()
 
 
 CandidateVectorQueryPlan: TypeAlias = SQLVectorQueryPlan | CypherVectorQueryPlan
@@ -92,7 +159,14 @@ CandidateVectorQueryPlan: TypeAlias = SQLVectorQueryPlan | CypherVectorQueryPlan
 
 @dataclass(frozen=True, slots=True)
 class CandidateVectorQueryResult:
-    """Normalized candidate-query result for one vector search."""
+    """Normalized candidate-query result for one vector search.
+
+    Attributes:
+        target: Logical vector target such as `sql_row` or `graph_node`.
+        namespace: Logical namespace attached to the target.
+        candidate_keys: Logical vector identifiers extracted from the candidate query.
+        candidate_count: Number of candidate keys before final ranking.
+    """
 
     target: str
     namespace: str
@@ -102,7 +176,14 @@ class CandidateVectorQueryResult:
 
 @dataclass(frozen=True, slots=True)
 class DirectVectorSearchPlan:
-    """Thin internal plan for one direct-vector search execution."""
+    """Thin internal plan for one direct-vector search execution.
+
+    Attributes:
+        query: Query embedding to rank against the direct vector set.
+        top_k: Maximum number of matches to return.
+        metric: Vector similarity metric.
+        filters: Optional equality metadata filters for narrowing the candidate set.
+    """
 
     query: Sequence[float]
     top_k: int
@@ -112,7 +193,17 @@ class DirectVectorSearchPlan:
 
 @dataclass(frozen=True, slots=True)
 class ResolvedVectorCandidates:
-    """Resolved candidate metadata for one exact vector search execution."""
+    """Resolved candidate metadata for one exact vector search execution.
+
+    Attributes:
+        target: Logical vector target such as `direct`, `sql_row`, or `graph_node`.
+        namespace: Logical namespace attached to the target.
+        candidate_keys: Logical identifiers for the candidate vectors.
+        candidate_indexes: Matrix indexes aligned with `candidate_keys`.
+        candidate_count: Number of candidate vectors considered.
+        namespace_size: Total size of the namespace before filtering.
+        uses_full_namespace: Whether the candidate set spans the full namespace.
+    """
 
     target: str
     namespace: str
@@ -125,16 +216,33 @@ class ResolvedVectorCandidates:
 
 @dataclass(frozen=True, slots=True)
 class SQLVectorWritePlan:
-    """Thin internal plan for one SQL write that may also touch vector storage."""
+    """Thin internal plan for one SQL write that may also touch vector storage.
+
+    Attributes:
+        normalized_params: SQL parameters after vector values are encoded for SQLite.
+        vector_rows: Canonical vector rows to insert or upsert alongside the SQL
+            write.
+        deleted_item_ids: Canonical logical vector ids to delete alongside the SQL
+            write.
+        vector_mode: Whether vector rows should be inserted, upserted, or skipped.
+    """
 
     normalized_params: QueryParameters
     vector_rows: tuple[PendingTargetNamespacedVectorRow, ...]
+    deleted_item_ids: tuple[tuple[str, str, int], ...]
     vector_mode: Literal["insert", "upsert"] | None
 
 
 @dataclass(frozen=True, slots=True)
 class SQLVectorBatchWritePlan:
-    """Thin internal plan for one batched SQL write over SQLite."""
+    """Thin internal plan for one batched SQL write over SQLite.
+
+    Attributes:
+        normalized_params_seq: Batch parameters after vector values are encoded.
+        vector_rows: Canonical vector rows implied by the batch.
+        requires_rowwise_execution: Whether the batch must be replayed row by row to
+            keep SQL rows and vector rows aligned.
+    """
 
     normalized_params_seq: BatchParameters
     vector_rows: tuple[PendingTargetNamespacedVectorRow, ...]
@@ -142,7 +250,14 @@ class SQLVectorBatchWritePlan:
 
 
 class SQLVectorInsertAnalysis(TypedDict):
-    """Typed analysis payload for narrow vector-bearing SQL INSERT statements."""
+    """Typed analysis payload for narrow vector-bearing SQL INSERT statements.
+
+    Keys:
+        target_name: Table name that owns the vector-bearing row.
+        id_param_ref: Named or positional reference for the row id, when parameterized.
+        id_literal: Literal row id when the statement embeds one directly.
+        vector_param_ref: Named or positional reference for the embedding value.
+    """
 
     target_name: str
     id_param_ref: SQLParamRef | None
@@ -151,7 +266,14 @@ class SQLVectorInsertAnalysis(TypedDict):
 
 
 class SQLVectorUpdateAnalysis(TypedDict):
-    """Typed analysis payload for narrow vector-bearing SQL UPDATE statements."""
+    """Typed analysis payload for narrow vector-bearing SQL UPDATE statements.
+
+    Keys:
+        target_name: Table name that owns the vector-bearing row.
+        vector_param_ref: Named or positional reference for the new embedding value.
+        id_param_ref: Named or positional reference for the row id, when parameterized.
+        id_literal: Literal row id when the statement embeds one directly.
+    """
 
     target_name: str
     vector_param_ref: SQLParamRef
@@ -159,9 +281,25 @@ class SQLVectorUpdateAnalysis(TypedDict):
     id_literal: int | None
 
 
+class SQLVectorDeleteAnalysis(TypedDict):
+    """Typed analysis payload for narrow SQL deletes over vector-owned rows."""
+
+    target_name: str
+    id_param_ref: SQLParamRef | None
+    id_literal: int | None
+
+
 @dataclass(frozen=True, slots=True)
 class SQLCandidateVectorQueryAnalysis:
-    """Parsed SQL vector-query analysis for one narrow language-level query."""
+    """Parsed SQL vector-query analysis for one narrow language-level query.
+
+    Attributes:
+        candidate_query_text: SQL candidate query text with the vector ordering clause
+            removed.
+        metric: Vector metric implied by the SQL vector operator.
+        query_param_name: Mapping key that supplies the query embedding.
+        limit_ref: Integer limit literal or parameter reference used by the query.
+    """
 
     candidate_query_text: str
     metric: VectorMetric
@@ -173,7 +311,21 @@ def plan_candidate_vector_query(
     text: str,
     params: QueryParameters,
 ) -> CandidateVectorQueryPlan:
-    """Lower one language-level vector query into an internal candidate plan."""
+    """Lower one language-level vector query into an internal candidate plan.
+
+    Args:
+        text: SQL or Cypher text containing one supported language-level vector form.
+        params: Mapping-style parameters used by the vector query.
+
+    Returns:
+        A SQL-backed or Cypher-backed candidate vector query plan.
+
+    Raises:
+        ValueError: If the text is empty or does not use one supported vector-query
+            shape.
+        TypeError: If params do not follow the required mapping-style public vector
+            parameter contract.
+    """
 
     mapping_params = _require_vector_mapping_params(params)
     stripped = text.strip()
@@ -235,13 +387,17 @@ def plan_candidate_vector_query(
                 cypher_analysis.limit_ref,
                 mapping_params,
             ),
-            metric="cosine",
+            index_name=cypher_analysis.index_name,
+            result_mode=cypher_analysis.result_mode,
+            return_items=cypher_analysis.return_items,
+            order_items=cypher_analysis.order_items,
         )
 
     raise ValueError(
         "HumemVector v0 now requires PostgreSQL-like SQL vector syntax "
         "(ORDER BY embedding <->|<=>|<#> $query LIMIT ...) or Neo4j-like "
-        "Cypher SEARCH ... VECTOR INDEX embedding FOR $query LIMIT ...."
+        "CALL db.index.vector.queryNodes('<name>', k, $query) YIELD node, score "
+        "MATCH (node:User) RETURN node.id, score."
     )
 
 
@@ -344,17 +500,17 @@ def _analyze_sql_candidate_vector_query(
         return None
 
     order = expression.args.get("order")
-    ordered_expressions = list(getattr(order, "expressions", ()))
+    ordered_expressions = list(_expr_expressions(order))
     if len(ordered_expressions) != 1:
         return None
 
     ordered = ordered_expressions[0]
-    metric = _sql_vector_metric(getattr(ordered, "this", None))
+    metric = _sql_vector_metric(_expr_this(ordered))
     if metric is None:
         return None
 
-    vector_expression = getattr(ordered, "this", None)
-    embedding_expr = getattr(vector_expression, "args", {}).get("this")
+    vector_expression = _expr_this(ordered)
+    embedding_expr = _expr_arg(vector_expression, "this")
     embedding_ref = _sql_identifier_text(embedding_expr)
     if not embedding_ref or not _looks_like_embedding_ref(embedding_ref):
         raise ValueError(
@@ -362,9 +518,7 @@ def _analyze_sql_candidate_vector_query(
             "an embedding column."
         )
 
-    query_param_name = _named_sql_param_name(
-        getattr(vector_expression, "args", {}).get("expression")
-    )
+    query_param_name = _named_sql_param_name(_expr_arg(vector_expression, "expression"))
     if query_param_name is None:
         raise ValueError(
             "HumemVector v0 SQL vector queries currently require the query "
@@ -469,8 +623,8 @@ def _named_sql_param_name(expression: Any) -> str | None:
     if expression is None or type(expression).__name__ != "Parameter":
         return None
 
-    parameter_var = getattr(expression, "args", {}).get("this")
-    parameter_name = getattr(parameter_var, "this", None)
+    parameter_var = _expr_arg(expression, "this")
+    parameter_name = _expr_this(parameter_var)
     if parameter_name is None:
         return None
     return str(parameter_name)
@@ -479,7 +633,7 @@ def _named_sql_param_name(expression: Any) -> str | None:
 def _sql_limit_ref(limit_expression: Any) -> SQLParamRef | None:
     """Return the parsed SQL LIMIT reference for one candidate vector query."""
 
-    limit_value = getattr(limit_expression, "expression", None)
+    limit_value = _expr_arg(limit_expression, "expression")
     if limit_value is None:
         return None
 
@@ -488,7 +642,7 @@ def _sql_limit_ref(limit_expression: Any) -> SQLParamRef | None:
         return named_param
 
     if type(limit_value).__name__ == "Literal":
-        return int(str(getattr(limit_value, "this", limit_value)))
+        return int(str(_expr_this(limit_value) or limit_value))
 
     return None
 
@@ -502,8 +656,8 @@ def _restore_named_sql_params(text: str) -> str:
 def _sql_identifier_text(expression: Any) -> str:
     """Return one parsed identifier as text suitable for embedding checks."""
 
-    table_name = getattr(getattr(expression, "args", {}).get("table"), "name", None)
-    column_name = getattr(expression, "name", None)
+    table_name = _expr_name(_expr_arg(expression, "table"))
+    column_name = _expr_name(expression)
     if table_name and column_name:
         return f"{table_name}.{column_name}"
     if column_name:
@@ -601,10 +755,10 @@ def _sql_select_table_name(expression: Any) -> str:
         )
 
     from_clause = expression.args.get("from") or expression.args.get("from_")
-    source = getattr(from_clause, "this", None)
+    source = _expr_this(from_clause)
     table_name = (
-        getattr(source, "name", None)
-        or getattr(getattr(source, "this", None), "name", None)
+        _expr_name(source)
+        or _expr_name(_expr_this(source))
         or str(source or "")
     )
     if not table_name:
@@ -688,6 +842,7 @@ def plan_sql_vector_write(
         return SQLVectorWritePlan(
             normalized_params=params,
             vector_rows=(),
+            deleted_item_ids=(),
             vector_mode=None,
         )
 
@@ -704,6 +859,7 @@ def plan_sql_vector_write(
             vector_rows=(
                 ("sql_row", analysis["target_name"], vector_row[0], vector_row[1]),
             ),
+            deleted_item_ids=(),
             vector_mode="insert",
         )
 
@@ -730,12 +886,28 @@ def plan_sql_vector_write(
                     vector_row[1],
                 ),
             ),
+            deleted_item_ids=(),
             vector_mode="upsert",
+        )
+
+    delete_analysis = analyze_sql_vector_delete(text)
+    if delete_analysis is not None:
+        row_id = normalize_sql_vector_delete(
+            params,
+            id_param_ref=delete_analysis["id_param_ref"],
+            id_literal=delete_analysis["id_literal"],
+        )
+        return SQLVectorWritePlan(
+            normalized_params=params,
+            vector_rows=(),
+            deleted_item_ids=(("sql_row", delete_analysis["target_name"], row_id),),
+            vector_mode=None,
         )
 
     return SQLVectorWritePlan(
         normalized_params=params,
         vector_rows=(),
+        deleted_item_ids=(),
         vector_mode=None,
     )
 
@@ -802,14 +974,13 @@ def analyze_sql_vector_insert(text: str) -> SQLVectorInsertAnalysis | None:
     if expression.key != "insert":
         return None
 
-    target = getattr(getattr(expression, "this", None), "this", None)
-    target_name = getattr(target, "name", None) or str(target or "")
+    target = _expr_this(_expr_this(expression))
+    target_name = _expr_name(target) or str(target or "")
     if target_name.casefold() == "vector_entries":
         return None
 
     columns = [
-        getattr(column, "name", None)
-        or getattr(getattr(column, "this", None), "name", None)
+        _expr_name(column) or _expr_name(_expr_this(column))
         for column in expression.this.expressions
     ]
     normalized_columns = [str(column).casefold() for column in columns]
@@ -833,7 +1004,7 @@ def analyze_sql_vector_insert(text: str) -> SQLVectorInsertAnalysis | None:
         id_column_index = None
 
     values = expression.args.get("expression")
-    row_values = list(getattr(values, "expressions", [])) if values is not None else []
+    row_values = list(_expr_expressions(values)) if values is not None else []
     row_count = len(row_values)
     if row_count > 1:
         raise ValueError(
@@ -844,7 +1015,7 @@ def analyze_sql_vector_insert(text: str) -> SQLVectorInsertAnalysis | None:
         return None
 
     first_row = row_values[0]
-    row_expressions = list(getattr(first_row, "expressions", []))
+    row_expressions = list(_expr_expressions(first_row))
     if len(row_expressions) != len(normalized_columns):
         raise ValueError(
             "HumemVector v0 SQL vector inserts require one parameter or literal per "
@@ -865,7 +1036,7 @@ def analyze_sql_vector_insert(text: str) -> SQLVectorInsertAnalysis | None:
         id_expression = row_expressions[id_column_index]
         id_param_ref = row_param_refs[id_column_index]
         if id_param_ref is None:
-            id_literal = int(str(getattr(id_expression, "this", id_expression)))
+            id_literal = int(str(_expr_this(id_expression) or id_expression))
 
     return {
         "target_name": target_name,
@@ -886,16 +1057,16 @@ def analyze_sql_vector_update(text: str) -> SQLVectorUpdateAnalysis | None:
     if expression.key != "update":
         return None
 
-    target = getattr(expression, "this", None)
-    target_name = getattr(target, "name", None) or str(target or "")
+    target = _expr_this(expression)
+    target_name = _expr_name(target) or str(target or "")
     if target_name.casefold() == "vector_entries":
         return None
 
     vector_param_refs: list[SQLParamRef] = []
     positional_index = 0
     for assignment in expression.expressions:
-        column_name = getattr(getattr(assignment, "this", None), "name", None)
-        rhs = getattr(assignment, "expression", None)
+        column_name = _expr_name(_expr_this(assignment))
+        rhs = _expr_arg(assignment, "expression")
         current_param, positional_index = _next_sql_param_ref(rhs, positional_index)
 
         if str(column_name).casefold() == "embedding":
@@ -914,7 +1085,7 @@ def analyze_sql_vector_update(text: str) -> SQLVectorUpdateAnalysis | None:
         )
 
     where = expression.args.get("where")
-    if where is None or getattr(where, "this", None) is None:
+    if where is None or _expr_this(where) is None:
         raise ValueError(
             "HumemVector v0 SQL vector updates currently require WHERE id = ... "
             "or WHERE item_id = ...."
@@ -927,24 +1098,73 @@ def analyze_sql_vector_update(text: str) -> SQLVectorUpdateAnalysis | None:
             "equality predicate."
         )
 
-    left = getattr(predicate, "this", None)
-    id_name = getattr(left, "name", None)
+    left = _expr_this(predicate)
+    id_name = _expr_name(left)
     if str(id_name).casefold() not in {"id", "item_id"}:
         raise ValueError(
             "HumemVector v0 SQL vector updates currently require WHERE id = ... "
             "or WHERE item_id = ...."
         )
 
-    right = getattr(predicate, "expression", None)
+    right = _expr_arg(predicate, "expression")
     id_param_ref, positional_index = _next_sql_param_ref(right, positional_index)
     if id_param_ref is not None:
         id_literal = None
     else:
-        id_literal = int(str(getattr(right, "this", right)))
+        id_literal = int(str(_expr_this(right) or right))
 
     return {
         "target_name": target_name,
         "vector_param_ref": vector_param_refs[0],
+        "id_param_ref": id_param_ref,
+        "id_literal": id_literal,
+    }
+
+
+def analyze_sql_vector_delete(text: str) -> SQLVectorDeleteAnalysis | None:
+    """Return id references for narrow SQL deletes over vector-owned rows."""
+
+    try:
+        expression = parse_one(text, read="postgres")
+    except sqlglot_errors.ParseError:
+        return None
+
+    if expression.key != "delete":
+        return None
+
+    target = _expr_this(_expr_this(expression))
+    target_name = _expr_name(target) or str(target or "")
+    if not target_name or target_name.casefold() == "vector_entries":
+        return None
+
+    where = expression.args.get("where")
+    if where is None or _expr_this(where) is None:
+        return None
+
+    predicate = where.this
+    if type(predicate).__name__ != "EQ":
+        raise ValueError(
+            "HumemVector v0 SQL deletes currently require WHERE id = ... or "
+            "WHERE item_id = ...."
+        )
+
+    left = _expr_this(predicate)
+    id_name = _expr_name(left)
+    if str(id_name).casefold() not in {"id", "item_id"}:
+        raise ValueError(
+            "HumemVector v0 SQL deletes currently require WHERE id = ... or "
+            "WHERE item_id = ...."
+        )
+
+    right = _expr_arg(predicate, "expression")
+    id_param_ref, _ = _next_sql_param_ref(right, 0)
+    if id_param_ref is not None:
+        id_literal = None
+    else:
+        id_literal = int(str(_expr_this(right) or right))
+
+    return {
+        "target_name": target_name,
         "id_param_ref": id_param_ref,
         "id_literal": id_literal,
     }
@@ -998,6 +1218,25 @@ def normalize_sql_vector_update(
     return bound, (row_id, vector_value)
 
 
+def normalize_sql_vector_delete(
+    params: QueryParameters,
+    *,
+    id_param_ref: SQLParamRef | None,
+    id_literal: int | None,
+) -> int:
+    """Resolve one SQL DELETE row id for matching vector-store cleanup."""
+
+    row_id = _resolve_sql_row_id(
+        params,
+        id_param_ref=id_param_ref,
+        id_literal=id_literal,
+        context="HumemVector v0 SQL deletes",
+    )
+    if row_id is None:
+        raise ValueError("HumemVector v0 SQL deletes could not resolve an id.")
+    return row_id
+
+
 def _row_sql_param_refs(
     expressions: Sequence[Any],
 ) -> tuple[SQLParamRef | None, ...]:
@@ -1020,12 +1259,12 @@ def _next_sql_param_ref(
     if expression is None:
         return None, positional_index
 
-    expression_args = getattr(expression, "args", {})
+    expression_args = _expr_args(expression)
     if type(expression).__name__ == "Placeholder" or expression_args.get("jdbc"):
         return positional_index, positional_index + 1
     if type(expression).__name__ == "Parameter":
         parameter_var = expression_args.get("this")
-        parameter_name = getattr(parameter_var, "this", None)
+        parameter_name = _expr_this(parameter_var)
         if parameter_name is None:
             return None, positional_index
         return str(parameter_name), positional_index

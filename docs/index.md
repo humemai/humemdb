@@ -18,6 +18,26 @@ The current public surfaces are intentionally explicit:
 - HumemDB applies routing internally; the public query surface no longer exposes
   `route` or `query_type`.
 
+## Public Python API
+
+Import the stable surface from `humemdb`:
+
+```python
+from humemdb import HumemDB, QueryResult, translate_sql
+```
+
+The main public methods today are:
+
+- `HumemDB(base_path, *, preload_vectors=False)`
+- `db.query(text, *, params=None)`
+- `db.executemany(text, params_seq)`
+- `db.transaction()`, `db.begin()`, `db.commit()`, `db.rollback()`
+- `db.import_table(...)`, `db.import_nodes(...)`, `db.import_edges(...)`
+- `db.insert_vectors(...)`, `db.search_vectors(...)`, `db.set_vector_metadata(...)`
+
+`QueryResult` is the normalized result object returned by `db.query(...)` and other
+query-like calls.
+
 ## Why HumemDB exists
 
 HumemDB is not trying to force OLTP, analytics, graph traversal, and vector retrieval

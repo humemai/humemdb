@@ -14,17 +14,18 @@ accelerated variants remain benchmark tools until routing policy broadens.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Literal, Mapping, Sequence, TypeAlias
+from typing import Any, Literal, Mapping, Sequence, TypeAlias, cast
 
 import numpy as np
 
-from .engines import SQLiteEngine
+from .engines import _SQLiteEngine
 
 VectorMetric: TypeAlias = Literal["cosine", "dot", "l2"]
-VectorMetadataValue: TypeAlias = str | int | float | bool | None
-VectorNamespaceKey: TypeAlias = tuple[str, str, int]
+_VectorMetadataValue: TypeAlias = str | int | float | bool | None
+_VectorNamespaceKey: TypeAlias = tuple[str, str, int]
 
 _GRAPH_NODE_VECTOR_DELETE_TRIGGER_SQL = (
     "CREATE TRIGGER IF NOT EXISTS trg_graph_nodes_delete_graph_vectors "
@@ -36,7 +37,7 @@ _GRAPH_NODE_VECTOR_DELETE_TRIGGER_SQL = (
 
 
 @dataclass(frozen=True, slots=True)
-class VectorSearchMatch:
+class _VectorSearchMatch:
     """One nearest-neighbor result from an exact or quantized vector search.
 
     Attributes:
@@ -53,7 +54,33 @@ class VectorSearchMatch:
     score: float
 
 
-def ensure_vector_schema(sqlite: SQLiteEngine) -> None:
+@dataclass(frozen=True, slots=True)
+class _ColdVectorSnapshotMetadata:
+    """Persisted description of one cold ANN snapshot table."""
+
+    metric: VectorMetric
+    table_name: str
+    row_count: int
+    generation: int
+
+
+@dataclass(frozen=True, slots=True)
+class _NamedVectorIndex:
+    """Persisted public lifecycle row for one named vector index."""
+
+    name: str
+    metric: VectorMetric
+    enabled: bool
+    maintenance_paused: bool
+
+
+def _default_public_vector_index_name(metric: VectorMetric) -> str:
+    """Return the default public name for one metric-backed vector index."""
+
+    return f"humemdb_vector_{metric}"
+
+
+def _ensure_vector_schema(sqlite: _SQLiteEngine) -> None:
     """Create the initial SQLite-backed vector storage tables if needed.
 
     Args:
@@ -88,19 +115,103 @@ def ensure_vector_schema(sqlite: SQLiteEngine) -> None:
             "ON vector_entry_metadata(key, value_type, value, vector_id)"
         ),
         (
+            "CREATE TABLE IF NOT EXISTS vector_cold_snapshots ("
+            "metric TEXT PRIMARY KEY, "
+            "table_name TEXT NOT NULL, "
+            "row_count INTEGER NOT NULL, "
+            "generation INTEGER NOT NULL)"
+        ),
+        (
+            "CREATE TABLE IF NOT EXISTS vector_cold_tombstones ("
+            "metric TEXT NOT NULL, "
+            "target TEXT NOT NULL, "
+            "namespace TEXT NOT NULL DEFAULT '', "
+            "target_id INTEGER NOT NULL, "
+            "PRIMARY KEY(metric, target, namespace, target_id))"
+        ),
+        (
+            "CREATE TABLE IF NOT EXISTS vector_index_policies ("
+            "metric TEXT PRIMARY KEY, "
+            "enabled INTEGER NOT NULL, "
+            "maintenance_paused INTEGER NOT NULL DEFAULT 0)"
+        ),
+        (
+            "CREATE TABLE IF NOT EXISTS vector_named_indexes ("
+            "name TEXT PRIMARY KEY, "
+            "metric TEXT NOT NULL UNIQUE, "
+            "enabled INTEGER NOT NULL, "
+            "maintenance_paused INTEGER NOT NULL DEFAULT 0)"
+        ),
+        (
             "CREATE TRIGGER IF NOT EXISTS trg_vector_entries_delete_metadata "
             "AFTER DELETE ON vector_entries BEGIN "
             "DELETE FROM vector_entry_metadata WHERE vector_id = OLD.vector_id; "
             "END"
         ),
+        (
+            "CREATE TRIGGER IF NOT EXISTS trg_vector_entries_record_tombstone "
+            "BEFORE DELETE ON vector_entries BEGIN "
+            "INSERT OR IGNORE INTO vector_cold_tombstones "
+            "(metric, target, namespace, target_id) "
+            "SELECT metric, OLD.target, OLD.namespace, OLD.target_id "
+            "FROM vector_cold_snapshots "
+            "; "
+            "END"
+        ),
     ):
         sqlite.execute(statement, query_type="vector")
+
+    if not _table_column_exists(sqlite, "vector_index_policies", "maintenance_paused"):
+        sqlite.execute(
+            (
+                "ALTER TABLE vector_index_policies "
+                "ADD COLUMN maintenance_paused INTEGER NOT NULL DEFAULT 0"
+            ),
+            query_type="vector",
+        )
+
+    if _table_exists(sqlite, "vector_index_policies"):
+        legacy_rows = sqlite.execute(
+            (
+                "SELECT metric, enabled, maintenance_paused "
+                "FROM vector_index_policies ORDER BY metric"
+            ),
+            query_type="vector",
+        ).rows
+        for metric, enabled, maintenance_paused in legacy_rows:
+            normalized_metric = cast(VectorMetric, str(metric))
+            if _load_named_vector_index_for_metric(
+                sqlite,
+                metric=normalized_metric,
+            ) is not None:
+                continue
+            _upsert_named_vector_index(
+                sqlite,
+                name=_default_public_vector_index_name(normalized_metric),
+                metric=normalized_metric,
+                enabled=bool(int(enabled)),
+                maintenance_paused=bool(int(maintenance_paused)),
+            )
+
+    for metadata in _list_cold_vector_snapshot_metadata(sqlite):
+        if (
+            _load_named_vector_index_for_metric(sqlite, metric=metadata.metric)
+            is not None
+        ):
+            continue
+        _upsert_named_vector_index(
+            sqlite,
+            name=_default_public_vector_index_name(metadata.metric),
+            metric=metadata.metric,
+            enabled=True,
+            maintenance_paused=False,
+        )
 
     if _table_exists(sqlite, "graph_nodes"):
         sqlite.execute(_GRAPH_NODE_VECTOR_DELETE_TRIGGER_SQL, query_type="vector")
 
 
-def _table_exists(sqlite: SQLiteEngine, table_name: str) -> bool:
+def _table_exists(sqlite: _SQLiteEngine, table_name: str) -> bool:
     """Return whether one SQLite table already exists."""
 
     return (
@@ -113,8 +224,22 @@ def _table_exists(sqlite: SQLiteEngine, table_name: str) -> bool:
     )
 
 
-def insert_vectors(
-    sqlite: SQLiteEngine,
+def _table_column_exists(
+    sqlite: _SQLiteEngine,
+    table_name: str,
+    column_name: str,
+) -> bool:
+    """Return whether one SQLite table already exposes the named column."""
+
+    result = sqlite.execute(
+        f"PRAGMA table_info({table_name})",
+        query_type="vector",
+    )
+    return any(str(row[1]) == column_name for row in result.rows)
+
+
+def _insert_vectors(
+    sqlite: _SQLiteEngine,
     rows: Sequence[tuple[int, Sequence[float]]],
     *,
     target: str = "direct",
@@ -139,10 +264,14 @@ def insert_vectors(
         namespace=namespace,
         conflict_mode="insert",
     )
+    _clear_vector_tombstones(
+        sqlite,
+        tuple((target, namespace, int(target_id)) for target_id, _ in rows),
+    )
 
 
-def upsert_vectors(
-    sqlite: SQLiteEngine,
+def _upsert_vectors(
+    sqlite: _SQLiteEngine,
     rows: Sequence[tuple[int, Sequence[float]]],
     *,
     target: str = "direct",
@@ -167,10 +296,42 @@ def upsert_vectors(
         namespace=namespace,
         conflict_mode="upsert",
     )
+    _clear_vector_tombstones(
+        sqlite,
+        tuple((target, namespace, int(target_id)) for target_id, _ in rows),
+    )
 
 
-def load_vector_matrix(
-    sqlite: SQLiteEngine,
+def _delete_target_namespaced_vectors(
+    sqlite: _SQLiteEngine,
+    item_ids: Sequence[_VectorNamespaceKey],
+) -> int:
+    """Delete canonical vector rows for the given logical ids."""
+
+    normalized_item_ids = tuple(
+        (str(target), str(namespace), int(target_id))
+        for target, namespace, target_id in item_ids
+    )
+    if not normalized_item_ids:
+        return 0
+
+    existing_item_ids = _existing_vector_item_ids(sqlite, normalized_item_ids)
+    if not existing_item_ids:
+        return 0
+
+    sqlite.executemany(
+        (
+            "DELETE FROM vector_entries "
+            "WHERE target = ? AND namespace = ? AND target_id = ?"
+        ),
+        existing_item_ids,
+        query_type="vector",
+    )
+    return len(existing_item_ids)
+
+
+def _load_vector_matrix(
+    sqlite: _SQLiteEngine,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Load all SQLite-stored vectors into NumPy arrays.
 
@@ -214,9 +375,9 @@ def load_vector_matrix(
     return item_ids, matrix
 
 
-def upsert_vector_metadata(
-    sqlite: SQLiteEngine,
-    rows: Sequence[tuple[int, Mapping[str, VectorMetadataValue]]],
+def _upsert_vector_metadata(
+    sqlite: _SQLiteEngine,
+    rows: Sequence[tuple[int, Mapping[str, _VectorMetadataValue]]],
     *,
     target: str = "direct",
     namespace: str = "",
@@ -259,13 +420,13 @@ def upsert_vector_metadata(
     )
 
 
-def load_filtered_vector_target_keys(
-    sqlite: SQLiteEngine,
-    filters: Mapping[str, VectorMetadataValue],
+def _load_filtered_vector_target_keys(
+    sqlite: _SQLiteEngine,
+    filters: Mapping[str, _VectorMetadataValue],
     *,
     target: str = "direct",
     namespace: str = "",
-) -> tuple[VectorNamespaceKey, ...]:
+) -> tuple[_VectorNamespaceKey, ...]:
     """Return logical vector identifiers whose metadata matches all filters.
 
     Args:
@@ -281,7 +442,7 @@ def load_filtered_vector_target_keys(
     if not filters:
         return ()
 
-    matched_ids: set[VectorNamespaceKey] | None = None
+    matched_ids: set[_VectorNamespaceKey] | None = None
     for key, value in filters.items():
         encoded_value, value_type = _encode_metadata_value(value)
         if encoded_value is None:
@@ -326,7 +487,7 @@ def load_filtered_vector_target_keys(
 
 
 def _write_vector_rows(
-    sqlite: SQLiteEngine,
+    sqlite: _SQLiteEngine,
     rows: Sequence[tuple[int, Sequence[float]]],
     *,
     target: str,
@@ -359,8 +520,307 @@ def _write_vector_rows(
     )
 
 
+def _existing_vector_item_ids(
+    sqlite: _SQLiteEngine,
+    item_ids: Sequence[_VectorNamespaceKey],
+) -> tuple[_VectorNamespaceKey, ...]:
+    """Return the subset of logical vector ids that currently exist."""
+
+    existing_item_ids: list[_VectorNamespaceKey] = []
+    for target, namespace, target_id in item_ids:
+        first_row = sqlite.execute(
+            (
+                "SELECT 1 FROM vector_entries "
+                "WHERE target = ? AND namespace = ? AND target_id = ?"
+            ),
+            params=(str(target), str(namespace), int(target_id)),
+            query_type="vector",
+        ).first()
+        if first_row is not None:
+            existing_item_ids.append((str(target), str(namespace), int(target_id)))
+    return tuple(existing_item_ids)
+
+
+def _load_vector_tombstones(
+    sqlite: _SQLiteEngine,
+    *,
+    metric: VectorMetric,
+) -> tuple[_VectorNamespaceKey, ...]:
+    """Return logical vector ids deleted since the live cold snapshot was built."""
+
+    result = sqlite.execute(
+        (
+            "SELECT target, namespace, target_id FROM vector_cold_tombstones "
+            "WHERE metric = ? "
+            "ORDER BY target, namespace, target_id"
+        ),
+        params=(metric,),
+        query_type="vector",
+    )
+    return tuple(
+        (str(row[0]), str(row[1]), int(row[2]))
+        for row in result.rows
+    )
+
+
+def _clear_vector_tombstones(
+    sqlite: _SQLiteEngine,
+    item_ids: Sequence[_VectorNamespaceKey] | None = None,
+    *,
+    metric: VectorMetric | None = None,
+) -> None:
+    """Delete tombstone records either for one subset or for all logical ids."""
+
+    if item_ids is None:
+        if metric is None:
+            sqlite.execute("DELETE FROM vector_cold_tombstones", query_type="vector")
+        else:
+            sqlite.execute(
+                "DELETE FROM vector_cold_tombstones WHERE metric = ?",
+                params=(metric,),
+                query_type="vector",
+            )
+        return
+
+    normalized_item_ids = tuple(
+        (str(target), str(namespace), int(target_id))
+        for target, namespace, target_id in item_ids
+    )
+    if not normalized_item_ids:
+        return
+    if metric is None:
+        sqlite.executemany(
+            (
+                "DELETE FROM vector_cold_tombstones "
+                "WHERE target = ? AND namespace = ? AND target_id = ?"
+            ),
+            normalized_item_ids,
+            query_type="vector",
+        )
+        return
+    sqlite.executemany(
+        (
+            "DELETE FROM vector_cold_tombstones "
+            "WHERE metric = ? AND target = ? AND namespace = ? AND target_id = ?"
+        ),
+        tuple(
+            (metric, target, namespace, target_id)
+            for target, namespace, target_id in normalized_item_ids
+        ),
+        query_type="vector",
+    )
+
+
+def _load_cold_vector_snapshot_metadata(
+    sqlite: _SQLiteEngine,
+    *,
+    metric: VectorMetric,
+) -> _ColdVectorSnapshotMetadata | None:
+    """Return persisted metadata for one cold ANN snapshot, when present."""
+
+    first_row = sqlite.execute(
+        (
+            "SELECT metric, table_name, row_count, generation "
+            "FROM vector_cold_snapshots WHERE metric = ?"
+        ),
+        params=(metric,),
+        query_type="vector",
+    ).first()
+    if first_row is None:
+        return None
+    return _ColdVectorSnapshotMetadata(
+        metric=cast(VectorMetric, str(first_row[0])),
+        table_name=str(first_row[1]),
+        row_count=int(first_row[2]),
+        generation=int(first_row[3]),
+    )
+
+
+def _list_cold_vector_snapshot_metadata(
+    sqlite: _SQLiteEngine,
+) -> tuple[_ColdVectorSnapshotMetadata, ...]:
+    """Return persisted metadata for all known cold ANN snapshots."""
+
+    result = sqlite.execute(
+        (
+            "SELECT metric, table_name, row_count, generation "
+            "FROM vector_cold_snapshots ORDER BY metric"
+        ),
+        query_type="vector",
+    )
+    return tuple(
+        _ColdVectorSnapshotMetadata(
+            metric=cast(VectorMetric, str(row[0])),
+            table_name=str(row[1]),
+            row_count=int(row[2]),
+            generation=int(row[3]),
+        )
+        for row in result.rows
+    )
+
+
+def _load_named_vector_index(
+    sqlite: _SQLiteEngine,
+    *,
+    name: str,
+) -> _NamedVectorIndex | None:
+    """Return one persisted named vector index row, when present."""
+
+    first_row = sqlite.execute(
+        (
+            "SELECT name, metric, enabled, maintenance_paused "
+            "FROM vector_named_indexes WHERE name = ?"
+        ),
+        params=(str(name),),
+        query_type="vector",
+    ).first()
+    if first_row is None:
+        return None
+    return _NamedVectorIndex(
+        name=str(first_row[0]),
+        metric=cast(VectorMetric, str(first_row[1])),
+        enabled=bool(int(first_row[2])),
+        maintenance_paused=bool(int(first_row[3])),
+    )
+
+
+def _load_named_vector_index_for_metric(
+    sqlite: _SQLiteEngine,
+    *,
+    metric: VectorMetric,
+) -> _NamedVectorIndex | None:
+    """Return the persisted named vector index for one metric, when present."""
+
+    first_row = sqlite.execute(
+        (
+            "SELECT name, metric, enabled, maintenance_paused "
+            "FROM vector_named_indexes WHERE metric = ?"
+        ),
+        params=(metric,),
+        query_type="vector",
+    ).first()
+    if first_row is None:
+        return None
+    return _NamedVectorIndex(
+        name=str(first_row[0]),
+        metric=cast(VectorMetric, str(first_row[1])),
+        enabled=bool(int(first_row[2])),
+        maintenance_paused=bool(int(first_row[3])),
+    )
+
+
+def _list_named_vector_indexes(
+    sqlite: _SQLiteEngine,
+) -> tuple[_NamedVectorIndex, ...]:
+    """Return persisted named vector index rows."""
+
+    result = sqlite.execute(
+        (
+            "SELECT name, metric, enabled, maintenance_paused "
+            "FROM vector_named_indexes ORDER BY name"
+        ),
+        query_type="vector",
+    )
+    return tuple(
+        _NamedVectorIndex(
+            name=str(row[0]),
+            metric=cast(VectorMetric, str(row[1])),
+            enabled=bool(int(row[2])),
+            maintenance_paused=bool(int(row[3])),
+        )
+        for row in result.rows
+    )
+
+
+def _delete_named_vector_index(
+    sqlite: _SQLiteEngine,
+    *,
+    name: str,
+) -> None:
+    """Delete one persisted named vector index row."""
+
+    sqlite.execute(
+        "DELETE FROM vector_named_indexes WHERE name = ?",
+        params=(str(name),),
+        query_type="vector",
+    )
+
+
+def _upsert_named_vector_index(
+    sqlite: _SQLiteEngine,
+    *,
+    name: str,
+    metric: VectorMetric,
+    enabled: bool,
+    maintenance_paused: bool | None = None,
+) -> None:
+    """Persist one named vector index lifecycle row."""
+
+    existing = _load_named_vector_index_for_metric(sqlite, metric=metric)
+    resolved_maintenance_paused = maintenance_paused
+    if resolved_maintenance_paused is None:
+        resolved_maintenance_paused = (
+            existing.maintenance_paused if existing is not None else False
+        )
+
+    sqlite.execute(
+        (
+            "INSERT INTO vector_named_indexes"
+            "(name, metric, enabled, maintenance_paused) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(name) DO UPDATE SET metric = excluded.metric, "
+            "enabled = excluded.enabled, "
+            "maintenance_paused = excluded.maintenance_paused"
+        ),
+        params=(name, metric, int(enabled), int(resolved_maintenance_paused)),
+        query_type="vector",
+    )
+
+
+def _upsert_cold_vector_snapshot_metadata(
+    sqlite: _SQLiteEngine,
+    *,
+    metric: VectorMetric,
+    table_name: str,
+    row_count: int,
+    generation: int,
+) -> None:
+    """Persist the current live cold ANN snapshot metadata for one metric."""
+
+    sqlite.execute(
+        (
+            "INSERT INTO vector_cold_snapshots "
+            "(metric, table_name, row_count, generation) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(metric) DO UPDATE SET "
+            "table_name = excluded.table_name, "
+            "row_count = excluded.row_count, "
+            "generation = excluded.generation"
+        ),
+        params=(metric, table_name, int(row_count), int(generation)),
+        query_type="vector",
+    )
+
+
+def _delete_cold_vector_snapshot_metadata(
+    sqlite: _SQLiteEngine,
+    *,
+    metric: VectorMetric | None = None,
+) -> None:
+    """Delete persisted cold ANN snapshot metadata for one metric or all metrics."""
+
+    if metric is None:
+        sqlite.execute("DELETE FROM vector_cold_snapshots", query_type="vector")
+        return
+    sqlite.execute(
+        "DELETE FROM vector_cold_snapshots WHERE metric = ?",
+        params=(metric,),
+        query_type="vector",
+    )
+
+
 def _load_vector_id(
-    sqlite: SQLiteEngine,
+    sqlite: _SQLiteEngine,
     *,
     target: str,
     namespace: str,
@@ -422,7 +882,7 @@ def decode_vector_blob(blob: bytes, *, dimension: int) -> np.ndarray:
 
 
 @dataclass(slots=True)
-class ExactVectorIndex:
+class _ExactVectorIndex:
     """Exact vector search over a contiguous NumPy matrix.
 
     Attributes:
@@ -472,7 +932,7 @@ class ExactVectorIndex:
         *,
         top_k: int,
         candidate_indexes: Sequence[int] | np.ndarray | None = None,
-    ) -> tuple[VectorSearchMatch, ...]:
+    ) -> tuple[_VectorSearchMatch, ...]:
         """Return the nearest results for one query vector.
 
         Args:
@@ -581,7 +1041,7 @@ class ScalarQuantizedVectorIndex:
         *,
         top_k: int,
         candidate_indexes: Sequence[int] | np.ndarray | None = None,
-    ) -> tuple[VectorSearchMatch, ...]:
+    ) -> tuple[_VectorSearchMatch, ...]:
         """Return approximate nearest results for one query vector.
 
         Args:
@@ -644,6 +1104,11 @@ class LanceDBIndexConfig:
     ef: int | None = None
     table_name: str = "vectors"
 
+    def with_table_name(self, table_name: str) -> LanceDBIndexConfig:
+        """Return a copy of this config with a different table name."""
+
+        return replace(self, table_name=table_name)
+
     def index_kwargs(self, *, metric: VectorMetric) -> dict[str, Any]:
         """Return LanceDB `create_index(...)` kwargs for this config."""
 
@@ -665,17 +1130,12 @@ class LanceDBIndexConfig:
             kwargs["target_partition_size"] = self.target_partition_size
         return kwargs
 
-    def search_kwargs(self) -> dict[str, int]:
-        """Return non-null LanceDB indexed-search tuning kwargs."""
+    def minimum_rows_for_training(self) -> int | None:
+        """Return the smallest dataset size that can train this index family."""
 
-        kwargs: dict[str, int] = {}
-        if self.nprobes is not None:
-            kwargs["nprobes"] = self.nprobes
-        if self.refine_factor is not None:
-            kwargs["refine_factor"] = self.refine_factor
-        if self.ef is not None:
-            kwargs["ef"] = self.ef
-        return kwargs
+        if self.index_type == "IVF_PQ":
+            return 256
+        return None
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serializable view of the current index config."""
@@ -698,7 +1158,7 @@ class LanceDBIndexConfig:
 
 
 @dataclass(slots=True)
-class LanceDBVectorIndex:
+class _LanceDBVectorIndex:
     """LanceDB-backed indexed vector search over the current vector set.
 
     This is the first large-scale indexed path for HumemVector. It keeps the same
@@ -723,7 +1183,7 @@ class LanceDBVectorIndex:
         metric: VectorMetric = "cosine",
         lance_path: str | Path,
         config: LanceDBIndexConfig | None = None,
-    ) -> LanceDBVectorIndex:
+    ) -> _LanceDBVectorIndex:
         """Create one LanceDB table and build an index from a float32 matrix."""
 
         normalized_item_ids = _coerce_identifier_array(item_ids)
@@ -751,13 +1211,50 @@ class LanceDBVectorIndex:
             _table=table,
         )
 
+    @classmethod
+    def from_existing(
+        cls,
+        *,
+        metric: VectorMetric,
+        lance_path: str | Path,
+        config: LanceDBIndexConfig,
+    ) -> _LanceDBVectorIndex:
+        """Open one previously built LanceDB table from persisted metadata."""
+
+        table = _open_lancedb_table(
+            lance_path=Path(lance_path),
+            table_name=config.table_name,
+        )
+        rows = cast(Any, table).to_arrow().to_pylist()
+        if not rows:
+            raise ValueError(
+                "HumemVector cold LanceDB snapshot metadata pointed at an empty "
+                f"table: {config.table_name!r}."
+            )
+        item_ids = np.empty(len(rows), dtype=object)
+        for index, row in enumerate(rows):
+            item_ids[index] = (
+                str(row["target"]),
+                str(row["namespace"]),
+                int(row["target_id"]),
+            )
+        dimensions = len(cast(list[Any], rows[0]["vector"]))
+        return cls(
+            item_ids=item_ids,
+            metric=metric,
+            dimensions=dimensions,
+            lance_path=Path(lance_path),
+            config=config,
+            _table=table,
+        )
+
     def search(
         self,
         query: Sequence[float],
         *,
         top_k: int,
         candidate_indexes: Sequence[int] | np.ndarray | None = None,
-    ) -> tuple[VectorSearchMatch, ...]:
+    ) -> tuple[_VectorSearchMatch, ...]:
         """Return indexed nearest-neighbor matches for one query vector."""
 
         query_array = _coerce_query(query, dimension=self.dimensions)
@@ -770,8 +1267,12 @@ class LanceDBVectorIndex:
             .distance_type(self.metric)
             .limit(_validated_top_k(top_k, total=row_count))
         )
-        for name, value in self.config.search_kwargs().items():
-            builder = getattr(builder, name)(value)
+        if self.config.nprobes is not None:
+            builder = builder.nprobes(self.config.nprobes)
+        if self.config.refine_factor is not None:
+            builder = builder.refine_factor(self.config.refine_factor)
+        if self.config.ef is not None:
+            builder = builder.ef(self.config.ef)
 
         if candidate_indexes is not None:
             indexes = _coerce_candidate_indexes(candidate_indexes, total=row_count)
@@ -787,7 +1288,7 @@ class LanceDBVectorIndex:
             ["target", "namespace", "target_id", "_distance"]
         ).to_list()
         return tuple(
-            VectorSearchMatch(
+            _VectorSearchMatch(
                 target=str(row["target"]),
                 namespace=str(row["namespace"]),
                 target_id=int(row["target_id"]),
@@ -811,11 +1312,131 @@ class LanceDBVectorIndex:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class IndexedVectorRuntimeConfig:
+    """Private runtime policy for hot/cold vector execution."""
+
+    hot_max_rows: int = 100_000
+    merge_buffer_factor: int = 4
+    cold_index_min_rows: int = 0
+    cold_index_relative_to_hot_fraction: float = 0.10
+    cold_refresh_min_rows: int = 0
+    cold_refresh_relative_to_cold_fraction: float = 0.10
+    lancedb: LanceDBIndexConfig = field(
+        default_factory=lambda: LanceDBIndexConfig(
+            nprobes=32,
+            refine_factor=4,
+        )
+    )
+
+    def __post_init__(self) -> None:
+        """Validate runtime policy values after dataclass construction."""
+
+        if self.hot_max_rows < 1:
+            raise ValueError("HumemVector hot_max_rows must be at least 1.")
+        if self.merge_buffer_factor < 1:
+            raise ValueError(
+                "HumemVector merge_buffer_factor must be at least 1."
+            )
+        if self.cold_index_min_rows < 0:
+            raise ValueError("HumemVector cold_index_min_rows cannot be negative.")
+        if self.cold_index_relative_to_hot_fraction < 0.0:
+            raise ValueError(
+                "HumemVector cold_index_relative_to_hot_fraction cannot be "
+                "negative."
+            )
+        if self.cold_refresh_min_rows < 0:
+            raise ValueError("HumemVector cold_refresh_min_rows cannot be negative.")
+        if self.cold_refresh_relative_to_cold_fraction < 0.0:
+            raise ValueError(
+                "HumemVector cold_refresh_relative_to_cold_fraction cannot be "
+                "negative."
+            )
+
+    def buffered_top_k(self, top_k: int) -> int:
+        """Return the first-pass per-tier top-k buffer for merge-and-rerank."""
+
+        if top_k < 1:
+            raise ValueError("HumemVector v0 top_k must be at least 1.")
+        return max(top_k, top_k * self.merge_buffer_factor)
+
+    def cold_index_required_rows(
+        self,
+        *,
+        hot_rows: int,
+        minimum_training_rows: int | None = None,
+    ) -> int:
+        """Return the minimum cold-row count required before building cold ANN.
+
+        The effective threshold is the maximum of the explicit absolute floor, the
+        relative spill-over threshold against the hot tier, and the selected
+        LanceDB index family's training minimum.
+        """
+
+        threshold = self.cold_index_min_rows
+        if self.cold_index_relative_to_hot_fraction > 0.0:
+            threshold = max(
+                threshold,
+                int(math.ceil(hot_rows * self.cold_index_relative_to_hot_fraction)),
+            )
+        if minimum_training_rows is not None:
+            threshold = max(threshold, minimum_training_rows)
+        return threshold
+
+    def cold_refresh_required_rows(
+        self,
+        *,
+        cold_rows: int,
+    ) -> int:
+        """Return the pending cold-spill size that should trigger one refresh."""
+
+        threshold = self.cold_refresh_min_rows
+        if self.cold_refresh_relative_to_cold_fraction > 0.0:
+            threshold = max(
+                threshold,
+                int(
+                    math.ceil(
+                        cold_rows * self.cold_refresh_relative_to_cold_fraction
+                    )
+                ),
+            )
+        return threshold
+
+
+def _merge_vector_search_matches(
+    *groups: Sequence[_VectorSearchMatch],
+    top_k: int,
+) -> tuple[_VectorSearchMatch, ...]:
+    """Merge tier-local results by logical id, keep best score, and trim to top-k."""
+
+    _validated_top_k(top_k, total=max(top_k, 1))
+    merged: dict[_VectorNamespaceKey, _VectorSearchMatch] = {}
+    first_seen: dict[_VectorNamespaceKey, int] = {}
+    ordinal = 0
+    for group in groups:
+        for match in group:
+            key = (match.target, match.namespace, match.target_id)
+            existing = merged.get(key)
+            if existing is None or match.score > existing.score:
+                merged[key] = match
+                first_seen.setdefault(key, ordinal)
+            ordinal += 1
+
+    ranked = sorted(
+        merged.values(),
+        key=lambda match: (
+            -match.score,
+            first_seen[(match.target, match.namespace, match.target_id)],
+        ),
+    )
+    return tuple(ranked[:top_k])
+
+
 def _build_matches(
     item_ids: np.ndarray,
     scores: np.ndarray,
     top_k: int,
-) -> tuple[VectorSearchMatch, ...]:
+) -> tuple[_VectorSearchMatch, ...]:
     """Convert raw similarity scores into a sorted top-k match tuple."""
 
     count = _validated_top_k(top_k, total=scores.size)
@@ -824,7 +1445,7 @@ def _build_matches(
         np.argsort(-scores[candidate_indexes], kind="stable")
     ]
     return tuple(
-        VectorSearchMatch(
+        _VectorSearchMatch(
             target=match_id[0],
             namespace=match_id[1],
             target_id=match_id[2],
@@ -835,7 +1456,7 @@ def _build_matches(
     )
 
 
-def _coerce_match_id(identifier: Any) -> VectorNamespaceKey:
+def _coerce_match_id(identifier: Any) -> _VectorNamespaceKey:
     """Normalize one stored identifier into the public target/namespace/id shape."""
 
     if isinstance(identifier, tuple) and len(identifier) == 3:
@@ -926,7 +1547,7 @@ def _validated_top_k(top_k: int, *, total: int) -> int:
     return min(top_k, total)
 
 
-def _encode_metadata_value(value: VectorMetadataValue) -> tuple[str | None, str]:
+def _encode_metadata_value(value: _VectorMetadataValue) -> tuple[str | None, str]:
     """Encode one metadata scalar into the SQLite filter storage format."""
 
     if value is None:
@@ -1003,6 +1624,32 @@ def _create_lancedb_table(
         schema=schema,
     )
     return db.create_table(table_name, data=table, mode="overwrite")
+
+
+def _open_lancedb_table(
+    *,
+    lance_path: Path,
+    table_name: str,
+):
+    """Open one existing local LanceDB table."""
+
+    lancedb, _ = _load_lancedb_dependencies()
+    db = lancedb.connect(str(lance_path))
+    return db.open_table(table_name)
+
+
+def _drop_lancedb_table(*, lance_path: str | Path, table_name: str) -> None:
+    """Best-effort removal of one local LanceDB table."""
+
+    lancedb, _ = _load_lancedb_dependencies()
+    db = lancedb.connect(str(Path(lance_path)))
+    drop_table = getattr(db, "drop_table", None)
+    if not callable(drop_table):
+        return
+    try:
+        drop_table(table_name)
+    except TypeError:
+        return
 
 
 def _load_lancedb_dependencies() -> tuple[Any, Any]:

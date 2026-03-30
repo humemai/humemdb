@@ -30,7 +30,7 @@ regression from the user-facing API boundary.
 ## Representative themes
 
 ```python
-with HumemDB("app.sqlite3", "analytics.duckdb") as db:
+with HumemDB("app") as db:
     db.query("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
     db.query("CREATE (u:User {name: 'Alice'})")
 

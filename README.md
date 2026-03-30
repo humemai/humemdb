@@ -55,6 +55,33 @@ Current behavior is intentionally explicit:
   on SQLite by default
 - Vector search starts from the exact baseline path today
 
+## Public API at a glance
+
+Import the stable surface from `humemdb`:
+
+```python
+from humemdb import HumemDB, QueryResult, RuntimeThreadBudget, translate_sql
+```
+
+Main public entry points today:
+
+- `HumemDB(base_path, *, preload_vectors=False)` creates or reopens one embedded
+  database pair from a single base path
+- `db.query(text, *, params=None)` executes SQL, Cypher, or language-level vector query
+  text
+- `db.executemany(text, params_seq)` handles SQLite-backed batch writes
+- `db.transaction()`, `db.begin()`, `db.commit()`, and `db.rollback()` control the
+- `db.import_table(...)`, `db.import_nodes(...)`, and `db.import_edges(...)` provide the
+  current CSV ingest surface
+  canonical SQLite write transaction
+- `db.insert_vectors(...)`, `db.search_vectors(...)`, and `db.set_vector_metadata(...)`
+  provide the direct-vector surface
+- `db.preload_vectors()` and `db.vectors_cached()` expose the current exact-vector cache
+  state
+
+`QueryResult` is the normalized return shape for queries and exposes `rows`, `columns`,
+`route`, `query_type`, `rowcount`, and `first()`.
+
 ## 🔗 Documentation
 
 - [HumemDB docs](https://docs.humem.ai/humemdb/)
@@ -161,10 +188,13 @@ HumemDB.
 
 ## ⚡ Quick example
 
+Pass one base path to `HumemDB(...)`. HumemDB creates missing backing files on first use
+and reopens them on later calls.
+
 ```python
 from humemdb import HumemDB
 
-with HumemDB.open("app") as db:
+with HumemDB("app") as db:
     db.query("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
 
     with db.transaction():
@@ -183,7 +213,7 @@ with HumemDB.open("app") as db:
 ```python
 from humemdb import HumemDB
 
-with HumemDB.open("ingest") as db:
+with HumemDB("ingest") as db:
     db.query(
         "CREATE TABLE accounts (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
     )

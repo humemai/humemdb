@@ -13,10 +13,8 @@ repository README.
 - CSV ingest benchmark: [`csv_ingest.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/csv_ingest.py)
 - Relational direct-read benchmark: [`duckdb_direct_read.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/duckdb_direct_read.py)
 - Cypher graph-path benchmark: [`cypher_graph_path.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/cypher_graph_path.py)
-- Vector single-run benchmark: [`vector_search.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/vector_search.py)
-- Vector step-timing benchmark: [`vector_query_steps.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/vector_query_steps.py)
-- Vector sweep benchmark: [`vector_search_sweep.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/vector_search_sweep.py)
-- LanceDB tuning benchmark: [`vector_search_tune_lancedb.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/vector_search_tune_lancedb.py)
+- Real vector single-run benchmark: [`vector_search_real.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/vector_search_real.py)
+- Real vector sweep benchmark: [`vector_search_real_sweep.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/vector_search_real_sweep.py)
 
 ## Current benchmark map
 
@@ -50,7 +48,7 @@ python scripts/benchmarks/csv_ingest.py --table-rows 50000 --node-rows 20000 --e
 
 Current takeaway:
 
-- the Phase 12 ingest benchmark covers both relational CSV ingest and graph CSV ingest
+- the ingest benchmark covers both relational CSV ingest and graph CSV ingest
 - `staging_normalize` is intentionally a table-first benchmark path for permissive
   staging-table load plus normalize-into-final-table flow
 - measured staged-relational runs now show that this path is operationally reasonable
@@ -158,14 +156,7 @@ DuckDB first wins, if it wins at all.
 
 ### Vector benchmark
 
-The vector benchmark scripts measure exact NumPy search and quantized variants so later
-routing choices can be based on observed crossover points instead of guesswork.
+The vector benchmark surface is now the real-data indexed-vector path.
 
-The single-run, sweep, and LanceDB-tuning vector pages are split out because they answer
-different questions:
-
-- [`vector_search.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/vector_search.py) measures one concrete scenario in depth.
-- [`vector_query_steps.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/vector_query_steps.py) breaks one exact-vector flow into ingest, frontend, candidate-query, candidate-mapping, and search stages.
-- [`vector_search_sweep.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/vector_search_sweep.py) finds crossover regions across row-count and dimension grids.
-- [`vector_search_tune_lancedb.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/vector_search_tune_lancedb.py) searches candidate indexed profiles that can still hit
-    a recall target.
+- [`vector_search_real.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/vector_search_real.py) measures one shared-build scenario over shipped datasets such as `MSMARCO-10M` and `stackoverflow-xlarge`.
+- [`vector_search_real_sweep.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/vector_search_real_sweep.py) sweeps real dataset scales and Stack Overflow corpus filters so the hot-tier and cold-tier policy stays grounded in shipped data.

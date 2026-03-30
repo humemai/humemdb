@@ -1,0 +1,145 @@
+{
+  "arrow_cpu_count": 8,
+  "artifact_sizes_bytes": {
+    "numpy_f32_matrix": 0,
+    "query_batch_f32": 385024
+  },
+  "available_filter_sources": [
+    "all"
+  ],
+  "cold_tier_ingest_path": "Selected shard memmaps -> Arrow batches -> LanceDB -> build index",
+  "dataset": "msmarco-10m",
+  "dimensions": 1024,
+  "filter_source": null,
+  "filtered_candidate_count": null,
+  "ground_truth_source": "packaged_gt_subset_filtered",
+  "lancedb_index_settings": {
+    "index_type": "IVF_PQ",
+    "max_iterations": 50,
+    "num_bits": 8,
+    "num_partitions": 128,
+    "num_sub_vectors": 128,
+    "sample_rate": 256,
+    "scalar_index_prefilter": false,
+    "target_partition_size": null
+  },
+  "lancedb_ingest_profile": {
+    "batch_count": 10,
+    "first_batch_rows": 100000,
+    "last_batch_rows": 100000,
+    "max_batch_rows": 100000,
+    "peak_batch_rss_bytes": 1024589824
+  },
+  "lancedb_search_settings": {
+    "nprobes": 32,
+    "refine_factor": 4
+  },
+  "lancedb_thread_limit": "8",
+  "memory_peak_rss_bytes": 3510292480,
+  "memory_snapshots_bytes": {
+    "after_dataset_load": 218198016,
+    "after_duckdb_arrow_export": 963801088,
+    "after_filter_candidate_selection": 218198016,
+    "after_lancedb_index_build": 1980977152,
+    "after_lancedb_indexed_search": 1946652672,
+    "after_lancedb_ingest_complete": 963801088,
+    "after_lancedb_ingest_first_batch": 654422016,
+    "after_lancedb_ingest_peak": 1024589824,
+    "after_lancedb_scalar_index_build": 1980977152,
+    "after_lancedb_table_create": 231108608,
+    "after_numpy_exact_build": 218259456,
+    "after_numpy_exact_search": 1943863296,
+    "after_numpy_query_materialize": 218259456,
+    "after_query_and_recall": 1946652672,
+    "after_query_selection": 218198016,
+    "after_sqlite_exact_load": 218259456,
+    "after_subset_plan": 188628992,
+    "final": 1946652672,
+    "start": 187486208
+  },
+  "memory_stage_deltas_bytes": {
+    "after_dataset_load": 0,
+    "after_duckdb_arrow_export": 0,
+    "after_filter_candidate_selection": 0,
+    "after_lancedb_index_build": 1017176064,
+    "after_lancedb_indexed_search": 2789376,
+    "after_lancedb_ingest_complete": -60788736,
+    "after_lancedb_ingest_first_batch": 423313408,
+    "after_lancedb_ingest_peak": 370167808,
+    "after_lancedb_scalar_index_build": 0,
+    "after_lancedb_table_create": 12849152,
+    "after_numpy_exact_build": 0,
+    "after_numpy_exact_search": -37113856,
+    "after_numpy_query_materialize": 0,
+    "after_query_and_recall": 0,
+    "after_query_selection": 29569024,
+    "after_sqlite_exact_load": 61440,
+    "after_subset_plan": 1142784,
+    "final": 0,
+    "start": null
+  },
+  "metric": "cosine",
+  "numpy_exact_enabled": false,
+  "numpy_exact_max_rows": 100000,
+  "numpy_exact_profile": {
+    "matrix_bytes": 0,
+    "matrix_rows": 0,
+    "query_batch_bytes": 385024,
+    "query_count": 94,
+    "query_vector_dimensions": 1024
+  },
+  "numpy_thread_limit": 8,
+  "queries": 94,
+  "requested_queries": 100,
+  "rows": 1000000,
+  "sample_mode": "prefix",
+  "stage_timings_ms": {
+    "cold_tier_export": 3076.649845112115,
+    "dataset_load": 0.0,
+    "duckdb_arrow_export": null,
+    "filter_candidate_selection": null,
+    "lancedb_index_build": 74235.40922114626,
+    "lancedb_scalar_index_build": 0.0,
+    "lancedb_table_create": 2.6541552506387234,
+    "numpy_f32_build": null,
+    "numpy_query_materialize": null,
+    "query_selection": 35.03923397511244,
+    "sqlite_exact_load": null,
+    "sqlite_seed": null,
+    "subset_plan": 1.1734222061932087
+  },
+  "top_k_grid": [
+    10,
+    50
+  ],
+  "top_k_reports": [
+    {
+      "latency_summaries_ms": {
+        "lancedb_indexed_global": {
+          "maximum": 3.342468123090394,
+          "mean": 3.313335375397975,
+          "minimum": 3.2822949256985745,
+          "stdev": 0.030131925200678762
+        }
+      },
+      "recalls_at_k": {
+        "lancedb_indexed_global": 0.9977703455964325
+      },
+      "top_k": 10
+    },
+    {
+      "latency_summaries_ms": {
+        "lancedb_indexed_global": {
+          "maximum": 4.446885672378096,
+          "mean": 4.355224473600058,
+          "minimum": 4.262477352700018,
+          "stdev": 0.09220895570260165
+        }
+      },
+      "recalls_at_k": {
+        "lancedb_indexed_global": 0.9974266598044261
+      },
+      "top_k": 50
+    }
+  ]
+}

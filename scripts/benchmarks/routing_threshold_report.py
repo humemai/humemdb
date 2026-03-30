@@ -40,6 +40,7 @@ def _sql_workload_report(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     report: list[dict[str, Any]] = []
     for workload_name, metadata in first_run_workloads.items():
         winners: list[dict[str, Any]] = []
+        first_duckdb_scale = None
         for run in runs:
             workload = run["workloads"][workload_name]
             sqlite_mean = workload["sqlite"]["mean_ms"]
@@ -52,10 +53,14 @@ def _sql_workload_report(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "duckdb_mean_ms": duckdb_mean,
                 }
             )
-        first_duckdb_scale = next(
-            (entry["scale"] for entry in winners if entry["winner"] == "duckdb"),
-            None,
-        )
+            first_duckdb_scale = next(
+                (
+                    entry["scale"]
+                    for entry in winners
+                    if entry["winner"] == "duckdb"
+                ),
+                None,
+            )
         report.append(
             {
                 "workload": workload_name,
@@ -245,10 +250,10 @@ def _cypher_workload_report(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return report
 
 
-def _phase11_cypher_diagnostics(
+def _cypher_graph_index_diagnostics(
     cypher_report: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Summarize graph benchmark evidence for Phase 11 storage/index decisions."""
+    """Summarize graph benchmark evidence for storage/index decisions."""
 
     property_join_heavy: list[str] = []
     temp_btree_workloads: list[str] = []
@@ -342,34 +347,85 @@ def _phase11_cypher_diagnostics(
 
 def _vector_workload_report(
     scenario_summaries: list[dict[str, Any]],
-    *,
-    min_indexed_recall: float,
+    min_indexed_recall: float | None = None,
 ) -> list[dict[str, Any]]:
-    grouped: dict[tuple[int, int], list[dict[str, Any]]] = {}
+    if not scenario_summaries:
+        return []
+    if "dataset" in scenario_summaries[0]:
+        return _real_vector_workload_report(
+            scenario_summaries,
+            min_indexed_recall=min_indexed_recall,
+        )
+    return _legacy_vector_workload_report(
+        scenario_summaries,
+        min_indexed_recall=min_indexed_recall,
+    )
+
+
+def _real_vector_workload_report(
+    scenario_summaries: list[dict[str, Any]],
+    min_indexed_recall: float | None = None,
+) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str | None, int], list[dict[str, Any]]] = {}
     for scenario in scenario_summaries:
-        key = (scenario["dimensions"], scenario["top_k"])
+        key = (
+            str(scenario["dataset"]),
+            scenario.get("filter_source"),
+            int(scenario["top_k"]),
+        )
         grouped.setdefault(key, []).append(scenario)
 
     report: list[dict[str, Any]] = []
-    for (dimensions, top_k), scenarios in sorted(grouped.items()):
+    for (dataset, filter_source, top_k), scenarios in sorted(
+        grouped.items(),
+        key=lambda item: (
+            item[0][0],
+            "" if item[0][1] is None else str(item[0][1]),
+            item[0][2],
+        ),
+    ):
         ordered = sorted(scenarios, key=lambda scenario: scenario["rows"])
         winners: list[dict[str, Any]] = []
+        is_filtered = filter_source is not None
+        numpy_key = "numpy_f32_filtered" if is_filtered else "numpy_f32_global"
+        indexed_key = (
+            "lancedb_indexed_filtered" if is_filtered else "lancedb_indexed_global"
+        )
+        shape = "metadata_filtered_ann" if is_filtered else "global_ann"
         for scenario in ordered:
-            numpy_mean = scenario["latency_mean_ms"]["numpy_f32_filtered"]
-            indexed_mean = scenario["latency_mean_ms"]["lancedb_indexed_filtered"]
-            indexed_recall = scenario["recalls_at_k"]["lancedb_indexed_filtered"]
-            winner = "numpy_exact"
-            if indexed_recall >= min_indexed_recall and indexed_mean < numpy_mean:
+            numpy_mean = scenario["latency_mean_ms"].get(numpy_key)
+            indexed_mean = scenario["latency_mean_ms"][indexed_key]
+            indexed_recall = scenario["recalls_at_k"].get(indexed_key)
+            meets_recall_target = _meets_indexed_recall_target(
+                scenario,
+                indexed_recall=indexed_recall,
+                min_indexed_recall=min_indexed_recall,
+            )
+            winner = "unmeasured_exact"
+            if numpy_mean is not None:
+                winner = "numpy_exact"
+            if (
+                numpy_mean is not None
+                and meets_recall_target
+                and indexed_mean < numpy_mean
+            ):
                 winner = "lancedb_indexed"
+            elif numpy_mean is None and meets_recall_target:
+                winner = "indexed_only"
             winners.append(
                 {
                     "scale": scenario["rows"],
                     "winner": winner,
-                    "numpy_f32_filtered_mean_ms": numpy_mean,
-                    "lancedb_indexed_filtered_mean_ms": indexed_mean,
-                    "lancedb_indexed_filtered_recall": indexed_recall,
-                    "filtered_candidate_count": scenario["filtered_candidate_count"],
-                    "strategy": scenario["lancedb_strategy"],
+                    f"{numpy_key}_mean_ms": numpy_mean,
+                    f"{indexed_key}_mean_ms": indexed_mean,
+                    f"{indexed_key}_recall": indexed_recall,
+                    "meets_recall_target": meets_recall_target,
+                    "recall_target_at_k": scenario.get("recall_target_at_k"),
+                    "recall_target_scale": scenario.get("recall_target_scale"),
+                    "filtered_candidate_count": scenario.get(
+                        "filtered_candidate_count"
+                    ),
+                    "sample_mode": scenario.get("sample_mode"),
                 }
             )
 
@@ -377,7 +433,87 @@ def _vector_workload_report(
             (
                 entry["scale"]
                 for entry in winners
-                if entry["winner"] == "lancedb_indexed"
+                if entry["winner"] in {"lancedb_indexed", "indexed_only"}
+            ),
+            None,
+        )
+        filter_label = filter_source if filter_source is not None else "global"
+        report.append(
+            {
+                "workload": f"vector_{dataset}_{filter_label}_topk{top_k}",
+                "family": "vector",
+                "shape": shape,
+                "dataset": dataset,
+                "filter_source": filter_source,
+                "top_k": top_k,
+                "first_indexed_scale": first_indexed_scale,
+                "winners": winners,
+            }
+        )
+
+    return report
+
+
+def _legacy_vector_workload_report(
+    scenario_summaries: list[dict[str, Any]],
+    min_indexed_recall: float | None = None,
+) -> list[dict[str, Any]]:
+    grouped: dict[tuple[int, int, bool], list[dict[str, Any]]] = {}
+    for scenario in scenario_summaries:
+        is_filtered = scenario.get("filtered_candidate_count") is not None
+        key = (
+            int(scenario["dimensions"]),
+            int(scenario["top_k"]),
+            is_filtered,
+        )
+        grouped.setdefault(key, []).append(scenario)
+
+    report: list[dict[str, Any]] = []
+    for (dimensions, top_k, is_filtered), scenarios in sorted(grouped.items()):
+        ordered = sorted(scenarios, key=lambda scenario: scenario["rows"])
+        numpy_key = "numpy_f32_filtered" if is_filtered else "numpy_f32_global"
+        indexed_key = (
+            "lancedb_indexed_filtered" if is_filtered else "lancedb_indexed_global"
+        )
+        shape = "candidate_filtered_ann" if is_filtered else "global_ann"
+        winners: list[dict[str, Any]] = []
+        for scenario in ordered:
+            numpy_mean = scenario["latency_mean_ms"].get(numpy_key)
+            indexed_mean = scenario["latency_mean_ms"][indexed_key]
+            indexed_recall = scenario["recalls_at_k"].get(indexed_key)
+            meets_recall_target = indexed_recall is not None and (
+                min_indexed_recall is None or indexed_recall >= min_indexed_recall
+            )
+            winner = "unmeasured_exact"
+            if numpy_mean is not None:
+                winner = "numpy_exact"
+            if (
+                numpy_mean is not None
+                and meets_recall_target
+                and indexed_mean < numpy_mean
+            ):
+                winner = "lancedb_indexed"
+            elif numpy_mean is None and meets_recall_target:
+                winner = "indexed_only"
+            winners.append(
+                {
+                    "scale": scenario["rows"],
+                    "winner": winner,
+                    f"{numpy_key}_mean_ms": numpy_mean,
+                    f"{indexed_key}_mean_ms": indexed_mean,
+                    f"{indexed_key}_recall": indexed_recall,
+                    "filtered_candidate_count": scenario.get(
+                        "filtered_candidate_count"
+                    ),
+                    "strategy": scenario.get("lancedb_strategy"),
+                }
+            )
+
+        first_indexed_scale = next(
+            (
+                entry["scale"]
+                for entry in winners
+                if entry["winner"] in {"lancedb_indexed", "indexed_only"}
             ),
             None,
         )
@@ -385,7 +521,7 @@ def _vector_workload_report(
             {
                 "workload": f"vector_dims{dimensions}_topk{top_k}",
                 "family": "vector",
-                "shape": "candidate_filtered_ann",
+                "shape": shape,
                 "dimensions": dimensions,
                 "top_k": top_k,
                 "first_indexed_scale": first_indexed_scale,
@@ -394,6 +530,69 @@ def _vector_workload_report(
         )
 
     return report
+
+
+def _meets_indexed_recall_target(
+    scenario: dict[str, Any],
+    *,
+    indexed_recall: float | None,
+    min_indexed_recall: float | None,
+) -> bool:
+    if indexed_recall is None:
+        return False
+    if min_indexed_recall is not None:
+        return indexed_recall >= min_indexed_recall
+    return bool(scenario.get("meets_recall_target", False))
+
+
+def _recommended_real_vector_thresholds(
+    vector_report: list[dict[str, Any]],
+) -> dict[str, Any]:
+    recommendations: list[dict[str, Any]] = []
+    for entry in vector_report:
+        winners = entry.get("winners", [])
+        first_indexed_scale = entry.get("first_indexed_scale")
+        filter_source = entry.get("filter_source")
+        default_route = "numpy_exact"
+        switch_rows = None
+        if first_indexed_scale is None:
+            default_route = "numpy_exact"
+        elif winners and winners[0].get("winner") == "lancedb_indexed":
+            default_route = "lancedb_indexed"
+        else:
+            default_route = "numpy_exact"
+            switch_rows = first_indexed_scale
+
+        indexed_winners = [
+            winner for winner in winners if winner.get("winner") == "lancedb_indexed"
+        ]
+        min_candidate_count = None
+        if filter_source is not None:
+            candidate_counts = [
+                int(winner["filtered_candidate_count"])
+                for winner in indexed_winners
+                if winner.get("filtered_candidate_count") is not None
+            ]
+            if candidate_counts:
+                min_candidate_count = min(candidate_counts)
+
+        recommendations.append(
+            {
+                "dataset": entry.get("dataset"),
+                "filter_source": filter_source,
+                "top_k": entry.get("top_k"),
+                "shape": entry.get("shape"),
+                "default_route": default_route,
+                "switch_to_indexed_at_rows": switch_rows,
+                "indexed_first_win_rows": first_indexed_scale,
+                "min_filtered_candidate_count_for_indexed": min_candidate_count,
+            }
+        )
+
+    return {
+        "dataset_aware": True,
+        "recommendations": recommendations,
+    }
 
 
 def _print_section(title: str, report: list[dict[str, Any]]) -> None:
@@ -447,19 +646,18 @@ def main() -> None:
         cypher_report = _cypher_workload_report(cypher_summary["runs"])
         report["cypher"] = cypher_report
         report.setdefault("recommended_runtime", {})[
-            "cypher_phase11_diagnostics"
-        ] = _phase11_cypher_diagnostics(cypher_report)
+            "cypher_graph_index_diagnostics"
+        ] = _cypher_graph_index_diagnostics(cypher_report)
         _print_section("Cypher routing crossover summary", cypher_report)
 
     vector_summary = summary.get("vector")
     if isinstance(vector_summary, dict):
-        acceptance_thresholds = vector_summary.get("acceptance_thresholds", {})
-        indexed_threshold = acceptance_thresholds.get("indexed_recall", 0.95)
-        vector_report = _vector_workload_report(
-            vector_summary["scenario_summaries"],
-            min_indexed_recall=indexed_threshold,
-        )
+        vector_report = _vector_workload_report(vector_summary["scenario_summaries"])
         report["vector"] = vector_report
+        if vector_summary.get("benchmark") == "vector_real_routing_sweep":
+            report.setdefault("recommended_runtime", {})[
+                "vector_indexed_thresholds"
+            ] = _recommended_real_vector_thresholds(vector_report)
         _print_section("Vector routing crossover summary", vector_report)
 
     if args.output_json is not None:

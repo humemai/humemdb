@@ -284,7 +284,10 @@ def _embedding(**weights: float) -> list[float]:
 
 
 def _candidate_ids(query_result, top_k: int) -> tuple[int, ...]:
-    return tuple(int(row[2]) for row in query_result.rows[:top_k])
+    return tuple(
+        int(row[0] if len(row) <= 2 else row[2])
+        for row in query_result.rows[:top_k]
+    )
 
 
 def _ordered_lookup_rows(
@@ -1750,7 +1753,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
 
-        with HumemDB.open(root / "memory") as db:
+        with HumemDB(root / "memory") as db:
             create_relational_tables(db)
             table_counts = populate_relational_rows(db)
             report("loaded twelve relational tables with 128-dimensional embeddings")
@@ -1916,9 +1919,11 @@ def main() -> None:
             graph_profile_match_ids = _candidate_ids(
                 db.query(
                     (
-                        "MATCH (p:Profile)-[:OWNS]->(:Project {slug: 'atlas'}) "
-                        "SEARCH p IN (VECTOR INDEX embedding FOR $query LIMIT 3) "
-                        "RETURN p.id ORDER BY p.id"
+                        "CALL db.index.vector.queryNodes("
+                        "'profile_embedding_idx', 3, $query) "
+                        "YIELD node, score "
+                        "MATCH (node:Profile)-[:OWNS]->(:Project {slug: 'atlas'}) "
+                        "RETURN node.id, score ORDER BY node.id"
                     ),
                     params={
                         "query": _embedding(
@@ -1941,9 +1946,11 @@ def main() -> None:
             graph_service_match_ids = _candidate_ids(
                 db.query(
                     (
-                        "MATCH (:Project {slug: 'atlas'})-[:DEPENDS_ON]->(s:Service) "
-                        "SEARCH s IN (VECTOR INDEX embedding FOR $query LIMIT 2) "
-                        "RETURN s.id ORDER BY s.id"
+                        "CALL db.index.vector.queryNodes("
+                        "'service_embedding_idx', 2, $query) "
+                        "YIELD node, score "
+                        "MATCH (:Project {slug: 'atlas'})-[:DEPENDS_ON]->(node:Service) "
+                        "RETURN node.id, score ORDER BY node.id"
                     ),
                     params={"query": _embedding(routing=1.0, graph=0.8, latency=0.7)},
                 ),
@@ -2017,9 +2024,11 @@ def main() -> None:
             updated_graph_profile_ids = _candidate_ids(
                 db.query(
                     (
-                        "MATCH (p:Profile)-[:OWNS]->(:Project {slug: 'atlas'}) "
-                        "SEARCH p IN (VECTOR INDEX embedding FOR $query LIMIT 3) "
-                        "RETURN p.id ORDER BY p.id"
+                        "CALL db.index.vector.queryNodes("
+                        "'profile_embedding_idx', 3, $query) "
+                        "YIELD node, score "
+                        "MATCH (node:Profile)-[:OWNS]->(:Project {slug: 'atlas'}) "
+                        "RETURN node.id, score ORDER BY node.id"
                     ),
                     params={
                         "query": _embedding(
@@ -2035,9 +2044,11 @@ def main() -> None:
             updated_graph_service_ids = _candidate_ids(
                 db.query(
                     (
-                        "MATCH (:Project {slug: 'atlas'})-[:DEPENDS_ON]->(s:Service) "
-                        "SEARCH s IN (VECTOR INDEX embedding FOR $query LIMIT 2) "
-                        "RETURN s.id ORDER BY s.id"
+                        "CALL db.index.vector.queryNodes("
+                        "'service_embedding_idx', 2, $query) "
+                        "YIELD node, score "
+                        "MATCH (:Project {slug: 'atlas'})-[:DEPENDS_ON]->(node:Service) "
+                        "RETURN node.id, score ORDER BY node.id"
                     ),
                     params={"query": _embedding(routing=1.0, graph=0.8, latency=0.7)},
                 ),

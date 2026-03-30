@@ -1,6 +1,6 @@
 # Cypher Frontend Plan
 
-This package is the in-repo home for HumemDB's Phase 9 Cypher parser expansion.
+This package is the in-repo home for HumemDB's next Cypher parser expansion.
 
 ## Purpose
 

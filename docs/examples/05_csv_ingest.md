@@ -19,7 +19,7 @@ repeated Cypher writes.
 
 ## Why this example exists
 
-Phase 12 added a first public ingestion family because real data loading should not
+HumemDB added a first public ingestion family because real data loading should not
 force users to choose between internal engine handles, hand-written CSV loops, or
 statement-by-statement Cypher writes. This example shows the intended public path:
 generate or receive CSV files, import them into the canonical SQLite-backed store, and
@@ -49,7 +49,7 @@ Schema note:
 ## Representative flow
 
 ```python
-with HumemDB.open("ingest") as db:
+with HumemDB("ingest") as db:
     db.query("CREATE TABLE accounts (...)")
     db.query("CREATE TABLE account_events (...)")
 

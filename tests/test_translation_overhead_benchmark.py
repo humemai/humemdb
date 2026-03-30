@@ -63,8 +63,8 @@ class TestTranslationOverheadBenchmark(unittest.TestCase):
         )
 
         parse_cypher = benchmark_module.parse_cypher
-        plan_cypher_runtime = getattr(benchmark_module, "_plan_cypher_runtime")
-        compile_cypher_bound = getattr(benchmark_module, "_compile_cypher_bound")
+        plan_cypher_runtime = benchmark_module._plan_cypher_runtime
+        compile_cypher_bound = benchmark_module._compile_cypher_bound
         workloads = benchmark_module.CYPHER_WORKLOADS
 
         self.assertIn("node_range_filter", workloads)

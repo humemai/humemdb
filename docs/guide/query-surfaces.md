@@ -3,6 +3,23 @@
 HumemDB currently centers `db.query(...)` on explicit SQL or Cypher text and keeps the
 direct vector path separate.
 
+## Public Python methods
+
+The stable public Python surface today is intentionally small:
+
+- `HumemDB(base_path, *, preload_vectors=False)` opens or reopens one embedded database
+  pair from a single base path
+- `db.query(text, *, params=None)` is the text-query surface
+- `db.executemany(text, params_seq)` is the current batch-write surface
+- `db.transaction()`, `db.begin()`, `db.commit()`, and `db.rollback()` control the
+  canonical SQLite write transaction
+- `db.import_table(...)`, `db.import_nodes(...)`, and `db.import_edges(...)` are the
+  current CSV ingest surface
+- `db.insert_vectors(...)`, `db.search_vectors(...)`, and `db.set_vector_metadata(...)`
+  are the direct-vector methods
+
+`QueryResult` is the normalized result object returned by query-like calls.
+
 For the exact supported PostgreSQL-like SQL and Neo4j-like Cypher subset, see
 [Supported Syntax](supported-syntax.md).
 
@@ -19,6 +36,30 @@ For the exact supported PostgreSQL-like SQL and Neo4j-like Cypher subset, see
   contract.
 - Public writes go to SQLite.
 - Read queries may go to SQLite or DuckDB.
+
+### Relational indexes through the public API
+
+HumemDB does not currently expose a separate `create_index(...)` helper. Instead,
+app-owned relational indexes are created through ordinary SQL DDL on the same public
+`db.query(...)` surface.
+
+That means callers can stay entirely inside the public HumemDB API and write index DDL
+such as:
+
+```python
+db.query(
+    "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)"
+)
+```
+
+Practical implications:
+
+- relational indexing is part of the public SQL story, not something that requires
+  reaching into internal SQLite handles
+- callers are expected to add workload-specific indexes for app-owned tables when
+  benchmark or application evidence justifies them
+- HumemDB keeps a few internal default indexes for its own graph and vector storage,
+  but ordinary relational table indexing remains explicit application DDL
 
 ## `HumemCypher v0`
 
@@ -73,6 +114,33 @@ Practical consequences of this layout:
 - foreign keys keep node and edge relationships consistent, and SQLite indexes cover
   the common label, endpoint, and property lookup paths
 
+### Current default graph indexes
+
+HumemDB creates a small default set of SQLite indexes for the admitted Cypher read and
+write surface. These are meant to support the common graph access paths now, not to be
+an exhaustive graph-tuning layer for every future workload.
+
+- `graph_nodes(label, id)` for label-constrained node lookup
+- `graph_edges(from_node_id, type, to_node_id)` for outgoing typed traversal
+- `graph_edges(to_node_id, type, from_node_id)` for incoming typed traversal
+- `graph_node_properties(key, value_type, value, node_id)` for node-property equality
+  lookup
+- `graph_edge_properties(key, value_type, value, edge_id)` for edge-property equality
+  lookup
+- a partial unique index on `graph_node_properties(node_id)` where
+  `value_type = 'vector'` so one node cannot accumulate multiple vector-valued
+  properties in the current graph-owned embedding path
+
+Practical implications:
+
+- current default indexing is aimed at label lookup, endpoint-driven traversals,
+  reverse-edge traversals, and equality-style property filters
+- this default set is intentionally conservative; broader ordered traversals or other
+  workload-specific graph reads may still justify app-owned SQLite indexes later
+- HumemDB supports ordinary app-owned `CREATE INDEX IF NOT EXISTS ...` DDL through
+  `db.query(...)`, so applications can add narrower indexes when benchmark evidence
+  justifies them
+
 ## `HumemVector v0`
 
 - Vector search is expressed inside HumemSQL or HumemCypher text rather than as a
@@ -83,8 +151,9 @@ Practical consequences of this layout:
   `search_vectors(...)` and can be narrowed with equality-style metadata filters.
 - HumemSQL uses PostgreSQL-like vector ordering forms such as
   `ORDER BY embedding <->|<=>|<#> $query LIMIT ...`.
-- HumemCypher uses Neo4j-like `SEARCH ... VECTOR INDEX embedding FOR $query LIMIT ...`
-  forms.
+- HumemCypher uses Neo4j-like
+  `CALL db.index.vector.queryNodes('user_embedding_idx', k, $query) YIELD node, score`
+  forms, with optional `MATCH ...` or `WHERE ...` filtering before `RETURN`.
 - SQL vector queries define row-oriented vector candidate sets.
 - Cypher vector queries define node-oriented vector candidate sets.
 - Vector execution is currently fixed to SQLite under the public API.
@@ -94,6 +163,7 @@ Practical consequences of this layout:
 - `db.query(...)` now infers SQL, the current narrow Cypher subset, and the current
   language-level vector forms directly from the query text.
 - The public query API does not expose a backend override.
+- The public Python API does not expose SQLite or DuckDB engine handles directly.
 - HumemDB uses the current conservative workload classifier internally: broad
   analytical SQL may route to DuckDB, while writes, ambiguous SQL, current Cypher
   reads, and vector execution stay on SQLite.

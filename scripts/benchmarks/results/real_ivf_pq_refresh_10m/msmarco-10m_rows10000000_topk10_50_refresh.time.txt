@@ -1,0 +1,24 @@
+[2026-03-28T21:03:12Z WARN  lance::dataset::write::insert] No existing dataset at /tmp/tmpj7xwtplc/humem-real.lancedb/vectors.lance, it will be created
+	Command being timed: "env HUMEMDB_THREADS=8 /mnt/ssd2/repos/humemdb/.venv/bin/python scripts/benchmarks/vector_search_real.py --dataset msmarco-10m --rows 10000000 --queries 100 --top-k-grid 10,50 --warmup 1 --repetitions 3 --lancedb-num-partitions 128 --lancedb-num-sub-vectors 128 --lancedb-nprobes 32 --lancedb-refine-factor 4 --output json"
+	User time (seconds): 1925.29
+	System time (seconds): 90.77
+	Percent of CPU this job got: 696%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 4:49.58
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 5177152
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 208
+	Minor (reclaiming a frame) page faults: 31445971
+	Voluntary context switches: 2135219
+	Involuntary context switches: 173172
+	Swaps: 0
+	File system inputs: 140042032
+	File system outputs: 85507648
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

@@ -4,17 +4,16 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.support import humemdb_class
+from humemdb import HumemDB
 
 
 class TestCypherTCKSubset(unittest.TestCase):
     def test_create1_single_labeled_node_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 created = db.query("CREATE (n:Label)")
 
                 self.assertEqual(created.columns, ("node_id",))
@@ -27,12 +26,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 self.assertEqual(result.rows, (("Label",),))
 
     def test_create1_single_node_with_two_properties_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query("CREATE (n:Thing {uid: 12, name: 'foo'})")
 
                 result = db.query(
@@ -45,12 +43,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 self.assertEqual(result.rows, ((12, "foo"),))
 
     def test_create1_null_property_omission_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query("CREATE (n:Thing {uid: 12, name: null})")
 
                 result = db.query(
@@ -63,12 +60,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 self.assertEqual(result.rows, ((12, None),))
 
     def test_create1_large_integer_precision_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query("CREATE (p:TheLabel {bigint: 4611686018427387905})")
 
                 result = db.query(
@@ -81,12 +77,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 self.assertEqual(result.rows, ((4611686018427387905,),))
 
     def test_create2_single_relationship_pattern_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 created = db.query(
                     "CREATE (a:A)-[r:R {since: 2020}]->(b:B {name: 'Bob'})"
                 )
@@ -105,12 +100,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 self.assertEqual(result.rows, (("A", "R", 2020, "Bob"),))
 
     def test_create2_reverse_relationship_pattern_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 created = db.query(
                     "CREATE (:A)<-[r:R {since: 2020}]-(:B {name: 'Bee'})"
                 )
@@ -129,12 +123,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 self.assertEqual(result.rows, (("A", "R", 2020, "B"),))
 
     def test_create2_separate_patterns_relationship_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 created = db.query("CREATE (a:A), (b:B), (a)-[:R]->(b)")
 
                 self.assertEqual(created.columns, ("from_id", "edge_id", "to_id"))
@@ -150,12 +143,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 self.assertEqual(result.rows, (("A", "R", "B"),))
 
     def test_create2_single_node_self_loop_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 created = db.query("CREATE (root:Root)-[:LINK]->(root:Root)")
 
                 self.assertEqual(created.columns, ("from_id", "edge_id", "to_id"))
@@ -171,12 +163,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 self.assertEqual(result.rows, ((1, 1, "LINK"),))
 
     def test_create2_single_self_loop_on_existing_node_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query("CREATE (:Root)")
 
                 created = db.query(
@@ -196,12 +187,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 self.assertEqual(result.rows, ((1, 1, "LINK"),))
 
     def test_create2_existing_start_node_to_new_end_node_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query("CREATE (:Begin)")
 
                 created = db.query(
@@ -221,12 +211,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 self.assertEqual(result.rows, (("Begin", "TYPE", "End"),))
 
     def test_create2_new_start_node_to_existing_end_node_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query("CREATE (:End)")
 
                 created = db.query(
@@ -246,12 +235,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 self.assertEqual(result.rows, (("Begin", "TYPE", "End"),))
 
     def test_create2_connect_two_existing_nodes_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query("CREATE (:Begin {name: 'start'})")
                 db.query("CREATE (:End {name: 'finish'})")
 
@@ -275,12 +263,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 self.assertEqual(result.rows, (("Begin", "TYPE", "End"),))
 
     def test_create2_connect_two_existing_nodes_reverse_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query("CREATE (:Begin {name: 'start'})")
                 db.query("CREATE (:End {name: 'finish'})")
 
@@ -304,12 +291,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 self.assertEqual(result.rows, (("Begin", "TYPE", "End"),))
 
     def test_match2_reverse_relationship_pattern_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query("CREATE (a:A)-[r:R {since: 2021}]->(b:B {name: 'Bee'})")
 
                 result = db.query(
@@ -323,12 +309,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 self.assertEqual(result.rows, (("B", "R", 2021, "A"),))
 
     def test_match1_nonexistent_nodes_return_empty_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 result = db.query(
                     "MATCH (n:Missing) RETURN n.id ORDER BY n.id LIMIT 1"
                 )
@@ -336,12 +321,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 self.assertEqual(result.rows, ())
 
     def test_match2_nonexistent_relationships_return_empty_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 result = db.query(
                     (
                         "MATCH (a:A)-[r:R]->(b:B) "
@@ -352,12 +336,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 self.assertEqual(result.rows, ())
 
     def test_match2_relationship_pattern_with_labels_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query("CREATE (a:A)-[:T1]->(b:B)")
                 db.query("CREATE (a:B)-[:T2]->(b:A)")
                 db.query("CREATE (a:B)-[:T3]->(b:B)")
@@ -373,12 +356,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 self.assertEqual(result.rows, (("T1",),))
 
     def test_match2_relationship_pattern_with_type_alternation_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query("CREATE (a:A)-[:KNOWS]->(b:B {name: 'Bee'})")
                 db.query("CREATE (a:A)-[:HATES]->(b:B {name: 'Hex'})")
                 db.query("CREATE (a:A)-[:LIKES]->(b:B {name: 'Lux'})")
@@ -396,12 +378,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 )
 
     def test_match2_untyped_relationship_pattern_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query("CREATE (a:A)-[:KNOWS]->(b:B {name: 'Bee'})")
                 db.query("CREATE (a:A)-[:HATES]->(b:B {name: 'Hex'})")
 
@@ -418,12 +399,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 )
 
     def test_match2_anonymous_endpoint_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query("CREATE (:A {name: 'left'})-[:KNOWS]->(:B {name: 'Bee'})")
                 db.query("CREATE (:A {name: 'left'})-[:HATES]->(:B {name: 'Hex'})")
 
@@ -437,12 +417,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 self.assertEqual(result.rows, (("HATES",), ("KNOWS",)))
 
     def test_match2_relationship_inline_property_predicate_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     (
                         "CREATE (m:Mid {name: 'mid'})"
@@ -468,12 +447,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 self.assertEqual(result.rows, (("left",),))
 
     def test_match1_inline_property_predicate_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query("CREATE (n:Item {name: 'bar'})")
                 db.query("CREATE (n:Item {name: 'monkey'})")
                 db.query("CREATE (n:Item {firstname: 'bar'})")
@@ -488,12 +466,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 self.assertEqual(result.rows, (("bar",),))
 
     def test_match_where1_node_property_filter_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query("CREATE (n:Item {name: 'Bar'})")
                 db.query("CREATE (n:Item {name: 'Baz'})")
                 db.query("CREATE (n:Item)")
@@ -509,12 +486,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 self.assertEqual(result.rows, (("Bar",),))
 
     def test_match_where1_relationship_property_param_filter_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     (
                         "CREATE (a:A {name: 'left'})"
@@ -535,12 +511,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 self.assertEqual(result.rows, (("me",),))
 
     def test_match_where1_node_disjunction_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query("CREATE (n:A {name: 'one', p1: 12})")
                 db.query("CREATE (n:B {name: 'two', p2: 13})")
                 db.query("CREATE (n:C {name: 'three'})")
@@ -556,12 +531,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 self.assertEqual(result.rows, (("one",), ("two",)))
 
     def test_match_where1_relationship_property_disjunction_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     (
                         "CREATE (a:Person {name: 'A'})"
@@ -595,12 +569,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 self.assertEqual(result.rows, (("B",), ("C",)))
 
     def test_match_where1_node_string_predicates_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query("CREATE (n:User {name: 'Alice', region: 'west-coast'})")
                 db.query("CREATE (n:User {name: 'Alicia', region: 'east-coast'})")
                 db.query("CREATE (n:User {name: 'Bob', region: 'west-inland'})")
@@ -617,12 +590,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 self.assertEqual(result.rows, (("Alice",), ("Alicia",)))
 
     def test_match_where1_relationship_string_predicates_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     (
                         "CREATE (a:User {name: 'Alice'})"
@@ -650,12 +622,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 self.assertEqual(result.rows, (("Grace",),))
 
     def test_match_where1_node_null_predicates_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query("CREATE (n:User {name: 'Alice', region: 'west'})")
                 db.query("CREATE (n:User {name: 'Bob', nickname: 'Bobby'})")
                 db.query("CREATE (n:User {name: 'Cara', region: 'east'})")
@@ -671,12 +642,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 self.assertEqual(result.rows, (("Alice",), ("Cara",)))
 
     def test_match_return_distinct_offset_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query("CREATE (:User {region: 'east'})")
                 db.query("CREATE (:User {region: 'north'})")
                 db.query("CREATE (:User {region: 'north'})")
@@ -693,12 +663,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 self.assertEqual(result.rows, (("north",), ("south",)))
 
     def test_match_detach_delete_node_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE (:User {name: 'Alice'})-[:KNOWS]->(:User {name: 'Bob'})"
                 )
@@ -721,12 +690,11 @@ class TestCypherTCKSubset(unittest.TestCase):
                 self.assertEqual(relationships.rows, ())
 
     def test_match_delete_relationship_subset(self) -> None:
-        HumemDB = humemdb_class()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 db.query(
                     "CREATE (:User {name: 'Alice'})-[:KNOWS]->(:User {name: 'Bob'})"
                 )

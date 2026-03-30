@@ -1,4 +1,4 @@
-"""Cypher frontend boundary for the next Phase 9 parser pipeline.
+"""Cypher frontend boundary for the next parser pipeline.
 
 This package is intentionally internal. It will hold the parser-facing layers used to
 replace or subsume the current handwritten Cypher frontend over time:

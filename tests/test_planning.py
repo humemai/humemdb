@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import replace
-import importlib
 import json
 import os
 import tempfile
@@ -9,18 +8,20 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from tests.support import humemdb_class
+from humemdb import HumemDB, QueryResult
+import humemdb.cypher as humemdb_cypher
+import humemdb.db
+from humemdb.sql import translate_sql_plan
 
 
 class TestPlanning(unittest.TestCase):
     def test_query_reuses_parsed_cypher_plan_during_execution(self) -> None:
-        HumemDB = humemdb_class()
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        generated_lower = db_module._lower_generated_cypher_text
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
             with mock.patch.object(
                 db_module,
@@ -37,7 +38,7 @@ class TestPlanning(unittest.TestCase):
                         "parse_cypher",
                         wraps=cypher_module.parse_cypher,
                     ) as execute_parse:
-                        with HumemDB(str(sqlite_path)) as db:
+                        with HumemDB(base_path) as db:
                             result = db.query(
                                 "CREATE (u:User {name: 'Alice', age: 30})"
                             )
@@ -50,10 +51,10 @@ class TestPlanning(unittest.TestCase):
     def test_query_planning_uses_generated_frontend_for_reverse_rel_create(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = "CREATE (a:User)<-[r:KNOWS {since: 2020}]-(b:User)"
 
@@ -80,10 +81,10 @@ class TestPlanning(unittest.TestCase):
     def test_query_planning_uses_generated_frontend_for_self_loop_create(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = "CREATE (root:Root)-[:LINK]->(root:Root)"
 
@@ -110,10 +111,10 @@ class TestPlanning(unittest.TestCase):
     def test_query_planning_uses_generated_frontend_for_separate_pattern_create(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = (
             "CREATE (a:A {name: 'Alice'}), (b:B {name: 'Bob'}), (a)-[:R]->(b)"
@@ -145,10 +146,10 @@ class TestPlanning(unittest.TestCase):
     def test_query_planning_uses_generated_frontend_for_match_create_self_loop(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = "MATCH (root:Root) CREATE (root)-[:LINK]->(root)"
 
@@ -178,10 +179,10 @@ class TestPlanning(unittest.TestCase):
     def test_query_planning_uses_generated_frontend_for_match_create_new_endpoint(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = "MATCH (x:Begin) CREATE (x)-[:TYPE]->(:End)"
 
@@ -211,10 +212,10 @@ class TestPlanning(unittest.TestCase):
     def test_query_planning_uses_generated_frontend_for_match_create_new_start_node(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = "MATCH (x:End) CREATE (:Begin {name: 'start'})-[:TYPE]->(x)"
 
@@ -244,10 +245,10 @@ class TestPlanning(unittest.TestCase):
     def test_query_planning_uses_generated_frontend_for_two_node_match_create(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = (
             "MATCH (x:Begin), (y:End) "
@@ -280,10 +281,10 @@ class TestPlanning(unittest.TestCase):
     def test_query_planning_uses_generated_frontend_for_reverse_two_node_match_create(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = (
             "MATCH (x:Begin), (y:End) "
@@ -314,10 +315,10 @@ class TestPlanning(unittest.TestCase):
         self.assertEqual(plan.cypher_plan, handwritten_plan)
 
     def test_query_planning_uses_generated_frontend_for_match_set(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = "MATCH (u:User {name: 'Alice'}) SET u.age = 31"
 
@@ -344,10 +345,10 @@ class TestPlanning(unittest.TestCase):
     def test_query_planning_uses_generated_frontend_for_multi_assignment_match_set(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = (
             "MATCH (u:User {name: 'Alice'}) "
@@ -377,10 +378,10 @@ class TestPlanning(unittest.TestCase):
     def test_query_planning_uses_generated_frontend_for_reverse_relationship_match(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = (
             "MATCH (b:User)<-[r:KNOWS]-(a:User) "
@@ -411,10 +412,10 @@ class TestPlanning(unittest.TestCase):
     def test_query_planning_uses_generated_frontend_for_inequality_match(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = (
             "MATCH (u:User) "
@@ -445,10 +446,10 @@ class TestPlanning(unittest.TestCase):
     def test_query_planning_uses_generated_frontend_for_top_level_or_match(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = (
             "MATCH (u:User) "
@@ -483,10 +484,10 @@ class TestPlanning(unittest.TestCase):
     def test_query_planning_uses_generated_frontend_for_parenthesized_match(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = (
             "MATCH (u:User) "
@@ -521,10 +522,10 @@ class TestPlanning(unittest.TestCase):
     def test_query_planning_uses_generated_frontend_for_multi_type_relationship_match(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = (
             "MATCH (a:User)-[r:KNOWS|FOLLOWS]->(b:User) "
@@ -554,10 +555,10 @@ class TestPlanning(unittest.TestCase):
     def test_query_planning_uses_generated_frontend_for_untyped_relationship_match(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = "MATCH (a:User)-[r]->(b:User) RETURN b.name, r.type ORDER BY b.name"
 
@@ -584,10 +585,10 @@ class TestPlanning(unittest.TestCase):
     def test_query_planning_uses_generated_frontend_for_anonymous_node_create(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = "CREATE (:User {name: 'Alice'})"
 
@@ -614,10 +615,10 @@ class TestPlanning(unittest.TestCase):
     def test_query_planning_uses_generated_frontend_for_anonymous_rel_endpoints(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = (
             "MATCH (:User {name: 'Alice'})-[r]->(:User) "
@@ -647,10 +648,10 @@ class TestPlanning(unittest.TestCase):
     def test_query_planning_uses_generated_frontend_for_multi_type_rel_set(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = "MATCH (a:User)-[r:KNOWS|FOLLOWS]->(b:User) SET r.strength = 5"
 
@@ -677,10 +678,10 @@ class TestPlanning(unittest.TestCase):
     def test_query_planning_uses_generated_frontend_for_untyped_relationship_match_set(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = "MATCH (a:User)-[r]->(b:User) SET r.strength = 5"
 
@@ -707,10 +708,10 @@ class TestPlanning(unittest.TestCase):
     def test_query_planning_uses_generated_frontend_for_anon_endpoint_rel_set(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = (
             "MATCH (:User {name: 'Alice'})-[r]->(:User) "
@@ -740,10 +741,10 @@ class TestPlanning(unittest.TestCase):
     def test_query_planning_uses_generated_frontend_for_mixed_and_or_match(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = (
             "MATCH (u:User) "
@@ -778,10 +779,10 @@ class TestPlanning(unittest.TestCase):
     def test_query_planning_uses_generated_frontend_for_mixed_and_or_relationship_match(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = (
             "MATCH (a:User)-[r:KNOWS]->(b:User) "
@@ -816,10 +817,10 @@ class TestPlanning(unittest.TestCase):
     def test_query_planning_uses_generated_frontend_for_relationship_match_set(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = (
             "MATCH (a:User)-[r:KNOWS]->(b:User) "
@@ -849,10 +850,10 @@ class TestPlanning(unittest.TestCase):
     def test_query_planning_uses_generated_frontend_for_reverse_relationship_match_set(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = (
             "MATCH (b:User)<-[r:KNOWS]-(a:User) "
@@ -882,10 +883,10 @@ class TestPlanning(unittest.TestCase):
     def test_query_planning_uses_generated_frontend_for_rel_mixed_bool_set(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = (
             "MATCH (a:User)-[r:KNOWS]->(b:User) "
@@ -920,10 +921,10 @@ class TestPlanning(unittest.TestCase):
     def test_query_planning_uses_generated_frontend_for_reverse_rel_mixed_bool_set(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = (
             "MATCH (b:User)<-[r:KNOWS]-(a:User) "
@@ -958,10 +959,10 @@ class TestPlanning(unittest.TestCase):
     def test_query_planning_rejects_relationship_set_alias_mismatch_without_fallback(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = "MATCH (a:User)-[r:KNOWS]->(b:User) SET a.name = 'Bob'"
 
@@ -984,10 +985,10 @@ class TestPlanning(unittest.TestCase):
     def test_query_planning_rejects_unknown_where_alias_without_fallback(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = "MATCH (u:User {name: 'Alice'}) WHERE v.age = 31 RETURN u.name"
 
@@ -1010,10 +1011,10 @@ class TestPlanning(unittest.TestCase):
     def test_query_planning_rejects_multi_part_match_without_fallback(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = "MATCH (u:User) WITH u RETURN u.name"
 
@@ -1037,10 +1038,10 @@ class TestPlanning(unittest.TestCase):
         self.assertEqual(handwritten_parse.call_count, 0)
 
     def test_query_planning_caches_identical_cypher_text(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
-        cached_plan = getattr(db_module, "_plan_cypher_query")
+        db_module = humemdb.db
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
+        cached_plan = db_module._plan_cypher_query
 
         cached_plan.cache_clear()
         query = (
@@ -1090,10 +1091,10 @@ class TestPlanning(unittest.TestCase):
         self.assertIs(first.cypher_shape, second.cypher_shape)
 
     def test_query_planning_keeps_generated_syntax_errors(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        cypher_module = importlib.import_module("humemdb.cypher")
-        plan_query = getattr(db_module, "_plan_query")
-        generated_lower = getattr(db_module, "_lower_generated_cypher_text")
+        db_module = humemdb.db
+        cypher_module = humemdb_cypher
+        plan_query = db_module._plan_query
+        generated_lower = db_module._lower_generated_cypher_text
 
         query = "MATCH (u RETURN u"
 
@@ -1117,9 +1118,7 @@ class TestPlanning(unittest.TestCase):
         self.assertEqual(handwritten_parse.call_count, 0)
 
     def test_sql_translation_plan_exposes_shape_metadata(self) -> None:
-        sql_module = importlib.import_module("humemdb.sql")
-
-        plan = sql_module.translate_sql_plan(
+        plan = translate_sql_plan(
             (
                 "WITH recent AS (SELECT customer_id, amount FROM payments) "
                 "SELECT c.name, COUNT(*) AS total "
@@ -1144,8 +1143,8 @@ class TestPlanning(unittest.TestCase):
         self.assertFalse(plan.has_distinct)
 
     def test_query_plan_carries_sql_shape_metadata(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
+        db_module = humemdb.db
+        plan_query = db_module._plan_query
 
         plan = plan_query(
             (
@@ -1174,8 +1173,8 @@ class TestPlanning(unittest.TestCase):
         self.assertIn("matches the workload preference", plan.route_decision.reason)
 
     def test_query_plan_carries_cypher_shape_metadata(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
+        db_module = humemdb.db
+        plan_query = db_module._plan_query
 
         plan = plan_query(
             (
@@ -1204,8 +1203,8 @@ class TestPlanning(unittest.TestCase):
         self.assertIn("not broad enough", plan.workload.reason)
 
     def test_query_plan_carries_sql_vector_plan_metadata(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
+        db_module = humemdb.db
+        plan_query = db_module._plan_query
 
         plan = plan_query(
             "SELECT id FROM docs ORDER BY embedding <=> $query LIMIT $limit",
@@ -1230,14 +1229,15 @@ class TestPlanning(unittest.TestCase):
         self.assertEqual(plan.vector_plan.candidate_query.namespace, "docs")
 
     def test_query_plan_carries_cypher_vector_plan_metadata(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
+        db_module = humemdb.db
+        plan_query = db_module._plan_query
 
         plan = plan_query(
             (
-                "MATCH (u:User) "
-                "SEARCH u IN (VECTOR INDEX embedding FOR $query LIMIT $limit) "
-                "RETURN u.id"
+                "CALL db.index.vector.queryNodes("
+                "'user_embedding_idx', $limit, $query) "
+                "YIELD node, score MATCH (node:User) "
+                "RETURN node.id, score"
             ),
             route=None,
             params={"query": [1.0, 0.0], "limit": 1},
@@ -1249,7 +1249,7 @@ class TestPlanning(unittest.TestCase):
         self.assertIsNotNone(plan.vector_plan)
         assert plan.vector_plan is not None
         self.assertEqual(type(plan.vector_plan).__name__, "CypherVectorQueryPlan")
-        self.assertEqual(plan.vector_plan.metric, "cosine")
+        self.assertEqual(plan.vector_plan.index_name, "user_embedding_idx")
         self.assertEqual(plan.vector_plan.top_k, 1)
         self.assertEqual(
             type(plan.vector_plan.candidate_query).__name__,
@@ -1258,11 +1258,57 @@ class TestPlanning(unittest.TestCase):
         self.assertEqual(plan.vector_plan.candidate_query.target, "graph_node")
         self.assertEqual(plan.vector_plan.candidate_query.namespace, "")
 
+    def test_query_plan_carries_named_cypher_vector_plan_metadata(self) -> None:
+        db_module = humemdb.db
+        plan_query = db_module._plan_query
+
+        plan = plan_query(
+            (
+                "CALL db.index.vector.queryNodes("
+                "'user_embedding_idx', $limit, $query) "
+                "YIELD node, score MATCH (node:User) "
+                "RETURN node.id, score"
+            ),
+            route=None,
+            params={"query": [1.0, 0.0], "limit": 1},
+        )
+
+        self.assertEqual(plan.query_type, "vector")
+        self.assertEqual(plan.route, "sqlite")
+        self.assertEqual(plan.route_decision.source, "automatic")
+        self.assertIsNotNone(plan.vector_plan)
+        assert plan.vector_plan is not None
+        self.assertEqual(type(plan.vector_plan).__name__, "CypherVectorQueryPlan")
+        self.assertEqual(plan.vector_plan.index_name, "user_embedding_idx")
+        self.assertEqual(plan.vector_plan.top_k, 1)
+
+    def test_query_plan_carries_neo4j_like_query_nodes_metadata(self) -> None:
+        db_module = humemdb.db
+        plan_query = db_module._plan_query
+
+        plan = plan_query(
+            (
+                "CALL db.index.vector.queryNodes('user_embedding_idx', $limit, $query) "
+                "YIELD node, score RETURN node.id, score"
+            ),
+            route=None,
+            params={"query": [1.0, 0.0], "limit": 1},
+        )
+
+        self.assertEqual(plan.query_type, "vector")
+        self.assertEqual(plan.route, "sqlite")
+        self.assertEqual(plan.route_decision.source, "automatic")
+        self.assertIsNotNone(plan.vector_plan)
+        assert plan.vector_plan is not None
+        self.assertEqual(type(plan.vector_plan).__name__, "CypherVectorQueryPlan")
+        self.assertEqual(plan.vector_plan.index_name, "user_embedding_idx")
+        self.assertEqual(plan.vector_plan.top_k, 1)
+        self.assertEqual(plan.vector_plan.result_mode, "queryNodes")
+        self.assertEqual(plan.vector_plan.return_items, ("node.id", "score"))
+
     def test_execute_query_plan_prefers_explicit_vector_plan_shape(self) -> None:
-        HumemDB = humemdb_class()
-        db_module = importlib.import_module("humemdb.db")
-        humemdb_module = importlib.import_module("humemdb")
-        plan_query = getattr(db_module, "_plan_query")
+        db_module = humemdb.db
+        plan_query = db_module._plan_query
 
         plan = plan_query(
             "SELECT id FROM docs ORDER BY embedding <=> $query LIMIT $limit",
@@ -1270,7 +1316,7 @@ class TestPlanning(unittest.TestCase):
             params={"query": [1.0, 0.0], "limit": 2},
         )
         inconsistent_plan = replace(plan, query_type="sql")
-        expected = humemdb_module.QueryResult(
+        expected = QueryResult(
             rows=(),
             columns=("target", "namespace", "target_id", "score"),
             route="sqlite",
@@ -1279,9 +1325,9 @@ class TestPlanning(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
+            base_path = Path(tmpdir) / "humem"
 
-            with HumemDB(str(sqlite_path)) as db:
+            with HumemDB(base_path) as db:
                 with mock.patch.object(
                     db,
                     "_execute_vector_query",
@@ -1295,10 +1341,7 @@ class TestPlanning(unittest.TestCase):
                             db,
                             "_execute_cypher_query_plan",
                         ) as execute_cypher:
-                            result = getattr(
-                                db,
-                                "_execute_query_plan",
-                            )(inconsistent_plan)
+                            result = db._execute_query_plan(inconsistent_plan)
 
         self.assertIs(result, expected)
         execute_vector.assert_called_once_with(inconsistent_plan)
@@ -1306,8 +1349,8 @@ class TestPlanning(unittest.TestCase):
         execute_cypher.assert_not_called()
 
     def test_query_plan_classifies_simple_sql_as_transactional_read(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
+        db_module = humemdb.db
+        plan_query = db_module._plan_query
 
         plan = plan_query(
             "SELECT id, name FROM users WHERE id = $id",
@@ -1320,8 +1363,8 @@ class TestPlanning(unittest.TestCase):
         self.assertEqual(plan.workload.preferred_route, "sqlite")
 
     def test_query_type_inference_recognizes_broader_cypher_prefixes(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        infer_query_type = getattr(db_module, "_infer_query_type")
+        db_module = humemdb.db
+        infer_query_type = db_module._infer_query_type
 
         self.assertEqual(
             infer_query_type("OPTIONAL MATCH (u:User) RETURN u.name"),
@@ -1345,8 +1388,8 @@ class TestPlanning(unittest.TestCase):
         )
 
     def test_query_type_inference_keeps_sql_cte_as_sql(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        infer_query_type = getattr(db_module, "_infer_query_type")
+        db_module = humemdb.db
+        infer_query_type = db_module._infer_query_type
 
         self.assertEqual(
             infer_query_type(
@@ -1356,8 +1399,8 @@ class TestPlanning(unittest.TestCase):
         )
 
     def test_query_plan_records_automatic_route_selection(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
+        db_module = humemdb.db
+        plan_query = db_module._plan_query
 
         plan = plan_query(
             (
@@ -1373,8 +1416,8 @@ class TestPlanning(unittest.TestCase):
         self.assertIn("Auto-selected 'duckdb'", plan.route_decision.reason)
 
     def test_query_plan_records_explicit_route_override(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
+        db_module = humemdb.db
+        plan_query = db_module._plan_query
 
         plan = plan_query(
             (
@@ -1394,13 +1437,12 @@ class TestPlanning(unittest.TestCase):
         )
 
     def test_sql_analytical_read_only_prefers_duckdb_after_calibration(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        sql_module = importlib.import_module("humemdb.sql")
-        classify_workload = getattr(db_module, "_classify_workload")
-        threshold_type = getattr(db_module, "_OlapRoutingThresholds")
-        rule_type = getattr(db_module, "_OlapRoutingRule")
+        db_module = humemdb.db
+        classify_workload = db_module._classify_workload
+        threshold_type = db_module._OlapRoutingThresholds
+        rule_type = db_module._OlapRoutingRule
 
-        sql_plan = sql_module.translate_sql_plan(
+        sql_plan = translate_sql_plan(
             (
                 "WITH recent AS (SELECT customer_id, amount FROM payments) "
                 "SELECT c.name, COUNT(*) AS total "
@@ -1436,8 +1478,8 @@ class TestPlanning(unittest.TestCase):
     def test_selective_sql_join_lookup_stays_transactional_sqlite_by_default(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
+        db_module = humemdb.db
+        plan_query = db_module._plan_query
 
         plan = plan_query(
             (
@@ -1457,8 +1499,8 @@ class TestPlanning(unittest.TestCase):
         )
 
     def test_join_heavy_ordered_sql_read_prefers_duckdb_when_broad_enough(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
+        db_module = humemdb.db
+        plan_query = db_module._plan_query
 
         plan = plan_query(
             (
@@ -1476,8 +1518,8 @@ class TestPlanning(unittest.TestCase):
         self.assertEqual(plan.route, "duckdb")
 
     def test_windowed_sql_read_prefers_duckdb_by_default(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
+        db_module = humemdb.db
+        plan_query = db_module._plan_query
 
         plan = plan_query(
             (
@@ -1495,13 +1537,12 @@ class TestPlanning(unittest.TestCase):
         self.assertEqual(plan.workload.preferred_route, "duckdb")
 
     def test_exists_filtered_sql_read_prefers_duckdb_with_matching_rule(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        sql_module = importlib.import_module("humemdb.sql")
-        classify_workload = getattr(db_module, "_classify_workload")
-        threshold_type = getattr(db_module, "_OlapRoutingThresholds")
-        rule_type = getattr(db_module, "_OlapRoutingRule")
+        db_module = humemdb.db
+        classify_workload = db_module._classify_workload
+        threshold_type = db_module._OlapRoutingThresholds
+        rule_type = db_module._OlapRoutingRule
 
-        sql_plan = sql_module.translate_sql_plan(
+        sql_plan = translate_sql_plan(
             (
                 "SELECT topic, token_count FROM memory_chunks m "
                 "WHERE EXISTS ("
@@ -1533,13 +1574,12 @@ class TestPlanning(unittest.TestCase):
         self.assertEqual(workload.preferred_route, "duckdb")
 
     def test_distinct_join_sql_read_prefers_duckdb_with_matching_rule(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        sql_module = importlib.import_module("humemdb.sql")
-        classify_workload = getattr(db_module, "_classify_workload")
-        threshold_type = getattr(db_module, "_OlapRoutingThresholds")
-        rule_type = getattr(db_module, "_OlapRoutingRule")
+        db_module = humemdb.db
+        classify_workload = db_module._classify_workload
+        threshold_type = db_module._OlapRoutingThresholds
+        rule_type = db_module._OlapRoutingRule
 
-        sql_plan = sql_module.translate_sql_plan(
+        sql_plan = translate_sql_plan(
             (
                 "SELECT DISTINCT users.region, documents.language "
                 "FROM documents "
@@ -1571,8 +1611,8 @@ class TestPlanning(unittest.TestCase):
         self.assertEqual(workload.preferred_route, "duckdb")
 
     def test_read_only_cypher_stays_sqlite_by_default(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
+        db_module = humemdb.db
+        plan_query = db_module._plan_query
 
         plan = plan_query(
             "MATCH (u:User) RETURN u.name LIMIT 5",
@@ -1585,8 +1625,8 @@ class TestPlanning(unittest.TestCase):
         self.assertIn("not broad enough", plan.workload.reason)
 
     def test_query_plan_classifies_cypher_create_as_graph_write(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
+        db_module = humemdb.db
+        plan_query = db_module._plan_query
 
         plan = plan_query(
             "CREATE (u:User {name: 'Alice'})",
@@ -1601,8 +1641,8 @@ class TestPlanning(unittest.TestCase):
     def test_query_plan_classifies_two_node_match_create_as_graph_write(
         self,
     ) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
+        db_module = humemdb.db
+        plan_query = db_module._plan_query
 
         plan = plan_query(
             "MATCH (x:Begin), (y:End) CREATE (x)-[:TYPE]->(y)",
@@ -1619,20 +1659,18 @@ class TestPlanning(unittest.TestCase):
         )
 
     def test_duckdb_rejects_cypher_writes_before_execution(self) -> None:
-        HumemDB = humemdb_class()
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
+        db_module = humemdb.db
+        plan_query = db_module._plan_query
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sqlite_path = Path(tmpdir) / "humem.sqlite3"
-            duckdb_path = Path(tmpdir) / "humem.duckdb"
+            base_path = Path(tmpdir) / "humem"
 
             with mock.patch.object(
                 db_module,
-                "execute_cypher",
-                wraps=db_module.execute_cypher,
+                "_execute_cypher",
+                wraps=db_module.__dict__["_execute_cypher"],
             ) as execute_cypher:
-                with HumemDB(str(sqlite_path), str(duckdb_path)) as db:
+                with HumemDB(base_path) as db:
                     plan = plan_query(
                         "CREATE (u:User {name: 'Alice'})",
                         route="duckdb",
@@ -1642,14 +1680,14 @@ class TestPlanning(unittest.TestCase):
                         ValueError,
                         "does not allow direct Cypher writes to DuckDB",
                     ):
-                        getattr(db, "_execute_cypher_query_plan")(plan)
+                        db._execute_cypher_query_plan(plan)
 
                 self.assertEqual(execute_cypher.call_count, 0)
 
     def test_query_plan_can_load_sql_olap_thresholds_from_report_env(self) -> None:
-        db_module = importlib.import_module("humemdb.db")
-        plan_query = getattr(db_module, "_plan_query")
-        load_thresholds = getattr(db_module, "_load_sql_olap_thresholds_from_path")
+        db_module = humemdb.db
+        plan_query = db_module._plan_query
+        load_thresholds = db_module._load_sql_olap_thresholds_from_path
         load_thresholds.cache_clear()
 
         report_payload = {

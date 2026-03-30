@@ -197,7 +197,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
 
-        with HumemDB.open(root / "graph") as db:
+        with HumemDB(root / "graph") as db:
             with db.transaction():
                 populate_nodes(db)
                 report("created graph nodes")

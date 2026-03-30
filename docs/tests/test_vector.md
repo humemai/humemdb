@@ -30,7 +30,7 @@ It is the place to add tests when the vector contract changes.
 ## Representative themes
 
 ```python
-with HumemDB("humem.sqlite3") as db:
+with HumemDB("humem") as db:
     db.query(
         "CREATE TABLE docs (id INTEGER PRIMARY KEY, title TEXT NOT NULL, topic TEXT NOT NULL, embedding BLOB)",
     )

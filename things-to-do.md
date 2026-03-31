@@ -863,7 +863,7 @@ hardening rather than a separate intermediate phase.
   integer-index metadata instead of rebuilding Python tuple keys, set membership
   checks, and per-query list partitions over the full candidate set.
 - [ ] Precompute and cache per-metric snapshot membership so the runtime can answer
-  "hot vs cold vs pending" from dense integer lookups or masks rather than from
+  snapshot/delta/tombstone state from dense integer lookups or masks rather than from
   tuple reconstruction against `item_ids.tolist()` on every search.
 - [ ] Keep the first search-speed optimization pass inside the current Python/NumPy
   runtime before introducing new extension-tooling complexity: prefer array-native
@@ -877,13 +877,17 @@ hardening rather than a separate intermediate phase.
   remap after the fact.
 - [ ] Keep merge/rerank simple and low priority unless future measurements say
   otherwise: the current attribution numbers say merge work is already effectively
-  free relative to candidate resolution and tier orchestration.
-- [ ] Re-benchmark direct, SQL, and Cypher tiered search after each runtime-shape
+  free relative to candidate resolution and search orchestration.
+- [ ] Re-benchmark direct, SQL, and Cypher search independently after each runtime-shape
   change, and make the optimization pass evidence-driven rather than assumption-
   driven.
 - [ ] Add explicit benchmark guardrails for search orchestration share so future
   changes can catch regressions in Python-side latency instead of only validating
   total wall-clock time.
+- [ ] Keep `vector_surface_runtime_attribution.py` explicit about per-surface isolation:
+  each of direct, SQL, and Cypher should build its own snapshot and run its own search
+  in an isolated temporary database so latency attribution stays comparable and does
+  not leak work across surfaces.
 - [ ] Revisit the SQLite-to-NumPy vector load and exact-index materialization path if
   it is still the active bottleneck after the indexed vector direction is settled, but
   keep the current simple exact loader unless measured evidence justifies lower-level
@@ -901,11 +905,18 @@ Current Phase 14 progress:
 
 - vector-runtime release hardening now explicitly includes the former `Phase 13.5`
   Python-overhead cleanup instead of treating it as a separate pre-release phase
+- `vector_surface_runtime_attribution.py` now emits richer runtime-attribution fields,
+  including `native_vector_ms`, `native_share_pct`, and narrower candidate-resolution
+  stages such as candidate-query execution and candidate-key remapping
 - the current real-data snapshot build path is mostly native/backend work already,
   so it is not the urgent optimization target for `v0.1.0`
 - the larger runtime-attribution runs now show direct snapshot-plus-rerank search as overwhelmingly
   Python/orchestration-heavy, and SQL/Cypher vector search still spend a majority or
   near-majority of total latency outside the raw backend search calls
+- the current `100k` MSMARCO ready-snapshot smoke with `ann_min_vectors=10000` makes
+  that imbalance explicit: native vector work is only about `7.7` to `8.0 ms` per
+  query, while direct search still spends about `98 ms` outside the wrapped LanceDB
+  and NumPy calls and SQL/Cypher spend roughly `336` to `400 ms` there
 - the current search path still does too much Python object churn around candidate-key
   remapping, snapshot membership checks, and repeated full-candidate bookkeeping
 - the next runtime win should therefore come from better search-ready identity flow,
@@ -1003,7 +1014,7 @@ pre-`v0.1.0` default scope.
 - [ ] Keep any future `db.ask(...)` scope narrow at first: do not expose low-level
   routing or planner plumbing, and benchmark NL latency and planner quality
   separately from raw `db.query(...)` execution.
-- [ ] Revisit whether the current `100k` hot/cold vector threshold is still the
+- [ ] Revisit whether the current `100k` ANN snapshot threshold is still the
   right cut once later large-scale real-data runs give enough post-release evidence.
 - [ ] Revisit workload-driven index recommendation or optional auto-indexing later if
   repeated user query patterns are stable enough to justify it; keep it evidence-based

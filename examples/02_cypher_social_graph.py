@@ -14,6 +14,8 @@ DOCUMENT_COUNT = 20_000
 
 
 def _make_timer() -> callable:
+    """Build a small step timer for the graph example."""
+
     start = perf_counter()
     last = start
 
@@ -29,6 +31,8 @@ def _make_timer() -> callable:
 
 
 def populate_nodes(db) -> None:
+    """Create the example graph's team, topic, user, and document nodes."""
+
     for index in range(TEAM_COUNT):
         db.query(
             "CREATE (:Team {slug: $slug, region: $region, focus: $focus})",
@@ -89,6 +93,8 @@ def populate_nodes(db) -> None:
 
 
 def populate_edges(db) -> None:
+    """Create the example graph relationships between existing nodes."""
+
     for index in range(USER_COUNT):
         user_name = f"User {index:03d}"
         teammate = f"User {(index + 1) % USER_COUNT:03d}"
@@ -164,6 +170,8 @@ def populate_edges(db) -> None:
 
 
 def mutate_graph(db) -> None:
+    """Apply a few writes so later reads observe non-trivial graph state."""
+
     db.query(
         "MATCH (u:User {name: 'User 000'}) SET u.city = $city, u.nickname = $nickname",
         params={"city": "Berlin-hub", "nickname": "anchor-user"},
@@ -193,6 +201,8 @@ def mutate_graph(db) -> None:
 
 
 def main() -> None:
+    """Build the graph example and run a handful of Cypher reads."""
+
     report = _make_timer()
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)

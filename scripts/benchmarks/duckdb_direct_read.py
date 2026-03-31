@@ -244,6 +244,8 @@ QUERY_WORKLOADS: Final[dict[str, QueryWorkload]] = {
 
 
 def _parse_args() -> argparse.Namespace:
+    """Parse CLI arguments for the DuckDB direct-read benchmark."""
+
     parser = argparse.ArgumentParser(
         description=(
             "Benchmark DuckDB direct reads over the SQLite source of truth using "
@@ -296,10 +298,14 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _document_count(rows: int, users: int) -> int:
+    """Derive the synthetic document count for one benchmark scale."""
+
     return max(rows // 20, users)
 
 
 def _memory_chunk_count(rows: int, documents: int) -> int:
+    """Derive the synthetic memory-chunk count for one benchmark scale."""
+
     return max(rows // 10, documents)
 
 
@@ -311,6 +317,8 @@ def _seed_rows(
     users: int,
     tags: int,
 ) -> dict[str, float | int]:
+    """Seed all relational benchmark tables and return dataset metadata."""
+
     documents = _document_count(rows, users)
     memory_chunks = _memory_chunk_count(rows, documents)
 
@@ -348,6 +356,8 @@ def _seed_rows(
 
 
 def _seed_users(db: HumemDB, users: int) -> None:
+    """Seed the synthetic users table."""
+
     db.query(
         (
             "CREATE TABLE users ("
@@ -380,6 +390,8 @@ def _seed_users(db: HumemDB, users: int) -> None:
 
 
 def _seed_events(db: HumemDB, *, rows: int, batch_size: int, users: int) -> None:
+    """Seed the synthetic events table."""
+
     db.query(
         (
             "CREATE TABLE events ("
@@ -425,6 +437,8 @@ def _seed_documents(
     batch_size: int,
     users: int,
 ) -> None:
+    """Seed the synthetic documents table."""
+
     db.query(
         (
             "CREATE TABLE documents ("
@@ -465,6 +479,8 @@ def _seed_documents(
 
 
 def _seed_tags(db: HumemDB, *, tags: int) -> None:
+    """Seed the synthetic tags dimension table."""
+
     db.query(
         "CREATE TABLE tags (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
     )
@@ -482,6 +498,8 @@ def _seed_document_tags(
     batch_size: int,
     tags: int,
 ) -> None:
+    """Seed the many-to-many document_tags table."""
+
     db.query(
         (
             "CREATE TABLE document_tags ("
@@ -527,6 +545,8 @@ def _seed_memory_chunks(
     documents: int,
     users: int,
 ) -> None:
+    """Seed the synthetic memory_chunks table."""
+
     db.query(
         (
             "CREATE TABLE memory_chunks ("
@@ -571,6 +591,8 @@ def _seed_memory_chunks(
 
 
 def _create_indexes(db: HumemDB) -> None:
+    """Create the SQLite indexes used by the benchmark workloads."""
+
     index_statements = [
         "CREATE INDEX idx_events_user_id ON events (user_id)",
         "CREATE INDEX idx_events_created_day ON events (created_day)",
@@ -590,6 +612,8 @@ def _create_indexes(db: HumemDB) -> None:
 
 
 def _summarize(timings: list[float]) -> TimingSummary:
+    """Summarize one set of benchmark timing samples."""
+
     return TimingSummary(
         mean=statistics.mean(timings),
         stdev=statistics.pstdev(timings),
@@ -605,6 +629,8 @@ def _time_query(
     warmup: int,
     query: str,
 ) -> TimingSummary:
+    """Warm up and time one translated SQL query on the requested route."""
+
     for _ in range(warmup):
         translated = translate_sql(query, target=route)
         if route == "sqlite":
@@ -626,10 +652,14 @@ def _time_query(
 
 
 def _format_seconds(seconds: float) -> str:
+    """Format seconds as a millisecond string for console output."""
+
     return f"{seconds * 1_000:.2f} ms"
 
 
 def _print_summary(label: str, summary: TimingSummary) -> None:
+    """Print one timing summary in the benchmark's text format."""
+
     print(
         f"  {label}: mean={_format_seconds(summary.mean)} "
         f"std={_format_seconds(summary.stdev)} "
@@ -669,6 +699,8 @@ def _sql_feature_dict(query: str) -> dict[str, int | bool | str]:
 
 
 def main() -> None:
+    """Seed the benchmark dataset, run workloads, and emit results."""
+
     args = _parse_args()
     json_results: dict[str, object] = {
         "benchmark": "duckdb_direct_read",

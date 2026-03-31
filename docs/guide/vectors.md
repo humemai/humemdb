@@ -9,11 +9,12 @@ The direct-vector Python API is:
 - `db.insert_vectors(rows)` to append direct vectors and receive assigned ids
 - `db.search_vectors(query, *, top_k=10, metric="cosine", filters=None)` to run the
   direct vector search path
-- `db.inspect_vector_index(metric="cosine")` to inspect the public cold-index state
+- `db.inspect_vector_index(metric="cosine")` to inspect the public snapshot-index
+  state
 - `db.build_vector_index(metric="cosine")` and `db.refresh_vector_index(...)` to build
-  or rebuild the public cold index for one metric
-- `db.drop_vector_index(metric="cosine")` to disable and remove the current cold index
-  for one metric
+  or rebuild the public ANN snapshot for one metric
+- `db.drop_vector_index(metric="cosine")` to disable and remove the current ANN
+  snapshot for one metric
 - `db.await_vector_index_refresh(metric="cosine")` to wait for one pending background
   refresh when you need deterministic lifecycle control
 - `db.set_vector_metadata(rows)` to attach equality-filterable metadata to existing
@@ -39,7 +40,9 @@ Use `db.query(...)` instead when SQL rows or graph nodes define the candidate se
 
 ## Search model
 
-- exact search only on the public path
+- the public path uses an ANN snapshot when one exists, plus exact reranking over the
+  live delta and any snapshot hits
+- exact search remains the fallback when no ANN snapshot exists yet
 - the direct vector path can search the full stored vector set or a metadata-filtered
   subset
 - SQL candidate-filtered vector search means SQL defines the candidate row ids, then the exact

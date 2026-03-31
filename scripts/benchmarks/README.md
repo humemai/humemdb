@@ -517,10 +517,10 @@ Graph findings:
 Purpose:
 
 - Benchmark shipped vector datasets.
-- Hold the operational split steady: NumPy exact for the hot tier and LanceDB `IVF_PQ`
-  for the cold tier.
+- Hold the operational threshold steady: NumPy exact below the ANN snapshot cutoff and
+  LanceDB `IVF_PQ` snapshot builds above it.
 - Measure dataset load cost, LanceDB table/index build cost, indexed query latency,
-  and recall versus NumPy exact where the hot-tier baseline is still enabled.
+  and recall versus NumPy exact where the exact baseline is still enabled.
 - Reuse one SQLite, NumPy, and LanceDB build across multiple `top_k` values when a
   `top_k` grid is requested.
 
@@ -546,14 +546,14 @@ and whichever `--rows` / `--top-k` combination you want to test.
 Current implementation note:
 
 - Full NumPy exact now stops above `100k` rows by default so the benchmark mirrors the
-  fixed hot-tier operational cut.
+  default ANN snapshot threshold.
 - The LanceDB side is intentionally narrowed to `IVF_PQ`; this script is no longer a
   multi-family comparison harness.
 - Exact-enabled runs still stage sampled real vectors into SQLite first, then stream
   them through `DuckDB -> Arrow batches -> LanceDB` before index build.
-- Cold-only runs above the `100k` cut now bypass SQLite and DuckDB, ingesting
+- Snapshot-only runs above the `100k` cutoff now bypass SQLite and DuckDB, ingesting
   selected shard memmaps straight into `Arrow batches -> LanceDB` before index build.
-- That direct cold ingest path materially reduced peak RSS in the `1M`
+- That direct snapshot ingest path materially reduced peak RSS in the `1M`
   `msmarco-10m` profile, from about `9.5 GiB` to about `3.7 GiB`, so the dominant
   memory spike is no longer the export path itself.
 - When `--top-k-grid` is used, the benchmark builds once per dataset and scale, then
@@ -566,7 +566,7 @@ Purpose:
 - Sweep real dataset scales over `top_k` and sampling choices.
 - Persist rolling summaries and per-scenario JSON files while long runs are still in
   progress.
-- Produce a real-data routing baseline for the fixed `100k` hot / `>100k` cold split.
+- Produce a real-data baseline for the fixed `100k` ANN snapshot threshold.
 - Score each scenario against the current IVF_PQ recall admission bar instead of using
   one flat cutoff for every scale.
 - Reuse one real-data build per dataset, scale, and filter before expanding results
@@ -595,13 +595,15 @@ plus the appropriate `--sample-mode`, `--filter-sources`, and output paths.
 
 Current real-data indexed baseline:
 
-- This sweep is no longer trying to discover the routing threshold. The routing policy
-  is fixed at `100k`: hot stays in NumPy exact, cold goes to LanceDB `IVF_PQ`.
+- This sweep is no longer trying to discover the routing threshold. The ANN snapshot
+  policy is fixed at `100k`: below that cut the benchmark keeps the NumPy exact
+  baseline, and above it the benchmark measures LanceDB `IVF_PQ` snapshot builds and
+  search.
 - The current questions are narrower:
-  - what do hot-tier exact latency and memory look like at the `100k` cut;
-  - what do cold-tier `IVF_PQ` build/query costs look like above that cut; and
-  - how much operational pressure does LanceDB ingest add as cold history grows.
-- The current cold-only benchmark path uses direct shard-memmap ingest into LanceDB;
+  - what do exact-search latency and memory look like at the `100k` cut;
+  - what do snapshot `IVF_PQ` build/query costs look like above that cut; and
+  - how much operational pressure does LanceDB ingest add as snapshot history grows.
+- The current snapshot-only benchmark path uses direct shard-memmap ingest into LanceDB;
   that change removed the earlier SQLite -> DuckDB -> Arrow blow-up seen in the `1M`
   `msmarco-10m` profile.
 - The sweep now reports pass/fail against these recall targets:
@@ -614,10 +616,11 @@ Current real-data indexed baseline:
 ### Tuned References
 
 This table keeps the current measured `100K` and `1M` references together and leaves
-explicit placeholders for the next larger `10M` and `25M` runs. At `100K`, NumPy
-exact remains enabled at the cut; at `1M`, recall now comes from packaged dataset
-ground-truth filtered back down to the sampled subset, so effective query counts can
-land below the requested `100` when the subset contains fewer GT-covered queries.
+explicit placeholders for the next larger `10M` and `25M` runs. At `100K`, the exact
+NumPy baseline remains enabled at the threshold; at `1M`, recall now comes from
+packaged dataset ground-truth filtered back down to the sampled subset, so effective
+query counts can land below the requested `100` when the subset contains fewer
+GT-covered queries.
 
 | Scale | Dataset | IVF_PQ settings | LanceDB k=10 recall / ms | LanceDB k=50 recall / ms | NumPy k=10 ms | NumPy k=50 ms | SQLite seed | SQLite->NumPy load | NumPy build | Peak RSS | Lance export | Lance index build | Status | Notes |
 | ----- | ------- | --------------- | ------------------------: | ------------------------: | ------------: | ------------: | ----------: | -----------------: | ----------: | -------: | -----------: | ----------------: | ------ | ----- |
@@ -629,38 +632,53 @@ land below the requested `100` when the subset contains fewer GT-covered queries
 | `10M` | `stackoverflow-xlarge` | `partitions=64`, `sub_vectors=128`, `nprobes=32`, `refine_factor=4` | `1.0000` / `25.42` | `0.9985` / `30.25` | `n/a` | `n/a` | `n/a` | `n/a` | `n/a` | `4.16 GiB` | `22.35 s` | `181.33 s` | measured | `ground_truth=packaged_gt_subset_filtered`; `queries=100/100 requested`; `batch_count=201`; files: `real_ivf_pq_refresh_10m/stackoverflow-xlarge_rows10000000_topk10_50_refresh.*` |
 | `25M` | `stackoverflow-xlarge` | `partitions=64`, `sub_vectors=128`, `nprobes=32`, `refine_factor=4` | `0.9940` / `58.36` | `0.9959` / `63.27` | `n/a` | `n/a` | `n/a` | `n/a` | `n/a` | `6.39 GiB` | `40.73 s` | `386.58 s` | measured | `ground_truth=packaged_gt_subset_filtered`; `queries=100/100 requested`; `batch_count=252`; files: `real_ivf_pq_refresh_25m/stackoverflow-xlarge_rows25000000_topk10_50_refresh.*` |
 
-## [`vector_runtime_attribution.py`](./vector_runtime_attribution.py)
+## [`vector_surface_runtime_attribution.py`](./vector_surface_runtime_attribution.py)
 
 Purpose:
 
-- Measure the live HumemDB vector runtime rather than the real-data build pipeline.
-- Break out hot exact search, cold LanceDB search, merge/rerank, candidate-resolution,
-  build, and refresh-scheduling time through the real runtime seams.
-- Compare direct, SQL, and Cypher surfaces over the same indexed runtime shape.
+- Measure the live HumemDB ANN snapshot plus exact-delta runtime rather than the
+  real-data build pipeline.
+- Break out snapshot build, snapshot load, candidate resolution, ANN search, exact
+  rerank, and surface-dispatch time through the real runtime seams.
+- Compare direct, SQL, and Cypher surfaces over the same snapshot-runtime shape.
 - Capture both process RSS deltas and Python-only heap peaks so orchestration overhead
   can be separated from backend-heavy work more clearly.
 
 Representative command:
 
 ```bash
-HUMEMDB_THREADS=8 python scripts/benchmarks/vector_runtime_attribution.py \
-  --hot-max-rows 256 \
-  --direct-tiered-rows 65000 \
-  --sql-filler-count 50000 \
-  --graph-filler-count 50000 \
+HUMEMDB_THREADS=8 python scripts/benchmarks/vector_surface_runtime_attribution.py \
+  --dataset msmarco-10m \
+  --rows 100000 \
+  --queries 100 \
+  --top-k 10 \
+  --ann-min-vectors 100000 \
   --warmup 1 \
   --repetitions 3
 ```
 
 What it measures:
 
-- direct exact-only search below the hot-tier cut
-- direct cold-index build from an exact-only tiered state
-- direct search with a ready hot+cold runtime
-- direct search with pending spill rows that still have to stay searchable before the
-  next cold refresh
-- SQL table-owned vector search over the ready tiered runtime
-- Cypher graph-owned vector search over the ready tiered runtime
+- direct ANN snapshot build
+- SQL ANN snapshot build
+- Cypher ANN snapshot build
+- direct search over a ready snapshot plus exact-delta rerank runtime
+- SQL search over a ready snapshot plus exact-delta rerank runtime
+- Cypher search over a ready snapshot plus exact-delta rerank runtime
+
+Current stage names:
+
+- `build_snapshot_ms`: synchronous snapshot build path
+- `snapshot_materialization_ms`: full-corpus matrix materialization used for snapshot
+  builds
+- `snapshot_index_load_ms`: live or persisted snapshot acquisition before a search
+- `snapshot_persisted_load_ms`: persisted snapshot reopen path
+- `vector_dispatch_ms`: top-level vector query dispatch inside the runtime
+- `candidate_resolution_ms`: SQL or Cypher candidate-query resolution before vector
+  ranking
+- `snapshot_rerank_path_ms`: end-to-end snapshot search plus exact rerank path
+- `snapshot_ann_search_ms`: LanceDB ANN search call over the snapshot
+- `numpy_exact_search_ms`: exact NumPy rerank or fallback search call
 
 Important note:
 
@@ -673,28 +691,19 @@ Current attribution takeaway:
 
 - The fresh tuned `1M` MSMARCO rerun still says the expensive part of offline
   real-data indexing is the LanceDB build itself, while the expensive part of
-  online vector search is mostly the surrounding Python-side orchestration and
-  candidate-resolution work rather than rerank or raw exact-search math.
-- Treat the percentages below as stage-attribution proxies, not as profiler-precise
-  CPU accounting: "Python / orchestration" means time outside the native heavy step,
-  and "backend / native" means the LanceDB or exact-search call that the benchmark
-  wrapped directly.
-
-Current split snapshot from the latest runs on this development machine:
-
-| Pipeline | Scale / scenario | Measured time | Python / orchestration | Backend / native | Notes |
-| -------- | ---------------- | ------------: | ---------------------: | ---------------: | ----- |
-| Index build | real MSMARCO `1M` tuned IVF_PQ (`vector_search_real.py`) | `84.99 s` | `5.0%` | `95.0%` | Split computed from `cold_tier_export = 4258.79 ms` plus `lancedb_table_create = 3.16 ms` versus `lancedb_index_build = 80724.02 ms`; the fresh tuned rerun still shows build cost overwhelmingly dominated by LanceDB index construction. |
-| Vector search | direct tiered ready at `65k` (`vector_runtime_attribution.py`) | `105.74 ms` | `94.6%` | `5.4%` | `orchestration_ms = 100.08 ms`; backend search was `lancedb_search_ms + numpy_exact_search_ms = 5.66 ms`. |
-| Vector search | direct tiered pending spill at `65k` (`vector_runtime_attribution.py`) | `110.19 ms` | `97.2%` | `2.8%` | Pending spill rows now make the exact fallback visible, but the fresh run still shows orchestration dominating end-to-end time. |
-| Vector search | SQL tiered ready at `50k` fillers (`vector_runtime_attribution.py`) | `376.79 ms` | `60.4%` | `39.6%` | Candidate resolution remained the heaviest Python-side slice at `96.07 ms`, while backend search (`lancedb_search_ms + numpy_exact_search_ms`) totaled `149.12 ms`. |
-| Vector search | Cypher tiered ready at `50k` fillers (`vector_runtime_attribution.py`) | `436.77 ms` | `64.4%` | `35.6%` | Cypher candidate resolution remained heavier than SQL at `156.27 ms`, so orchestration still takes the larger share of total latency. |
+  online vector search is mostly the surrounding Python-side orchestration,
+  candidate-resolution, and snapshot/rerank coordination work rather than the raw
+  native ANN or exact-search calls by themselves.
+- Treat the percentages this benchmark produces as stage-attribution proxies, not as
+  profiler-precise CPU accounting: `orchestration_ms` means time outside the wrapped
+  native-heavy search calls, while the backend side is mostly `snapshot_ann_search_ms`
+  plus `numpy_exact_search_ms`.
 
 Practical interpretation:
 
-- To reduce offline cold-index refresh cost, optimize or amortize LanceDB index build;
+- To reduce offline snapshot build and refresh cost, optimize or amortize LanceDB index build;
   the fresh tuned `1M` rerun still spends about `95%` of build time there.
-- To reduce online direct-vector latency, optimize the tier split and surrounding
+- To reduce online direct-vector latency, optimize the ANN snapshot threshold and surrounding
   runtime bookkeeping first.
 - To reduce online SQL/Cypher vector latency, optimize candidate-set generation and
   candidate-resolution overhead before focusing on rerank, because merge/rerank is

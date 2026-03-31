@@ -13,7 +13,13 @@ from .generated.CypherParser import CypherParser
 
 @dataclass(frozen=True, slots=True)
 class CypherSyntaxError:
-    """One syntax error reported by the generated Cypher frontend."""
+    """One syntax error reported by the generated Cypher frontend.
+
+    Attributes:
+        line: 1-based line number where the parser reported the error.
+        column: 0-based column offset where the parser reported the error.
+        message: Human-readable parser error text.
+    """
 
     line: int
     column: int
@@ -22,7 +28,14 @@ class CypherSyntaxError:
 
 @dataclass(frozen=True, slots=True)
 class CypherParseResult:
-    """Raw parse result from the generated Cypher frontend."""
+    """Raw parse result from the generated Cypher frontend.
+
+    Attributes:
+        source_text: Original Cypher text passed to the parser.
+        tree: Raw ANTLR parse tree.
+        token_stream: Token stream produced by the generated lexer.
+        syntax_errors: Collected syntax errors emitted during parsing.
+    """
 
     source_text: str
     tree: object
@@ -40,6 +53,8 @@ class _CollectingErrorListener(ErrorListener):
     """Collect ANTLR syntax errors into a stable HumemDB-facing structure."""
 
     def __init__(self) -> None:
+        """Initialize the mutable error list used during parsing."""
+
         self.errors: list[CypherSyntaxError] = []
 
     def syntaxError(
@@ -51,6 +66,8 @@ class _CollectingErrorListener(ErrorListener):
         msg: str,
         _exc,
     ) -> None:
+        """Record one ANTLR syntax error in HumemDB's error format."""
+
         self.errors.append(
             CypherSyntaxError(
                 line=line,

@@ -4035,6 +4035,8 @@ class _BooleanPredicateParser:
     """Small parser for parenthesized boolean predicate expressions."""
 
     def __init__(self, tokens: list[str]) -> None:
+        """Initialize the parser with the tokenized WHERE expression."""
+
         self._tokens = tokens
         self._index = 0
 
@@ -4060,6 +4062,8 @@ class _BooleanPredicateParser:
         return groups
 
     def _parse_or_expression(self) -> list[list[str]]:
+        """Parse OR branches and concatenate their AND groups."""
+
         groups = self._parse_and_expression()
         while self._matches_keyword("OR"):
             self._index += 1
@@ -4067,6 +4071,8 @@ class _BooleanPredicateParser:
         return groups
 
     def _parse_and_expression(self) -> list[list[str]]:
+        """Parse AND branches and expand them into DNF groups."""
+
         groups = self._parse_primary_expression()
         while self._matches_keyword("AND"):
             self._index += 1
@@ -4079,6 +4085,8 @@ class _BooleanPredicateParser:
         return groups
 
     def _parse_primary_expression(self) -> list[list[str]]:
+        """Parse one parenthesized subexpression or comparison clause."""
+
         token = self._peek()
         if token is None:
             raise ValueError("HumemCypher v0 WHERE clauses cannot end abruptly.")
@@ -4109,11 +4117,15 @@ class _BooleanPredicateParser:
         return [[" ".join(comparison_tokens)]]
 
     def _peek(self) -> str | None:
+        """Return the current token without consuming it."""
+
         if not self.has_more_tokens():
             return None
         return self._tokens[self._index]
 
     def _matches_keyword(self, keyword: str) -> bool:
+        """Return whether the current token matches the given keyword."""
+
         token = self._peek()
         return token is not None and token.upper() == keyword
 

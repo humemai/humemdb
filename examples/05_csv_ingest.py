@@ -15,6 +15,8 @@ EDGE_FANOUT = 2
 
 
 def _make_timer() -> callable:
+    """Build a small step timer for the CSV ingest example."""
+
     start = perf_counter()
     last = start
 
@@ -34,6 +36,8 @@ def _write_csv(
     header: tuple[str, ...],
     rows: list[tuple[object, ...]],
 ) -> None:
+    """Write one CSV fixture file with a header row."""
+
     with path.open("w", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(header)
@@ -41,6 +45,8 @@ def _write_csv(
 
 
 def build_account_rows() -> list[tuple[object, ...]]:
+    """Generate account rows for table-import demos."""
+
     segments = ("enterprise", "startup", "public-sector", "research")
     regions = ("emea", "amer", "apac")
     rows: list[tuple[object, ...]] = []
@@ -58,6 +64,8 @@ def build_account_rows() -> list[tuple[object, ...]]:
 
 
 def build_event_rows() -> list[tuple[object, ...]]:
+    """Generate account event rows for relational CSV import."""
+
     event_types = ("signup", "upgrade", "renewal", "ticket")
     rows: list[tuple[object, ...]] = []
     event_id = 1
@@ -77,6 +85,8 @@ def build_event_rows() -> list[tuple[object, ...]]:
 
 
 def build_service_rows() -> list[tuple[object, ...]]:
+    """Generate service nodes for graph CSV import."""
+
     tiers = ("edge", "core", "stateful")
     regions = ("emea", "amer", "apac")
     rows: list[tuple[object, ...]] = []
@@ -94,6 +104,8 @@ def build_service_rows() -> list[tuple[object, ...]]:
 
 
 def build_dependency_rows() -> list[tuple[object, ...]]:
+    """Generate service dependency edges for graph CSV import."""
+
     rows: list[tuple[object, ...]] = []
     for service_id in range(1, SERVICE_COUNT + 1):
         for offset in range(1, EDGE_FANOUT + 1):
@@ -109,6 +121,8 @@ def build_dependency_rows() -> list[tuple[object, ...]]:
 
 
 def main() -> None:
+    """Write CSV fixtures, import them, and run example relational and graph reads."""
+
     report = _make_timer()
 
     account_rows = build_account_rows()

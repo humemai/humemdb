@@ -15,7 +15,7 @@ from typing import Any, Callable, Iterator
 HumemDB = import_module("humemdb").HumemDB
 _cypher_module = import_module("humemdb.cypher")
 _encode_property_value = _cypher_module._encode_property_value
-ensure_graph_schema = _cypher_module.ensure_graph_schema
+ensure_graph_schema = _cypher_module._ensure_graph_schema
 
 TableBatch = list[tuple[int, str, str, str]]
 NodeBatch = list[tuple[int, str, int, bool]]
@@ -36,6 +36,8 @@ GRAPH_METHODS = (
 
 @dataclass(frozen=True, slots=True)
 class BenchmarkConfig:
+    """Input parameters for the CSV ingest benchmark."""
+
     table_rows: int
     node_rows: int
     edge_fanout: int
@@ -48,12 +50,16 @@ class BenchmarkConfig:
 
 @dataclass(frozen=True, slots=True)
 class TimingSummary:
+    """Summary statistics for one timing sample set."""
+
     mean_ms: float
     stdev_ms: float
     minimum_ms: float
     maximum_ms: float
 
     def to_dict(self) -> dict[str, float]:
+        """Return a JSON-serializable representation of the timing summary."""
+
         return {
             "mean_ms": self.mean_ms,
             "stdev_ms": self.stdev_ms,
@@ -64,6 +70,8 @@ class TimingSummary:
 
 @dataclass(frozen=True, slots=True)
 class BenchmarkReport:
+    """Structured output for one full CSV ingest benchmark run."""
+
     config: BenchmarkConfig
     edge_rows: int
     stage_timings_ms: dict[str, dict[str, TimingSummary]]
@@ -71,6 +79,8 @@ class BenchmarkReport:
     imported_counts: dict[str, int]
 
     def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-serializable view of the benchmark report."""
+
         return {
             "config": {
                 "table_rows": self.config.table_rows,
@@ -102,6 +112,8 @@ class BenchmarkReport:
 
 
 def _parse_args() -> argparse.Namespace:
+    """Parse CLI arguments for the CSV ingest benchmark."""
+
     parser = argparse.ArgumentParser(
         description=(
             "Benchmark CSV-backed import_table(...), import_nodes(...), and "
@@ -140,6 +152,8 @@ def _parse_method_list(
     allowed: tuple[str, ...],
     flag: str,
 ) -> tuple[str, ...]:
+    """Parse and validate one comma-separated method list."""
+
     methods = tuple(part.strip() for part in raw.split(",") if part.strip())
     if not methods:
         raise ValueError(f"{flag} requires at least one method.")
@@ -154,6 +168,8 @@ def _parse_method_list(
 
 
 def _summarize(samples_seconds: list[float]) -> TimingSummary:
+    """Summarize one set of ingest timing samples."""
+
     samples_ms = [sample * 1_000.0 for sample in samples_seconds]
     return TimingSummary(
         mean_ms=statistics.mean(samples_ms),
@@ -164,6 +180,8 @@ def _summarize(samples_seconds: list[float]) -> TimingSummary:
 
 
 def _write_table_csv(path: Path, *, rows: int) -> None:
+    """Write the relational table fixture CSV."""
+
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(["id", "name", "city", "active"])
@@ -179,6 +197,8 @@ def _write_table_csv(path: Path, *, rows: int) -> None:
 
 
 def _write_nodes_csv(path: Path, *, rows: int) -> None:
+    """Write the graph node fixture CSV."""
+
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(["id", "name", "age", "active"])
@@ -194,6 +214,8 @@ def _write_nodes_csv(path: Path, *, rows: int) -> None:
 
 
 def _write_edges_csv(path: Path, *, rows: int, fanout: int) -> int:
+    """Write the graph edge fixture CSV and return its row count."""
+
     edge_rows = 0
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
@@ -218,6 +240,8 @@ def _prepare_fixture_csvs(
     *,
     config: BenchmarkConfig,
 ) -> tuple[Path, Path, Path, int]:
+    """Create the benchmark CSV fixtures and return their paths."""
+
     table_csv = fixture_dir / "users.csv"
     nodes_csv = fixture_dir / "people.csv"
     edges_csv = fixture_dir / "knows.csv"
@@ -232,6 +256,8 @@ def _prepare_fixture_csvs(
 
 
 def _iter_table_batches(path: Path, *, chunk_size: int) -> Iterator[TableBatch]:
+    """Yield relational fixture rows in chunked batches."""
+
     batch: TableBatch = []
     with path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
@@ -252,6 +278,8 @@ def _iter_table_batches(path: Path, *, chunk_size: int) -> Iterator[TableBatch]:
 
 
 def _iter_node_batches(path: Path, *, chunk_size: int) -> Iterator[NodeBatch]:
+    """Yield node fixture rows in chunked batches."""
+
     batch: NodeBatch = []
     with path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
@@ -272,6 +300,8 @@ def _iter_node_batches(path: Path, *, chunk_size: int) -> Iterator[NodeBatch]:
 
 
 def _iter_edge_batches(path: Path, *, chunk_size: int) -> Iterator[EdgeBatch]:
+    """Yield edge fixture rows in chunked batches."""
+
     batch: EdgeBatch = []
     with path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
@@ -292,6 +322,8 @@ def _iter_edge_batches(path: Path, *, chunk_size: int) -> Iterator[EdgeBatch]:
 
 
 def _create_users_table(db: Any) -> None:
+    """Create the destination relational table for table-ingest tests."""
+
     db.query(
         (
             "CREATE TABLE users ("
@@ -305,6 +337,8 @@ def _create_users_table(db: Any) -> None:
 
 
 def _create_users_staging_table(db: Any) -> None:
+    """Create the staging table used by the normalize-after-import path."""
+
     db.query(
         (
             "CREATE TABLE users_staging ("
@@ -323,6 +357,8 @@ def _run_table_import_api(
     *,
     chunk_size: int,
 ) -> int:
+    """Load table rows through the public import_table API."""
+
     return db.import_table("users", table_csv, chunk_size=chunk_size)
 
 
@@ -332,6 +368,8 @@ def _run_table_staging_normalize(
     *,
     chunk_size: int,
 ) -> int:
+    """Load table rows through staging import followed by SQL normalization."""
+
     _create_users_staging_table(db)
     imported_rows = db.import_table(
         "users_staging",
@@ -361,6 +399,8 @@ def _run_table_public_executemany(
     *,
     chunk_size: int,
 ) -> int:
+    """Load table rows through the public executemany surface."""
+
     imported_rows = 0
     with db.transaction():
         for batch in _iter_table_batches(table_csv, chunk_size=chunk_size):
@@ -390,6 +430,8 @@ def _run_table_internal_sqlite(
     *,
     chunk_size: int,
 ) -> int:
+    """Load table rows by writing directly to the internal SQLite engine."""
+
     sqlite = db._sqlite
     imported_rows = 0
     sqlite.begin()
@@ -417,6 +459,8 @@ def _run_node_import_api(
     *,
     chunk_size: int,
 ) -> int:
+    """Load node rows through the public import_nodes API."""
+
     return db.import_nodes(
         "Person",
         nodes_csv,
@@ -432,6 +476,8 @@ def _run_node_public_cypher(
     *,
     chunk_size: int,
 ) -> int:
+    """Load node rows through repeated public Cypher CREATE statements."""
+
     imported_rows = 0
     with db.transaction():
         for batch in _iter_node_batches(nodes_csv, chunk_size=chunk_size):
@@ -462,6 +508,8 @@ def _run_node_internal_sqlite(
     *,
     chunk_size: int,
 ) -> int:
+    """Load node rows by writing directly to the internal graph tables."""
+
     sqlite = db._sqlite
     ensure_graph_schema(sqlite)
     imported_rows = 0
@@ -507,6 +555,8 @@ def _run_edge_import_api(
     *,
     chunk_size: int,
 ) -> int:
+    """Load edge rows through the public import_edges API."""
+
     return db.import_edges(
         "KNOWS",
         edges_csv,
@@ -523,6 +573,8 @@ def _run_edge_public_cypher(
     *,
     chunk_size: int,
 ) -> int:
+    """Load edge rows through repeated public Cypher MATCH/CREATE statements."""
+
     imported_rows = 0
     with db.transaction():
         for batch in _iter_edge_batches(edges_csv, chunk_size=chunk_size):
@@ -553,6 +605,8 @@ def _run_edge_internal_sqlite(
     *,
     chunk_size: int,
 ) -> int:
+    """Load edge rows by writing directly to the internal graph tables."""
+
     sqlite = db._sqlite
     ensure_graph_schema(sqlite)
     next_edge_id = 1
@@ -595,6 +649,8 @@ def _run_edge_internal_sqlite(
 def _summarize_stage_samples(
     stage_samples: dict[str, dict[str, list[float]]],
 ) -> dict[str, dict[str, TimingSummary]]:
+    """Convert raw timing samples into nested timing summaries."""
+
     return {
         stage: {
             method: _summarize(samples)
@@ -605,6 +661,8 @@ def _summarize_stage_samples(
 
 
 def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
+    """Run the CSV ingest benchmark across the requested ingest methods."""
+
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
         fixture_dir = root / "fixtures"
@@ -784,6 +842,8 @@ def run_benchmark(config: BenchmarkConfig) -> BenchmarkReport:
 
 
 def _print_report(report: BenchmarkReport) -> None:
+    """Print the benchmark report in a compact human-readable format."""
+
     print("CSV ingest benchmark configuration")
     print(f"  table_rows: {report.config.table_rows}")
     print(f"  node_rows: {report.config.node_rows}")
@@ -817,6 +877,8 @@ def _print_report(report: BenchmarkReport) -> None:
 
 
 def main() -> None:
+    """Parse CLI arguments, run the benchmark, and emit the selected output."""
+
     args = _parse_args()
     table_methods = _parse_method_list(
         args.table_methods,

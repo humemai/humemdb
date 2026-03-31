@@ -7,6 +7,8 @@ from typing import Any
 
 
 def _parse_args() -> argparse.Namespace:
+    """Parse CLI arguments for the routing threshold summarizer."""
+
     parser = argparse.ArgumentParser(
         description=(
             "Summarize routing crossover points from JSON outputs produced by the "
@@ -32,10 +34,14 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _winner(sqlite_mean: float, duckdb_mean: float) -> str:
+    """Return the faster engine label for one pair of mean latencies."""
+
     return "sqlite" if sqlite_mean <= duckdb_mean else "duckdb"
 
 
 def _sql_workload_report(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Summarize SQL sweep runs into one workload-centric report."""
+
     first_run_workloads = runs[0]["workloads"]
     report: list[dict[str, Any]] = []
     for workload_name, metadata in first_run_workloads.items():
@@ -213,6 +219,8 @@ def _sql_rule_sort_key(
 
 
 def _cypher_workload_report(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Summarize Cypher sweep runs into one workload-centric report."""
+
     first_run_workloads = runs[0]["workloads"]
     report: list[dict[str, Any]] = []
     for workload_name, metadata in first_run_workloads.items():
@@ -349,6 +357,8 @@ def _vector_workload_report(
     scenario_summaries: list[dict[str, Any]],
     min_indexed_recall: float | None = None,
 ) -> list[dict[str, Any]]:
+    """Dispatch vector summary generation for real-data or legacy report shapes."""
+
     if not scenario_summaries:
         return []
     if "dataset" in scenario_summaries[0]:
@@ -366,6 +376,8 @@ def _real_vector_workload_report(
     scenario_summaries: list[dict[str, Any]],
     min_indexed_recall: float | None = None,
 ) -> list[dict[str, Any]]:
+    """Summarize real-data vector scenarios into workload crossover reports."""
+
     grouped: dict[tuple[str, str | None, int], list[dict[str, Any]]] = {}
     for scenario in scenario_summaries:
         key = (
@@ -458,6 +470,8 @@ def _legacy_vector_workload_report(
     scenario_summaries: list[dict[str, Any]],
     min_indexed_recall: float | None = None,
 ) -> list[dict[str, Any]]:
+    """Summarize legacy vector scenarios into workload crossover reports."""
+
     grouped: dict[tuple[int, int, bool], list[dict[str, Any]]] = {}
     for scenario in scenario_summaries:
         is_filtered = scenario.get("filtered_candidate_count") is not None
@@ -538,6 +552,8 @@ def _meets_indexed_recall_target(
     indexed_recall: float | None,
     min_indexed_recall: float | None,
 ) -> bool:
+    """Return whether one indexed run satisfies the active recall policy."""
+
     if indexed_recall is None:
         return False
     if min_indexed_recall is not None:
@@ -548,6 +564,8 @@ def _meets_indexed_recall_target(
 def _recommended_real_vector_thresholds(
     vector_report: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    """Derive simple indexed-routing recommendations from vector sweep results."""
+
     recommendations: list[dict[str, Any]] = []
     for entry in vector_report:
         winners = entry.get("winners", [])
@@ -596,6 +614,8 @@ def _recommended_real_vector_thresholds(
 
 
 def _print_section(title: str, report: list[dict[str, Any]]) -> None:
+    """Print one family section from the routing threshold report."""
+
     print(title)
     print("-" * len(title))
     for entry in report:
@@ -625,6 +645,8 @@ def _print_section(title: str, report: list[dict[str, Any]]) -> None:
 
 
 def main() -> None:
+    """Load routing sweep JSON, summarize crossovers, and optionally persist them."""
+
     args = _parse_args()
     summary = json.loads(args.input.read_text(encoding="utf-8"))
     report: dict[str, Any] = {

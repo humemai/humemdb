@@ -22,6 +22,8 @@ EXPECTED_FILES = (
 
 
 def main() -> int:
+    """Regenerate or verify the checked-in Cypher ANTLR artifacts."""
+
     parser = argparse.ArgumentParser(
         description=(
             "Regenerate the checked-in ANTLR Python artifacts for the internal "
@@ -85,6 +87,8 @@ def main() -> int:
 
 
 def _find_generated_root(tmpdir: Path) -> Path:
+    """Locate the generated artifact directory inside the ANTLR output tree."""
+
     parser_file = next(tmpdir.rglob("CypherParser.py"), None)
     if parser_file is None:
         raise SystemExit("ANTLR generation did not produce CypherParser.py")
@@ -99,6 +103,8 @@ def _find_generated_root(tmpdir: Path) -> Path:
 
 
 def _check_generated_files(generated_root: Path, checked_in_dir: Path) -> int:
+    """Compare freshly generated artifacts against the checked-in copies."""
+
     stale: list[str] = []
     missing: list[str] = []
 

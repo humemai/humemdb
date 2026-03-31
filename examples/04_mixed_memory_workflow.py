@@ -262,6 +262,8 @@ SPECIAL_OWNERS = (
 
 
 def _make_timer() -> Callable[[str], None]:
+    """Return a timing reporter for the staged mixed-memory walkthrough."""
+
     start = perf_counter()
     last = start
 
@@ -277,6 +279,8 @@ def _make_timer() -> Callable[[str], None]:
 
 
 def _embedding(**weights: float) -> list[float]:
+    """Map named semantic axes into the fixed demo embedding layout."""
+
     values = [0.0] * DIMENSIONS
     for axis, weight in weights.items():
         values[AXIS_INDEX[axis]] = weight
@@ -284,6 +288,8 @@ def _embedding(**weights: float) -> list[float]:
 
 
 def _candidate_ids(query_result, top_k: int) -> tuple[int, ...]:
+    """Extract the top candidate identifiers from a query result."""
+
     return tuple(
         int(row[0] if len(row) <= 2 else row[2])
         for row in query_result.rows[:top_k]
@@ -297,6 +303,8 @@ def _ordered_lookup_rows(
     ids: tuple[int, ...],
     columns: tuple[str, ...],
 ) -> tuple[tuple[object, ...], ...]:
+    """Fetch rows by id and return them in the same order as the inputs."""
+
     params = {f"id_{index}": item_id for index, item_id in enumerate(ids)}
     placeholders = ", ".join(f"$id_{index}" for index in range(len(ids)))
     column_list = ", ".join(("id", *columns))
@@ -315,6 +323,8 @@ def _executemany_in_batches(
     *,
     batch_size: int = 500,
 ) -> int:
+    """Insert iterable rows in bounded batches and return the row count."""
+
     batch: list[dict[str, object]] = []
     count = 0
     for row in rows:
@@ -330,42 +340,56 @@ def _executemany_in_batches(
 
 
 def _project_slug(index: int) -> str:
+    """Return the deterministic project slug for a synthetic record."""
+
     if index == 0:
         return FOCUS_PROJECT
     return f"project-{index:03d}"
 
 
 def _team_slug(index: int) -> str:
+    """Return the deterministic team slug for a synthetic record."""
+
     if index < len(SPECIAL_TEAM_SLUGS):
         return SPECIAL_TEAM_SLUGS[index]
     return f"team-{index:02d}"
 
 
 def _topic_slug(index: int) -> str:
+    """Return the deterministic topic slug for a synthetic record."""
+
     if index < len(SPECIAL_TOPIC_SLUGS):
         return SPECIAL_TOPIC_SLUGS[index]
     return f"topic-{index:03d}"
 
 
 def _profile_name(index: int) -> str:
+    """Return the deterministic profile name for a synthetic record."""
+
     if index < len(SPECIAL_OWNERS):
         return SPECIAL_OWNERS[index]["name"]
     return f"profile-{index:05d}"
 
 
 def _service_slug(index: int) -> str:
+    """Return the deterministic service slug for a synthetic record."""
+
     if index < len(SPECIAL_SERVICES):
         return SPECIAL_SERVICES[index]["slug"]
     return f"svc-{index:05d}"
 
 
 def _service_project_slug(index: int) -> str:
+    """Map a service index to the project that owns it in the demo dataset."""
+
     if index < len(SPECIAL_SERVICES):
         return FOCUS_PROJECT
     return _project_slug(1 + ((index - len(SPECIAL_SERVICES)) % (PROJECT_COUNT - 1)))
 
 
 def _service_team_slug(index: int) -> str:
+    """Map a service index to its supporting team slug."""
+
     if index < len(SPECIAL_SERVICES):
         return SPECIAL_SERVICES[index]["team"]
     return _team_slug(
@@ -375,6 +399,8 @@ def _service_team_slug(index: int) -> str:
 
 
 def _service_topic_slug(index: int) -> str:
+    """Map a service index to its primary topic slug."""
+
     if index < len(SPECIAL_SERVICES):
         return SPECIAL_TOPIC_SLUGS[index % len(SPECIAL_TOPIC_SLUGS)]
     return _topic_slug(
@@ -384,12 +410,16 @@ def _service_topic_slug(index: int) -> str:
 
 
 def _profile_project_slug(index: int) -> str:
+    """Map a profile index to the project it primarily owns."""
+
     if index < len(SPECIAL_OWNERS):
         return FOCUS_PROJECT
     return _project_slug(1 + ((index - len(SPECIAL_OWNERS)) % (PROJECT_COUNT - 1)))
 
 
 def _profile_team_slug(index: int) -> str:
+    """Map a profile index to its team slug."""
+
     if index < len(SPECIAL_OWNERS):
         return SPECIAL_OWNERS[index]["team"]
     return _team_slug(
@@ -399,6 +429,8 @@ def _profile_team_slug(index: int) -> str:
 
 
 def create_relational_tables(db) -> None:
+    """Create the relational tables used by the mixed-memory walkthrough."""
+
     with db.transaction():
         db.query(
             (
@@ -535,6 +567,8 @@ def create_relational_tables(db) -> None:
 
 
 def create_relational_indexes(db) -> None:
+    """Create the relational indexes used by the example's lookup-heavy queries."""
+
     # These indexes cover the example's repeated relational joins and filters.
     # They are app-side SQLite hygiene, not the main driver of vector-search speed.
     with db.transaction():
@@ -596,6 +630,8 @@ def create_relational_indexes(db) -> None:
 
 
 def _iter_work_items() -> Iterable[dict[str, object]]:
+    """Yield synthetic work-item rows for the relational memory tables."""
+
     special_rows = (
         {
             "id": 1,
@@ -737,6 +773,8 @@ def _iter_work_items() -> Iterable[dict[str, object]]:
 
 
 def _iter_memory_notes() -> Iterable[dict[str, object]]:
+    """Yield synthetic memory-note rows for the relational memory tables."""
+
     special_rows = (
         {
             "id": 101,
@@ -844,6 +882,8 @@ def _iter_memory_notes() -> Iterable[dict[str, object]]:
 
 
 def _iter_incident_reports() -> Iterable[dict[str, object]]:
+    """Yield synthetic incident-report rows for the relational memory tables."""
+
     special_rows = (
         {
             "id": 201,
@@ -964,6 +1004,8 @@ def _iter_incident_reports() -> Iterable[dict[str, object]]:
 
 
 def _iter_sprint_snapshots() -> Iterable[dict[str, object]]:
+    """Yield sprint snapshot rows for each synthetic project."""
+
     for project_index in range(PROJECT_COUNT):
         project_slug = _project_slug(project_index)
         for sprint_offset in range(16):
@@ -1000,6 +1042,8 @@ def _iter_sprint_snapshots() -> Iterable[dict[str, object]]:
 
 
 def _iter_service_catalog() -> Iterable[dict[str, object]]:
+    """Yield service catalog rows for curated and synthetic services."""
+
     for service_index in range(SERVICE_NODE_COUNT):
         if service_index < len(SPECIAL_SERVICES):
             service = SPECIAL_SERVICES[service_index]
@@ -1041,6 +1085,8 @@ def _iter_service_catalog() -> Iterable[dict[str, object]]:
 
 
 def _iter_owner_roster() -> Iterable[dict[str, object]]:
+    """Yield owner roster rows for curated and synthetic profiles."""
+
     for owner_index in range(PROFILE_NODE_COUNT):
         if owner_index < len(SPECIAL_OWNERS):
             owner = SPECIAL_OWNERS[owner_index]
@@ -1088,6 +1134,8 @@ def _iter_owner_roster() -> Iterable[dict[str, object]]:
 
 
 def _iter_project_releases() -> Iterable[dict[str, object]]:
+    """Yield project release rows across the synthetic release calendar."""
+
     for project_index in range(PROJECT_COUNT):
         project_slug = _project_slug(project_index)
         for release_offset in range(12):
@@ -1118,6 +1166,8 @@ def _iter_project_releases() -> Iterable[dict[str, object]]:
 
 
 def _iter_eval_runs() -> Iterable[dict[str, object]]:
+    """Yield evaluation-run rows used by the mixed-memory demo."""
+
     special_rows = (
         {
             "id": 5_001,
@@ -1187,6 +1237,8 @@ def _iter_eval_runs() -> Iterable[dict[str, object]]:
 
 
 def _iter_deployment_runs() -> Iterable[dict[str, object]]:
+    """Yield deployment-run rows across projects and services."""
+
     for offset in range(TABLE_ROW_COUNTS["deployment_runs"]):
         service_index = offset % SERVICE_NODE_COUNT
         yield {
@@ -1210,6 +1262,8 @@ def _iter_deployment_runs() -> Iterable[dict[str, object]]:
 
 
 def _iter_feature_flags() -> Iterable[dict[str, object]]:
+    """Yield feature-flag rows for the synthetic service catalog."""
+
     for offset in range(TABLE_ROW_COUNTS["feature_flags"]):
         service_index = offset % SERVICE_NODE_COUNT
         yield {
@@ -1233,6 +1287,8 @@ def _iter_feature_flags() -> Iterable[dict[str, object]]:
 
 
 def _iter_audit_events() -> Iterable[dict[str, object]]:
+    """Yield audit-event rows that add governance context to the dataset."""
+
     for offset in range(TABLE_ROW_COUNTS["audit_events"]):
         yield {
             "id": 30_001 + offset,
@@ -1254,6 +1310,8 @@ def _iter_audit_events() -> Iterable[dict[str, object]]:
 
 
 def _iter_knowledge_chunks() -> Iterable[dict[str, object]]:
+    """Yield knowledge-chunk rows for documentation-style memory search."""
+
     for offset in range(TABLE_ROW_COUNTS["knowledge_chunks"]):
         yield {
             "id": 40_001 + offset,
@@ -1275,6 +1333,8 @@ def _iter_knowledge_chunks() -> Iterable[dict[str, object]]:
 
 
 def populate_relational_rows(db) -> dict[str, int]:
+    """Populate every relational table and return inserted row counts by table."""
+
     insert_sql = {
         "work_items": (
             "INSERT INTO work_items (id, project_slug, owner_name, service_slug, "
@@ -1396,6 +1456,8 @@ def populate_relational_rows(db) -> dict[str, int]:
 
 
 def populate_graph(db) -> tuple[dict[str, int], dict[str, int], tuple[int, int]]:
+    """Populate the graph portion of the mixed-memory example dataset."""
+
     profile_ids: dict[str, int] = {}
     service_ids: dict[str, int] = {}
     node_count = 0
@@ -1671,6 +1733,8 @@ def populate_graph(db) -> tuple[dict[str, int], dict[str, int], tuple[int, int]]
 
 
 def populate_direct_vectors(db) -> tuple[int, ...]:
+    """Populate the direct-vector recall memory used by the walkthrough."""
+
     inserted_ids: list[int] = []
     special_rows = [
         {
@@ -1748,6 +1812,8 @@ def populate_direct_vectors(db) -> tuple[int, ...]:
 
 
 def main() -> None:
+    """Build the mixed-memory dataset and run its example queries."""
+
     report = _make_timer()
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -2122,7 +2188,7 @@ def main() -> None:
         assert tuple(row[0] for row in note_matches) == (
             "service-map",
             "routing",
-            "incidents",
+            "vectors",
         )
         assert tuple(row[0] for row in incident_matches) == (
             "profile-sync",
@@ -2142,7 +2208,7 @@ def main() -> None:
             ("Faye", "security-review", "security", "auth-gateway"),
         )
         assert atlas_topics == ("incidents", "release", "routing", "vectors")
-        assert graph_matches == ("Bea", "Dev", "Faye")
+        assert graph_matches == ("Ada", "Bea", "Dev")
         assert graph_service_matches == ("edge-cache", "graph-api")
         assert tuple(row[:3] for row in direct_matches.rows) == (
             ("direct", "", 90_001),

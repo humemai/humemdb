@@ -719,56 +719,53 @@ Status: done.
 
 - [x] Keep exact search as the current public baseline until indexed ANN is
   benchmark-justified.
-- [x] Keep the Phase 13 design simple and explicit: hot search stays SQLite plus
-  in-memory NumPy exact through `100k`, while colder or larger histories move to one
-  LanceDB-backed `IVF_PQ` tier.
-- [x] Keep the first hot-tier admission rule simple too: for now, the hot tier can be
-  the most recently added `N` vectors instead of trying to optimize for recency-of-use
-  or frequency-of-use before real product evidence exists.
-- [x] Keep SQLite as the source of truth for all vectors, while treating the NumPy hot
-  tier only as a lazy-loaded in-memory cache rather than a second canonical store.
-- [x] When total vectors exceed the hot-tier budget, start building or refreshing the
-  cold `IVF_PQ` index in the background using the learned benchmark-backed LanceDB
-  parameters instead of blocking foreground exact search on immediate ANN upkeep;
-  allow a small spillover staging buffer before folding new overflow into cold ANN.
-- [x] Keep a small hot/cold overlap window during background cold-index rebuilds, then
-  swap in the refreshed cold snapshot once that overlap grows large enough to justify it.
-- [x] Keep the steady-state cold tier as the complement of the hot tier rather than a
-  duplicate copy of it: hot stays in exact NumPy, cold should normally index
-  `total - hot` vectors.
-- [x] Keep true parallel hot exact plus cold `IVF_PQ` search out of the initial Phase 13
-  runtime unless later benchmarks show the current sequential tiered path has become a
-  meaningful latency bottleneck.
-- [x] Keep merge-and-rerank simple at first: ask each tier for a small top-k buffer,
-  concatenate results, deduplicate by logical vector id, sort by score, and trim to
-  the final requested `k`.
+- [x] Keep the Phase 13 design simple and explicit: exact search stays SQLite plus
+  in-memory NumPy through `100k`, while larger histories move to one LanceDB-backed
+  ANN snapshot per logical index.
+- [x] Keep the first ANN admission rule simple too: start building a snapshot once the
+  indexed row count crosses the threshold instead of trying to optimize for recency or
+  frequency before real product evidence exists.
+- [x] Keep SQLite as the source of truth for all vectors, while treating the NumPy
+  exact path and the persisted ANN snapshot only as derived search structures rather
+  than canonical stores.
+- [x] When total vectors exceed the ANN threshold, start building or refreshing the
+  snapshot in the background using the learned benchmark-backed LanceDB parameters
+  instead of blocking foreground exact search on immediate ANN upkeep.
+- [x] Keep the steady-state runtime simple: one ready ANN snapshot plus an exact delta
+  overlay and tombstones for rows not yet folded into the current generation.
+- [x] Keep true parallel exact plus ANN search out of the initial Phase 13 runtime
+  unless later benchmarks show the current sequential snapshot-plus-rerank path has
+  become a meaningful latency bottleneck.
+- [x] Keep merge-and-rerank simple at first: ask the ANN snapshot for a small top-k
+  buffer, concatenate with exact delta candidates, deduplicate by logical vector id,
+  sort by score, and trim to the final requested `k`.
 - [x] Keep exact search free of mandatory index-build steps so new vectors remain
   immediately searchable before any ANN refresh work happens.
-- [x] Benchmark the cold path on real datasets at the scales that matter now instead of
+- [x] Benchmark the ANN snapshot path on real datasets at the scales that matter now instead of
   over-expanding the matrix: `100k`, `1M`, and `10M` for `msmarco-10m`, plus `100k`,
   `1M`, `10M`, and `25M` for `stackoverflow-xlarge`.
 - [x] Compare NumPy exact against LanceDB only where it is still practical and useful:
   keep the explicit side-by-side comparison at `100k`, and let `1M+` runs stay
-  LanceDB-only once the hot-tier cut is fixed there.
+  LanceDB-only once the ANN threshold is fixed there.
 - [x] Tune only the rough `IVF_PQ` knobs that matter first on real data:
   `num_partitions`, `num_sub_vectors`, `nprobes`, and `refine_factor`; keep broader
   ANN-family exploration out of scope.
 - [x] Use scale-appropriate recall targets as the admission bar for those runs:
   `k=10` targets of `0.95`, `0.93`, `0.90`, and `0.88`, and `k=50` targets of `0.98`,
   `0.96`, `0.95`, and `0.93` for `100k`, `1M`, `10M`, and `100M`-class scales.
-- [x] Report only the basic evidence needed to justify the tiered runtime: recall,
+- [x] Report only the basic evidence needed to justify the snapshot runtime: recall,
   indexed latency, exact latency where it still runs, stage timings, peak RSS, and
   per-stage memory deltas.
-- [x] Keep the cold ingest path aligned with the intended runtime shape and measure it
+- [x] Keep the snapshot ingest path aligned with the intended runtime shape and measure it
   directly: `SQLite -> DuckDB (scan) -> Arrow batches -> LanceDB -> build index`.
 - [x] Once that path is benchmark-justified, move it into the production `src`
-  runtime instead of leaving it only in benchmark scripts: productize the cold
-  ingest/build flow, background refresh lifecycle, hot/cold split, and
+  runtime instead of leaving it only in benchmark scripts: productize the snapshot
+  ingest/build flow, background refresh lifecycle, ANN threshold policy, and
   merge-and-rerank behavior behind internal runtime code.
 - [x] Keep lifecycle and policy work narrow and benchmark-backed instead of turning the
   first indexed runtime into a broad schema-management surface.
 - [x] Add explicit vector index build, rebuild, refresh, inspect, await, and drop
-  operations once the simple hot/cold split and the benchmark-backed admission bar are
+  operations once the simple ANN threshold and the benchmark-backed admission bar are
   settled.
 - [x] Add matching SQL and Cypher support later so vector indexing is not permanently
   object-API-only.
@@ -855,17 +852,17 @@ hardening rather than a separate intermediate phase.
   vector paths.
 - [ ] Make result shapes and explicit query semantics stable and well documented.
 - [ ] Re-run benchmark-backed routing checks when runtime behavior changes materially.
-- [ ] Treat online vector search latency, not cold-index build time, as the immediate
+- [ ] Treat online vector search latency, not snapshot build time, as the immediate
   runtime optimization target where current benchmark attribution still shows too
   much Python-side orchestration in direct, SQL, and Cypher vector search.
 - [ ] Stop resolving SQL and Cypher vector candidates through logical key
   round-trips in Python: make the candidate query path return search-ready vector
   identities or stable vector-entry ids instead of returning business keys that the
   runtime has to remap into vector indexes afterward.
-- [ ] Replace the current direct tiered-search hot/cold/pending partition loop with
-  cached integer-index metadata instead of rebuilding Python tuple keys, set
-  membership checks, and per-query list partitions over the full candidate set.
-- [ ] Precompute and cache per-metric tier membership so the runtime can answer
+- [ ] Replace the current direct snapshot-search candidate bookkeeping with cached
+  integer-index metadata instead of rebuilding Python tuple keys, set membership
+  checks, and per-query list partitions over the full candidate set.
+- [ ] Precompute and cache per-metric snapshot membership so the runtime can answer
   "hot vs cold vs pending" from dense integer lookups or masks rather than from
   tuple reconstruction against `item_ids.tolist()` on every search.
 - [ ] Keep the first search-speed optimization pass inside the current Python/NumPy
@@ -904,13 +901,13 @@ Current Phase 14 progress:
 
 - vector-runtime release hardening now explicitly includes the former `Phase 13.5`
   Python-overhead cleanup instead of treating it as a separate pre-release phase
-- the current real-data cold-index build path is mostly native/backend work already,
+- the current real-data snapshot build path is mostly native/backend work already,
   so it is not the urgent optimization target for `v0.1.0`
-- the larger runtime-attribution runs now show direct tiered search as overwhelmingly
+- the larger runtime-attribution runs now show direct snapshot-plus-rerank search as overwhelmingly
   Python/orchestration-heavy, and SQL/Cypher vector search still spend a majority or
   near-majority of total latency outside the raw backend search calls
-- the current hot path still does too much Python object churn around candidate-key
-  remapping, tier partitioning, and repeated full-candidate bookkeeping
+- the current search path still does too much Python object churn around candidate-key
+  remapping, snapshot membership checks, and repeated full-candidate bookkeeping
 - the next runtime win should therefore come from better search-ready identity flow,
   cached integer metadata, and array-native partitioning before considering more
   invasive binary-extension work
@@ -1013,10 +1010,10 @@ pre-`v0.1.0` default scope.
   and opt-in rather than part of the pre-`v0.1.0` default scope.
 - [ ] Revisit the vector benchmark matrix later with larger corpora and wider embeddings,
   including scales up to roughly `100M` vectors and dimensions up to roughly `1536`.
-- [ ] Revisit non-`IVF_PQ` ANN options in a later phase once the current cold-tier
+- [ ] Revisit non-`IVF_PQ` ANN options in a later phase once the current snapshot
   lifecycle is stable enough to benchmark other index families fairly.
-- [ ] Consider FAISS later only as a hot-tier optimization candidate after the NumPy
-  hot path and LanceDB cold-tier lifecycle are stable.
-- [ ] Revisit hot-tier admission policy later if real usage justifies it: the current
-  simple rule can stay "most recently added N vectors", while recency-of-use or
+- [ ] Consider FAISS later only as an exact-path optimization candidate after the NumPy
+  path and LanceDB snapshot lifecycle are stable.
+- [ ] Revisit ANN admission policy later if real usage justifies it: the current
+  simple rule can stay threshold-based, while recency-of-use or
   frequency-of-use policies remain future options.

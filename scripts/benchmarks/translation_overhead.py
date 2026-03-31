@@ -375,6 +375,8 @@ CYPHER_WORKLOADS: dict[str, CypherWorkload] = {
 
 
 def _parse_args() -> argparse.Namespace:
+    """Parse CLI arguments for the translation-overhead benchmark."""
+
     parser = argparse.ArgumentParser(
         description=(
             "Benchmark SQL and Cypher frontend translation overhead separately "
@@ -397,6 +399,8 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _summarize(timings: list[float]) -> TimingSummary:
+    """Summarize one set of duration samples."""
+
     return TimingSummary(
         mean=statistics.mean(timings),
         stdev=statistics.pstdev(timings),
@@ -406,6 +410,8 @@ def _summarize(timings: list[float]) -> TimingSummary:
 
 
 def _time_callable(operation, *, warmup: int, repetitions: int) -> TimingSummary:
+    """Warm up and time one zero-argument operation."""
+
     for _ in range(warmup):
         operation()
 
@@ -418,10 +424,14 @@ def _time_callable(operation, *, warmup: int, repetitions: int) -> TimingSummary
 
 
 def _format_seconds(seconds: float) -> str:
+    """Format seconds as a millisecond string for console output."""
+
     return f"{seconds * 1_000:.4f} ms"
 
 
 def _print_summary(label: str, summary: TimingSummary) -> None:
+    """Print one timing summary in the benchmark's report format."""
+
     print(
         f"    {label}: mean={_format_seconds(summary.mean)} "
         f"std={_format_seconds(summary.stdev)} "
@@ -431,15 +441,21 @@ def _print_summary(label: str, summary: TimingSummary) -> None:
 
 
 def _sql_cold_translation(query: str, target: str) -> str:
+    """Measure SQL translation with the translation cache cleared."""
+
     _translate_sql_plan_cached.cache_clear()
     return translate_sql(query, target=target)
 
 
 def _sql_hot_translation(query: str, target: str) -> str:
+    """Measure SQL translation with the translation cache left warm."""
+
     return translate_sql(query, target=target)
 
 
 def _compile_cypher_bound(plan, params: dict[str, str | int | float | bool | None]):
+    """Bind one Cypher plan and compile it into a backend match plan."""
+
     bound_plan = _bind_plan_values(plan, params)
     if not isinstance(bound_plan, (MatchNodePlan, MatchRelationshipPlan)):
         raise ValueError(
@@ -455,6 +471,8 @@ def _plan_cypher_runtime(query: str):
 
 
 def main() -> None:
+    """Run the SQL and Cypher translation-overhead benchmarks."""
+
     args = _parse_args()
 
     print("Translation overhead benchmark")

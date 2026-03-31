@@ -5,10 +5,10 @@
 Purpose:
 
 - benchmark shipped vector datasets in one concrete shared-build scenario
-- hold the current split steady: NumPy exact for the hot tier and LanceDB `IVF_PQ` for
-  the cold tier
+- hold the current threshold steady: NumPy exact below the ANN snapshot cutoff and
+  LanceDB `IVF_PQ` snapshot builds above it
 - measure load cost, LanceDB table and index build cost, indexed query latency, and
-  recall versus NumPy exact where the hot-tier baseline is still enabled
+  recall versus NumPy exact where the exact baseline is still enabled
 
 Representative command:
 
@@ -28,7 +28,7 @@ HUMEMDB_THREADS=8 python scripts/benchmarks/vector_search_real.py \
 
 Current implementation note:
 
-- full NumPy exact stops above `100k` rows by default so the benchmark matches the hot-tier operational cut
+- full NumPy exact stops above `100k` rows by default so the benchmark matches the ANN snapshot threshold
 - the LanceDB side is intentionally narrowed to `IVF_PQ`
-- the cold-tier ingest path stages sampled real vectors into SQLite first, then streams them through `DuckDB -> Arrow batches -> LanceDB` before index build
+- snapshot-only runs above the `100k` cutoff ingest selected shard memmaps directly into `Arrow batches -> LanceDB` before index build
 - when `--top-k-grid` is used, the benchmark builds once per dataset and scale, then reuses that build for all requested `top_k` values

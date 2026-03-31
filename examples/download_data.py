@@ -114,12 +114,16 @@ except ImportError:
 
 
 def ensure_clean_dir(path: Path, label: str) -> None:
+    """Remove an output directory when recreating a dataset artifact."""
+
     if path.exists():
         print(f"[CLEAN] Removing existing {label} directory: {path}")
         shutil.rmtree(path)
 
 
 def _format_bytes(num_bytes: int) -> str:
+    """Format a byte count with human-readable binary units."""
+
     value = float(num_bytes)
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if value < 1024.0 or unit == "TB":
@@ -129,6 +133,8 @@ def _format_bytes(num_bytes: int) -> str:
 
 
 def _download_with_wget(url: str, destination: Path) -> bool:
+    """Download a file with wget when it is available on the system."""
+
     wget_path = shutil.which("wget")
     if not wget_path:
         return False
@@ -152,6 +158,8 @@ def _download_with_wget(url: str, destination: Path) -> bool:
 
 
 def _download_with_curl(url: str, destination: Path) -> bool:
+    """Download a file with curl when it is available on the system."""
+
     curl_path = shutil.which("curl")
     if not curl_path:
         return False
@@ -180,6 +188,8 @@ def _download_with_curl(url: str, destination: Path) -> bool:
 def _download_with_python(
     url: str, destination: Path, chunk_size: int = 8 * 1024 * 1024
 ) -> None:
+    """Download a file with urllib, resuming partial transfers when possible."""
+
     resume_from = destination.stat().st_size if destination.exists() else 0
     headers = {}
     if resume_from > 0:
@@ -245,6 +255,8 @@ def _download_with_python(
 
 
 def download_file(url: str, destination: Path) -> None:
+    """Download a file using wget, curl, or the Python fallback."""
+
     destination.parent.mkdir(parents=True, exist_ok=True)
 
     if destination.exists() and destination.stat().st_size > 0:
@@ -270,6 +282,8 @@ def download_file(url: str, destination: Path) -> None:
 
 
 def parse_tpch_ddl(ddl_path: Path) -> dict[str, dict[str, object]]:
+    """Parse the TPC-H DDL into a simplified schema description."""
+
     ddl_text = ddl_path.read_text(encoding="utf-8", errors="ignore")
     tables: dict[str, dict[str, object]] = {}
     for match in re.finditer(r"CREATE TABLE\s+(\w+)\s*\((.*?)\);", ddl_text, re.S):
@@ -328,6 +342,8 @@ def _iter_tpch_records(tbl_path: Path, chunk_size: int = 1024 * 1024):
 
 
 def convert_tpch_tbl_to_csv(tbl_path: Path, csv_path: Path, columns: list[str]) -> None:
+    """Convert one pipe-delimited TPC-H table file into CSV form."""
+
     import csv
 
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -351,6 +367,8 @@ def convert_tpch_tbl_to_csv(tbl_path: Path, csv_path: Path, columns: list[str]) 
 
 
 def generate_tpch_csv_and_schema(out_dir: Path, ddl_path: Path) -> None:
+    """Generate CSV exports and schema metadata for a TPC-H dataset."""
+
     ddl_schema = parse_tpch_ddl(ddl_path)
     csv_dir = out_dir / "csv"
     csv_dir.mkdir(parents=True, exist_ok=True)
@@ -374,6 +392,8 @@ def generate_tpch_csv_and_schema(out_dir: Path, ddl_path: Path) -> None:
 
 
 def _infer_value_type(value: str) -> str:
+    """Infer a simple logical type from a CSV string value."""
+
     if value is None:
         return "string"
     value = value.strip()
@@ -389,6 +409,8 @@ def _infer_value_type(value: str) -> str:
 
 
 def _merge_types(current: str | None, new_type: str) -> str:
+    """Merge two inferred scalar types into a conservative result type."""
+
     if current is None:
         return new_type
     if current == "string" or new_type == "string":
@@ -403,6 +425,8 @@ def _merge_types(current: str | None, new_type: str) -> str:
 
 
 def _looks_like_header(row: list[str]) -> bool:
+    """Heuristically decide whether a CSV row is a header row."""
+
     if not row:
         return False
     tokens = 0
@@ -413,6 +437,8 @@ def _looks_like_header(row: list[str]) -> bool:
 
 
 def _apply_ldbc_overrides(name: str, inferred: str) -> str:
+    """Adjust inferred LDBC types for identifier-style columns."""
+
     lowered = name.lower()
     if lowered.endswith(".id") or lowered.endswith("_id"):
         return "integer"
@@ -422,6 +448,8 @@ def _apply_ldbc_overrides(name: str, inferred: str) -> str:
 
 
 def generate_ldbc_snb_schema(out_dir: Path, sample_rows: int = 100_000) -> None:
+    """Infer node and edge schemas from extracted LDBC CSV files."""
+
     import csv
 
     schema = {"nodes": {}, "edges": {}}
@@ -1085,6 +1113,8 @@ def create_stackoverflow_large(
 
 
 def _iter_stackoverflow_rows(xml_path: Path, fields: list[str]):
+    """Yield selected attributes from each Stack Overflow XML row element."""
+
     import xml.etree.ElementTree as ET
 
     context = ET.iterparse(xml_path, events=("start", "end"))
@@ -1098,6 +1128,8 @@ def _iter_stackoverflow_rows(xml_path: Path, fields: list[str]):
 
 
 def _clean_stackoverflow_text(text: str | None) -> str:
+    """Normalize HTML-heavy Stack Overflow text into plain text."""
+
     if not text:
         return ""
     text = html.unescape(text)
@@ -1107,7 +1139,11 @@ def _clean_stackoverflow_text(text: str | None) -> str:
 
 
 class _VectorShardWriter:
+    """Write float32 embedding rows into fixed-size shard files."""
+
     def __init__(self, out_dir: Path, base_name: str, shard_size: int):
+        """Initialize shard-file rotation state for one vector export."""
+
         self.out_dir = out_dir
         self.base_name = base_name
         self.shard_size = shard_size
@@ -1120,6 +1156,8 @@ class _VectorShardWriter:
         self.dim: int | None = None
 
     def _open_new(self) -> None:
+        """Open the next shard file and reset the per-shard row counter."""
+
         if self._writer:
             self._close_current()
         self._current_path = (
@@ -1130,6 +1168,8 @@ class _VectorShardWriter:
         self._filled = 0
 
     def _close_current(self) -> None:
+        """Close the active shard file and record its metadata."""
+
         if not self._writer or not self._current_path:
             return
         self._writer.close()
@@ -1145,6 +1185,8 @@ class _VectorShardWriter:
         self._filled = 0
 
     def write(self, vectors) -> None:
+        """Append one batch of vectors, rotating shards as needed."""
+
         if vectors.size == 0:
             return
         if self.dim is None:
@@ -1163,6 +1205,8 @@ class _VectorShardWriter:
                 self._close_current()
 
     def close(self) -> None:
+        """Flush and close the active shard writer, if present."""
+
         if self._writer:
             self._close_current()
 
@@ -1179,6 +1223,8 @@ def embed_stackoverflow_vectors(
     gt_topk: int = 50,
     gt_chunk: int = 4096,
 ) -> None:
+    """Embed Stack Overflow text into vector shards and metadata sidecars."""
+
     try:
         import numpy as np
         import torch

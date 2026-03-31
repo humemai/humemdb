@@ -21,8 +21,7 @@ class TestVectorAPI(unittest.TestCase):
 
             with HumemDB(base_path) as db:
                 db._vector_runtime_config = IndexedVectorRuntimeConfig(
-                    hot_max_rows=2,
-                    merge_buffer_factor=2,
+                    ann_min_vectors=256,
                 )
                 inserted_ids = db.insert_vectors(
                     [
@@ -46,9 +45,9 @@ class TestVectorAPI(unittest.TestCase):
                 result = db.search_vectors([1.0, 0.0], top_k=3)
 
                 self.assertEqual(tuple(row[2] for row in result.rows), (2, 260, 259))
-                self.assertEqual(set(db._cold_vector_index_cache), {"cosine"})
+                self.assertEqual(set(db._snapshot_vector_index_cache), {"cosine"})
 
-    def test_search_vectors_keeps_small_cold_spill_exact_until_relative_trigger(
+    def test_search_vectors_keeps_small_snapshot_delta_exact_until_refresh_trigger(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -56,9 +55,7 @@ class TestVectorAPI(unittest.TestCase):
 
             with HumemDB(base_path) as db:
                 db._vector_runtime_config = IndexedVectorRuntimeConfig(
-                    hot_max_rows=1000,
-                    merge_buffer_factor=2,
-                    cold_index_relative_to_hot_fraction=0.5,
+                    ann_min_vectors=2_000,
                 )
                 inserted_ids = db.insert_vectors(
                     [
@@ -71,7 +68,7 @@ class TestVectorAPI(unittest.TestCase):
 
                 result = db.search_vectors([1.0, 0.0], top_k=2)
                 self.assertEqual(tuple(row[2] for row in result.rows), (1, 2))
-                self.assertFalse(db._cold_vector_index_cache)
+                self.assertFalse(db._snapshot_vector_index_cache)
 
     def test_search_vectors_returns_expected_matches(self) -> None:
 
@@ -115,16 +112,13 @@ class TestVectorAPI(unittest.TestCase):
                 second_result = db.search_vectors([1.0, 0.0], top_k=1)
                 self.assertEqual(second_result.rows[0][2], 3)
 
-    def test_insert_vectors_keeps_cached_cold_snapshot_for_pending_spill(self) -> None:
+    def test_insert_vectors_keeps_cached_snapshot_for_pending_delta(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             base_path = Path(tmpdir) / "humem"
 
             with HumemDB(base_path) as db:
                 db._vector_runtime_config = IndexedVectorRuntimeConfig(
-                    hot_max_rows=2,
-                    merge_buffer_factor=2,
-                    cold_refresh_min_rows=10,
-                    cold_refresh_relative_to_cold_fraction=0.5,
+                    ann_min_vectors=10,
                 )
                 inserted_ids = db.insert_vectors(
                     [
@@ -147,8 +141,10 @@ class TestVectorAPI(unittest.TestCase):
 
                 first_result = db.search_vectors([1.0, 0.0], top_k=1)
                 self.assertEqual(first_result.rows[0][2], 2)
-                self.assertEqual(set(db._cold_vector_index_cache), {"cosine"})
-                first_cold_rows = db._cold_vector_index_cache["cosine"].item_ids.size
+                self.assertEqual(set(db._snapshot_vector_index_cache), {"cosine"})
+                first_snapshot_rows = (
+                    db._snapshot_vector_index_cache["cosine"].item_ids.size
+                )
 
                 inserted_ids = db.insert_vectors(
                     [
@@ -158,8 +154,8 @@ class TestVectorAPI(unittest.TestCase):
                 )
                 self.assertEqual(inserted_ids, (261, 262))
                 self.assertEqual(
-                    db._cold_vector_index_cache["cosine"].item_ids.size,
-                    first_cold_rows,
+                    db._snapshot_vector_index_cache["cosine"].item_ids.size,
+                    first_snapshot_rows,
                 )
 
                 second_result = db.search_vectors([1.0, 0.0], top_k=3)
@@ -168,11 +164,11 @@ class TestVectorAPI(unittest.TestCase):
                     (2, 260, 259),
                 )
                 self.assertEqual(
-                    db._cold_vector_index_cache["cosine"].item_ids.size,
-                    first_cold_rows,
+                    db._snapshot_vector_index_cache["cosine"].item_ids.size,
+                    first_snapshot_rows,
                 )
 
-    def test_insert_vectors_refreshes_cold_snapshot_after_pending_spill_threshold(
+    def test_insert_vectors_refreshes_snapshot_after_pending_delta_threshold(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -180,10 +176,7 @@ class TestVectorAPI(unittest.TestCase):
 
             with HumemDB(base_path) as db:
                 db._vector_runtime_config = IndexedVectorRuntimeConfig(
-                    hot_max_rows=2,
-                    merge_buffer_factor=2,
-                    cold_refresh_min_rows=10,
-                    cold_refresh_relative_to_cold_fraction=0.0,
+                    ann_min_vectors=10,
                 )
                 db.insert_vectors(
                     [
@@ -196,17 +189,19 @@ class TestVectorAPI(unittest.TestCase):
                 )
 
                 db.search_vectors([1.0, 0.0], top_k=1)
-                first_cold_rows = db._cold_vector_index_cache["cosine"].item_ids.size
-                self.assertEqual(first_cold_rows, 258)
+                first_snapshot_rows = (
+                    db._snapshot_vector_index_cache["cosine"].item_ids.size
+                )
+                self.assertEqual(first_snapshot_rows, 260)
 
                 db.insert_vectors([[0.0, 1.0]] * 10)
 
                 result = db.search_vectors([1.0, 0.0], top_k=3)
                 self.assertEqual(tuple(row[2] for row in result.rows), (2, 260, 259))
-                self.assertTrue(db._await_vector_runtime_background_refresh())
+                self.assertTrue(db._await_vector_runtime_snapshot_refresh())
                 self.assertEqual(
-                    db._cold_vector_index_cache["cosine"].item_ids.size,
-                    268,
+                    db._snapshot_vector_index_cache["cosine"].item_ids.size,
+                    270,
                 )
 
     def test_pause_vector_index_defers_background_refresh_until_resumed(self) -> None:
@@ -215,10 +210,7 @@ class TestVectorAPI(unittest.TestCase):
 
             with HumemDB(base_path) as db:
                 db._vector_runtime_config = IndexedVectorRuntimeConfig(
-                    hot_max_rows=2,
-                    merge_buffer_factor=2,
-                    cold_refresh_min_rows=10,
-                    cold_refresh_relative_to_cold_fraction=0.0,
+                    ann_min_vectors=10,
                 )
                 db.insert_vectors(
                     [
@@ -244,8 +236,8 @@ class TestVectorAPI(unittest.TestCase):
                 self.assertEqual(paused_state["state"], "ready")
                 self.assertTrue(paused_state["maintenance_paused"])
                 self.assertFalse(paused_state["refresh_in_progress"])
-                self.assertGreater(paused_state["pending_cold_rows"], 0)
-                self.assertFalse(db._await_vector_runtime_background_refresh())
+                self.assertGreater(paused_state["delta_rows"], 0)
+                self.assertFalse(db._await_vector_runtime_snapshot_refresh())
 
                 result = db.search_vectors([1.0, 0.0], top_k=3)
                 self.assertEqual(tuple(row[2] for row in result.rows), (2, 260, 259))
@@ -257,9 +249,9 @@ class TestVectorAPI(unittest.TestCase):
                     index_name="direct_similarity_idx"
                 )
                 self.assertFalse(refreshed["maintenance_paused"])
-                self.assertEqual(refreshed["pending_cold_rows"], 0)
+                self.assertEqual(refreshed["delta_rows"], 0)
 
-    def test_background_cold_refresh_reports_runtime_state_and_promotes(self) -> None:
+    def test_background_snapshot_refresh_reports_runtime_state_and_promotes(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             base_path = Path(tmpdir) / "humem"
             original_from_matrix = _LanceDBVectorIndex.from_matrix
@@ -282,10 +274,7 @@ class TestVectorAPI(unittest.TestCase):
             ):
                 with HumemDB(base_path) as db:
                     db._vector_runtime_config = IndexedVectorRuntimeConfig(
-                        hot_max_rows=2,
-                        merge_buffer_factor=2,
-                        cold_refresh_min_rows=1,
-                        cold_refresh_relative_to_cold_fraction=0.0,
+                        ann_min_vectors=1,
                     )
                     db.insert_vectors(
                         [
@@ -299,7 +288,7 @@ class TestVectorAPI(unittest.TestCase):
 
                     db.search_vectors([1.0, 0.0], top_k=1)
                     first_state = db._inspect_vector_runtime()
-                    self.assertEqual(first_state["cold_snapshot_rows"], 258)
+                    self.assertEqual(first_state["snapshot_rows"], 260)
 
                     db.insert_vectors([[0.0, 1.0]])
                     result = db.search_vectors([1.0, 0.0], top_k=3)
@@ -311,26 +300,23 @@ class TestVectorAPI(unittest.TestCase):
 
                     in_progress = db._inspect_vector_runtime()
                     self.assertTrue(in_progress["refresh_in_progress"])
-                    self.assertEqual(in_progress["pending_cold_rows"], 1)
-                    self.assertEqual(in_progress["cold_snapshot_rows"], 258)
+                    self.assertEqual(in_progress["delta_rows"], 1)
+                    self.assertEqual(in_progress["snapshot_rows"], 260)
 
                     allow_second_build.set()
-                    self.assertTrue(db._await_vector_runtime_background_refresh())
+                    self.assertTrue(db._await_vector_runtime_snapshot_refresh())
                     final_state = db._inspect_vector_runtime()
                     self.assertFalse(final_state["refresh_in_progress"])
-                    self.assertEqual(final_state["pending_cold_rows"], 0)
-                    self.assertEqual(final_state["cold_snapshot_rows"], 259)
+                    self.assertEqual(final_state["delta_rows"], 0)
+                    self.assertEqual(final_state["snapshot_rows"], 261)
 
-    def test_delete_vectors_keeps_cold_snapshot_until_refresh(self) -> None:
+    def test_delete_vectors_keeps_snapshot_until_refresh(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             base_path = Path(tmpdir) / "humem"
 
             with HumemDB(base_path) as db:
                 db._vector_runtime_config = IndexedVectorRuntimeConfig(
-                    hot_max_rows=2,
-                    merge_buffer_factor=2,
-                    cold_refresh_min_rows=1,
-                    cold_refresh_relative_to_cold_fraction=0.0,
+                    ann_min_vectors=1,
                 )
                 db.insert_vectors(
                     [
@@ -344,8 +330,8 @@ class TestVectorAPI(unittest.TestCase):
 
                 db.search_vectors([1.0, 0.0], top_k=1)
                 self.assertEqual(
-                    db._inspect_vector_runtime()["cold_snapshot_rows"],
-                    258,
+                    db._inspect_vector_runtime()["snapshot_rows"],
+                    260,
                 )
 
                 self.assertEqual(db.delete_vectors([2]), 1)
@@ -353,22 +339,21 @@ class TestVectorAPI(unittest.TestCase):
                 result = db.search_vectors([1.0, 0.0], top_k=2)
                 self.assertEqual(tuple(row[2] for row in result.rows), (260, 259))
                 in_progress = db._inspect_vector_runtime()
-                self.assertEqual(in_progress["cold_snapshot_rows"], 258)
+                self.assertEqual(in_progress["snapshot_rows"], 260)
                 self.assertEqual(in_progress["tombstone_rows"], 1)
 
-                self.assertTrue(db._await_vector_runtime_background_refresh())
+                self.assertTrue(db._await_vector_runtime_snapshot_refresh())
                 final_state = db._inspect_vector_runtime()
-                self.assertEqual(final_state["cold_snapshot_rows"], 257)
+                self.assertEqual(final_state["snapshot_rows"], 259)
                 self.assertEqual(final_state["tombstone_rows"], 0)
 
-    def test_reopen_uses_persisted_cold_snapshot_metadata(self) -> None:
+    def test_reopen_uses_persisted_snapshot_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             base_path = Path(tmpdir) / "humem"
 
             with HumemDB(base_path) as db:
                 db._vector_runtime_config = IndexedVectorRuntimeConfig(
-                    hot_max_rows=2,
-                    merge_buffer_factor=2,
+                    ann_min_vectors=256,
                 )
                 db.insert_vectors(
                     [
@@ -381,17 +366,16 @@ class TestVectorAPI(unittest.TestCase):
                 )
                 db.search_vectors([1.0, 0.0], top_k=1)
                 first_state = db._inspect_vector_runtime()
-                self.assertEqual(first_state["cold_snapshot_rows"], 258)
-                generation = first_state["cold_snapshot_generation"]
+                self.assertEqual(first_state["snapshot_rows"], 260)
+                generation = first_state["snapshot_generation"]
 
             with mock.patch(
                 "humemdb.db._LanceDBVectorIndex.from_matrix",
-                side_effect=AssertionError("cold snapshot should reopen, not rebuild"),
+                side_effect=AssertionError("snapshot should reopen, not rebuild"),
             ):
                 with HumemDB(base_path) as db:
                     db._vector_runtime_config = IndexedVectorRuntimeConfig(
-                        hot_max_rows=2,
-                        merge_buffer_factor=2,
+                        ann_min_vectors=256,
                     )
                     result = db.search_vectors([1.0, 0.0], top_k=3)
                     self.assertEqual(
@@ -399,9 +383,9 @@ class TestVectorAPI(unittest.TestCase):
                         (2, 260, 259),
                     )
                     second_state = db._inspect_vector_runtime()
-                    self.assertEqual(second_state["cold_snapshot_rows"], 258)
+                    self.assertEqual(second_state["snapshot_rows"], 260)
                     self.assertEqual(
-                        second_state["cold_snapshot_generation"],
+                        second_state["snapshot_generation"],
                         generation,
                     )
 
@@ -413,8 +397,7 @@ class TestVectorAPI(unittest.TestCase):
 
             with HumemDB(base_path) as db:
                 db._vector_runtime_config = IndexedVectorRuntimeConfig(
-                    hot_max_rows=2,
-                    merge_buffer_factor=2,
+                    ann_min_vectors=256,
                 )
                 db.insert_vectors(
                     [
@@ -430,23 +413,23 @@ class TestVectorAPI(unittest.TestCase):
                 self.assertEqual(built["name"], "docs_embedding_idx")
                 self.assertTrue(built["enabled"])
                 self.assertEqual(built["state"], "ready")
-                self.assertEqual(built["cold_snapshot_rows"], 258)
+                self.assertEqual(built["snapshot_rows"], 260)
 
                 dropped = db.drop_vector_index(index_name="docs_embedding_idx")
                 self.assertFalse(dropped["enabled"])
                 self.assertEqual(dropped["state"], "disabled")
-                self.assertEqual(dropped["cold_snapshot_rows"], 0)
+                self.assertEqual(dropped["snapshot_rows"], 0)
 
                 result = db.search_vectors([1.0, 0.0], top_k=3)
                 self.assertEqual(tuple(row[2] for row in result.rows), (2, 260, 259))
                 after_search = db.inspect_vector_index(index_name="docs_embedding_idx")
                 self.assertFalse(after_search["enabled"])
-                self.assertEqual(after_search["cold_snapshot_rows"], 0)
+                self.assertEqual(after_search["snapshot_rows"], 0)
 
                 refreshed = db.refresh_vector_index(index_name="docs_embedding_idx")
                 self.assertTrue(refreshed["enabled"])
                 self.assertEqual(refreshed["state"], "ready")
-                self.assertEqual(refreshed["cold_snapshot_rows"], 258)
+                self.assertEqual(refreshed["snapshot_rows"], 260)
 
     def test_insert_vectors_can_use_explicit_direct_ids(self) -> None:
 
@@ -663,14 +646,13 @@ class TestVectorAPI(unittest.TestCase):
             with HumemDB(base_path, preload_vectors=True) as db:
                 self.assertFalse(db.vectors_cached())
 
-    def test_search_vectors_falls_back_on_tiny_cold_tier(self) -> None:
+    def test_search_vectors_falls_back_on_tiny_snapshot_index(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             base_path = Path(tmpdir) / "humem"
 
             with HumemDB(base_path) as db:
                 db._vector_runtime_config = IndexedVectorRuntimeConfig(
-                    hot_max_rows=2,
-                    merge_buffer_factor=2,
+                    ann_min_vectors=256,
                 )
                 inserted_ids = db.insert_vectors(
                     [
@@ -685,4 +667,4 @@ class TestVectorAPI(unittest.TestCase):
                 result = db.search_vectors([1.0, 0.0], top_k=3)
 
                 self.assertEqual(tuple(row[2] for row in result.rows), (2, 4, 3))
-                self.assertFalse(db._cold_vector_index_cache)
+                self.assertFalse(db._snapshot_vector_index_cache)

@@ -7,6 +7,8 @@ from pathlib import Path
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse CLI arguments for example-script execution."""
+
     parser = argparse.ArgumentParser(description="Run HumemDB example scripts.")
     parser.add_argument(
         "patterns",
@@ -18,6 +20,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def collect_examples(root: Path, patterns: list[str]) -> list[Path]:
+    """Resolve the requested example glob patterns into unique script paths."""
+
     examples: list[Path] = []
     seen: set[Path] = set()
     for pattern in patterns:
@@ -33,6 +37,8 @@ def collect_examples(root: Path, patterns: list[str]) -> list[Path]:
 
 
 def main() -> int:
+    """Run each matching example script and return a process exit code."""
+
     args = parse_args()
     root = Path(__file__).resolve().parents[2]
     examples = collect_examples(root, args.patterns)

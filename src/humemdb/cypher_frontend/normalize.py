@@ -33,7 +33,13 @@ from .validate import validate_cypher_parse_result
 
 @dataclass(frozen=True, slots=True)
 class NormalizedCreateNode:
-    """Normalized generated-parser representation of one node CREATE."""
+    """Normalized generated-parser representation of one node CREATE.
+
+    Attributes:
+        kind: Statement family discriminator for CREATE normalization.
+        pattern_kind: Pattern discriminator indicating a node pattern.
+        node: Parsed node pattern to create.
+    """
 
     kind: Literal["create"]
     pattern_kind: Literal["node"]
@@ -42,7 +48,15 @@ class NormalizedCreateNode:
 
 @dataclass(frozen=True, slots=True)
 class NormalizedCreateRelationship:
-    """Normalized generated-parser representation of one relationship CREATE."""
+    """Normalized generated-parser representation of one relationship CREATE.
+
+    Attributes:
+        kind: Statement family discriminator for CREATE normalization.
+        pattern_kind: Pattern discriminator indicating a relationship pattern.
+        left: Left endpoint node pattern.
+        relationship: Relationship pattern to create.
+        right: Right endpoint node pattern.
+    """
 
     kind: Literal["create"]
     pattern_kind: Literal["relationship"]
@@ -53,7 +67,17 @@ class NormalizedCreateRelationship:
 
 @dataclass(frozen=True, slots=True)
 class NormalizedCreateRelationshipFromSeparatePatterns:
-    """Normalized generated-parser representation of narrow multi-pattern CREATE."""
+    """Normalized generated-parser representation of narrow multi-pattern CREATE.
+
+    Attributes:
+        kind: Statement family discriminator for CREATE normalization.
+        pattern_kind: Pattern discriminator indicating a relationship pattern.
+        first_node: First standalone node pattern from the original CREATE clause.
+        second_node: Second standalone node pattern from the original CREATE clause.
+        left: Left endpoint node pattern after normalization.
+        relationship: Relationship pattern to create.
+        right: Right endpoint node pattern after normalization.
+    """
 
     kind: Literal["create"]
     pattern_kind: Literal["relationship"]
@@ -66,7 +90,19 @@ class NormalizedCreateRelationshipFromSeparatePatterns:
 
 @dataclass(frozen=True, slots=True)
 class NormalizedMatchNode:
-    """Normalized generated-parser representation of one node MATCH query."""
+    """Normalized generated-parser representation of one node MATCH query.
+
+    Attributes:
+        kind: Statement family discriminator for MATCH normalization.
+        pattern_kind: Pattern discriminator indicating a node pattern.
+        node: Matched node pattern.
+        predicates: Normalized predicates applied to the match.
+        returns: Normalized return items.
+        order_by: Optional ORDER BY items.
+        limit: Optional LIMIT value.
+        distinct: Whether the return projection is DISTINCT.
+        skip: Optional SKIP/OFFSET value.
+    """
 
     kind: Literal["match"]
     pattern_kind: Literal["node"]
@@ -81,7 +117,21 @@ class NormalizedMatchNode:
 
 @dataclass(frozen=True, slots=True)
 class NormalizedMatchRelationship:
-    """Normalized generated-parser representation of one relationship MATCH query."""
+    """Normalized generated-parser representation of one relationship MATCH query.
+
+    Attributes:
+        kind: Statement family discriminator for MATCH normalization.
+        pattern_kind: Pattern discriminator indicating a relationship pattern.
+        left: Left endpoint node pattern.
+        relationship: Matched relationship pattern.
+        right: Right endpoint node pattern.
+        predicates: Normalized predicates applied to the match.
+        returns: Normalized return items.
+        order_by: Optional ORDER BY items.
+        limit: Optional LIMIT value.
+        distinct: Whether the return projection is DISTINCT.
+        skip: Optional SKIP/OFFSET value.
+    """
 
     kind: Literal["match"]
     pattern_kind: Literal["relationship"]
@@ -98,7 +148,15 @@ class NormalizedMatchRelationship:
 
 @dataclass(frozen=True, slots=True)
 class NormalizedSetNode:
-    """Normalized generated-parser representation of one MATCH ... SET statement."""
+    """Normalized generated-parser representation of one MATCH ... SET statement.
+
+    Attributes:
+        kind: Statement family discriminator for SET normalization.
+        pattern_kind: Pattern discriminator indicating a node pattern.
+        node: Matched node pattern receiving assignments.
+        predicates: Normalized predicates applied before the SET.
+        assignments: Normalized property assignments to apply.
+    """
 
     kind: Literal["set"]
     pattern_kind: Literal["node"]
@@ -109,7 +167,17 @@ class NormalizedSetNode:
 
 @dataclass(frozen=True, slots=True)
 class NormalizedSetRelationship:
-    """Normalized generated-parser representation of one relationship MATCH ... SET."""
+    """Normalized generated-parser representation of one relationship MATCH ... SET.
+
+    Attributes:
+        kind: Statement family discriminator for SET normalization.
+        pattern_kind: Pattern discriminator indicating a relationship pattern.
+        left: Left endpoint node pattern.
+        relationship: Matched relationship pattern receiving assignments.
+        right: Right endpoint node pattern.
+        predicates: Normalized predicates applied before the SET.
+        assignments: Normalized property assignments to apply.
+    """
 
     kind: Literal["set"]
     pattern_kind: Literal["relationship"]
@@ -122,7 +190,15 @@ class NormalizedSetRelationship:
 
 @dataclass(frozen=True, slots=True)
 class NormalizedDeleteNode:
-    """Normalized generated-parser representation of one MATCH ... DETACH DELETE."""
+    """Normalized generated-parser representation of one MATCH ... DETACH DELETE.
+
+    Attributes:
+        kind: Statement family discriminator for DELETE normalization.
+        pattern_kind: Pattern discriminator indicating a node pattern.
+        node: Matched node pattern to delete.
+        predicates: Normalized predicates applied before deletion.
+        detach: Whether the delete should detach relationships first.
+    """
 
     kind: Literal["delete"]
     pattern_kind: Literal["node"]
@@ -133,7 +209,16 @@ class NormalizedDeleteNode:
 
 @dataclass(frozen=True, slots=True)
 class NormalizedDeleteRelationship:
-    """Normalized generated-parser representation of one MATCH ... DELETE."""
+    """Normalized generated-parser representation of one MATCH ... DELETE.
+
+    Attributes:
+        kind: Statement family discriminator for DELETE normalization.
+        pattern_kind: Pattern discriminator indicating a relationship pattern.
+        left: Left endpoint node pattern.
+        relationship: Matched relationship pattern to delete.
+        right: Right endpoint node pattern.
+        predicates: Normalized predicates applied before deletion.
+    """
 
     kind: Literal["delete"]
     pattern_kind: Literal["relationship"]
@@ -145,7 +230,17 @@ class NormalizedDeleteRelationship:
 
 @dataclass(frozen=True, slots=True)
 class NormalizedMatchCreateRelationship:
-    """Normalized generated-parser representation of one MATCH ... CREATE."""
+    """Normalized generated-parser representation of one MATCH ... CREATE.
+
+    Attributes:
+        kind: Statement family discriminator for MATCH ... CREATE normalization.
+        pattern_kind: Pattern discriminator indicating a relationship pattern.
+        match_node: Matched node pattern that scopes the CREATE.
+        predicates: Normalized predicates applied to the MATCH portion.
+        left: Left endpoint node pattern for the created relationship.
+        relationship: Relationship pattern to create.
+        right: Right endpoint node pattern for the created relationship.
+    """
 
     kind: Literal["match_create"]
     pattern_kind: Literal["relationship"]
@@ -158,7 +253,18 @@ class NormalizedMatchCreateRelationship:
 
 @dataclass(frozen=True, slots=True)
 class NormalizedMatchCreateRelationshipBetweenNodes:
-    """Normalized generated-parser representation of two-node MATCH ... CREATE."""
+    """Normalized generated-parser representation of two-node MATCH ... CREATE.
+
+    Attributes:
+        kind: Statement family discriminator for MATCH ... CREATE normalization.
+        pattern_kind: Pattern discriminator indicating a relationship pattern.
+        left_match: Left MATCH node pattern used to bind the create endpoints.
+        right_match: Right MATCH node pattern used to bind the create endpoints.
+        predicates: Normalized predicates applied to the MATCH portion.
+        left: Left endpoint node pattern for the created relationship.
+        relationship: Relationship pattern to create.
+        right: Right endpoint node pattern for the created relationship.
+    """
 
     kind: Literal["match_create"]
     pattern_kind: Literal["relationship"]

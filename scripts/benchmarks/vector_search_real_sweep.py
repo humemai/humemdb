@@ -30,10 +30,14 @@ _RECALL_POLICY_BY_TOP_K: dict[int, tuple[tuple[int, float], ...]] = {
 
 
 def _progress(message: str) -> None:
+    """Emit one progress line to stderr for long-running sweeps."""
+
     print(message, file=sys.stderr, flush=True)
 
 
 def _parse_args() -> argparse.Namespace:
+    """Parse CLI arguments for the real-data vector sweep."""
+
     parser = argparse.ArgumentParser(
         description=(
             "Sweep the fixed hot-tier NumPy exact path and cold-tier LanceDB IVF_PQ "
@@ -93,6 +97,8 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    """Run the real-data vector sweep and emit aggregate output."""
+
     args = _parse_args()
     _validate_benchmark_sampling(args.queries, args.repetitions)
     rows_grid = _parse_int_grid(args.rows_grid, flag="--rows-grid")
@@ -201,6 +207,8 @@ def _build_payload(
     lancedb_index_type: str,
     reports: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    """Assemble the rolling or final sweep payload from scenario reports."""
+
     payload = {
         "dataset": dataset,
         "grid": {
@@ -225,6 +233,8 @@ def _build_payload(
 
 
 def _parse_int_grid(raw: str, *, flag: str) -> list[int]:
+    """Parse one comma-separated integer grid from a CLI flag."""
+
     parts = [part.strip() for part in raw.split(",") if part.strip()]
     if not parts:
         raise ValueError(f"{flag} must contain at least one integer.")
@@ -238,6 +248,8 @@ def _persist_outputs(
     intermediate_dir: Path | None,
     latest_reports: list[dict[str, Any]] | None,
 ) -> None:
+    """Write the merged payload and optional per-scenario JSON artifacts."""
+
     if output_json is not None:
         output_json.parent.mkdir(parents=True, exist_ok=True)
         output_json.write_text(
@@ -256,6 +268,8 @@ def _persist_outputs(
 
 
 def _scenario_file_name(report: dict[str, Any]) -> str:
+    """Return the deterministic intermediate filename for one scenario."""
+
     dataset = str(report["dataset"])
     filter_source = report.get("filter_source") or "global"
     rows = int(report["rows"])
@@ -264,6 +278,8 @@ def _scenario_file_name(report: dict[str, Any]) -> str:
 
 
 def _validate_benchmark_sampling(queries: int, repetitions: int) -> None:
+    """Validate the minimum query and repetition counts for the sweep."""
+
     if queries < _MIN_BENCHMARK_QUERIES:
         raise ValueError(
             "Real vector sweep requires at least "
@@ -277,6 +293,8 @@ def _validate_benchmark_sampling(queries: int, repetitions: int) -> None:
 
 
 def _filter_sources_for_dataset(*, dataset: str, raw: str) -> list[str | None]:
+    """Resolve the filter-source sweep list for the selected dataset."""
+
     if dataset == "msmarco-10m":
         return [None]
     if raw == "auto":
@@ -310,6 +328,8 @@ def _run_scenario(
     lancedb_nprobes: int | None,
     lancedb_refine_factor: int | None,
 ) -> list[dict[str, Any]]:
+    """Run one shared-build scenario and return its per-top-k reports."""
+
     return _run_benchmark_command(
         dataset=dataset,
         rows=rows,
@@ -351,6 +371,8 @@ def _run_benchmark_command(
     lancedb_nprobes: int | None,
     lancedb_refine_factor: int | None,
 ) -> list[dict[str, Any]]:
+    """Invoke the underlying real-data benchmark and normalize its output."""
+
     script_path = Path(__file__).with_name("vector_search_real.py")
     command = [
         sys.executable,
@@ -416,6 +438,8 @@ def _run_benchmark_command(
 
 
 def _summarize_scenario(report: dict[str, Any]) -> dict[str, Any]:
+    """Project one raw benchmark report into the sweep summary shape."""
+
     recall_target = _recall_target_for(
         rows=int(report["rows"]),
         top_k=int(report["top_k"]),
@@ -476,6 +500,8 @@ def _summarize_scenario(report: dict[str, Any]) -> dict[str, Any]:
 
 
 def _summarize_overall(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
+    """Compute high-level counts across all summarized sweep scenarios."""
+
     filtered = [
         scenario for scenario in scenarios if scenario["filter_source"] is not None
     ]
@@ -493,11 +519,15 @@ def _summarize_overall(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _validate_recall_policy_top_k_grid(top_k_grid: list[int]) -> None:
+    """Validate that the configured top-k values have recall policies."""
+
     for top_k in top_k_grid:
         _recall_target_for(rows=1, top_k=top_k)
 
 
 def _recall_policy_table() -> dict[str, dict[str, float]]:
+    """Return the recall policy table in JSON-friendly form."""
+
     return {
         str(top_k): {
             str(row_limit): target
@@ -508,6 +538,8 @@ def _recall_policy_table() -> dict[str, dict[str, float]]:
 
 
 def _recall_target_for(*, rows: int, top_k: int) -> dict[str, Any]:
+    """Return the target recall policy entry for one scale and top-k."""
+
     thresholds = _RECALL_POLICY_BY_TOP_K.get(top_k)
     if thresholds is None:
         supported = ", ".join(str(value) for value in sorted(_RECALL_POLICY_BY_TOP_K))
@@ -531,6 +563,8 @@ def _recall_target_for(*, rows: int, top_k: int) -> dict[str, Any]:
 
 
 def _format_scale_label(rows: int) -> str:
+    """Format a row scale as a compact K/M label."""
+
     if rows >= 1_000_000:
         whole_millions = rows // 1_000_000
         return f"{whole_millions}M"
@@ -539,6 +573,8 @@ def _format_scale_label(rows: int) -> str:
 
 
 def _print_text_report(payload: dict[str, Any]) -> None:
+    """Print the sweep payload in a compact human-readable report."""
+
     print("Real vector routing sweep")
     print(f"  dataset: {payload['dataset']}")
     print(f"  rows grid: {payload['grid']['rows']}")

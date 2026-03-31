@@ -12,14 +12,15 @@ DIMENSIONS = 8
 SYNTHETIC_DIRECT_COUNT = 20_000
 SQL_FILLER_COUNT = 1_024
 GRAPH_FILLER_COUNT = 1_024
-DEMO_HOT_MAX_ROWS = 256
-DEMO_MERGE_BUFFER_FACTOR = 2
+DEMO_ANN_MIN_VECTORS = 256
 DIRECT_INDEX_NAME = "direct_similarity_idx"
 SQL_INDEX_NAME = "docs_embedding_idx"
 CYPHER_INDEX_NAME = "profile_embedding_idx"
 
 
 def _make_timer() -> callable:
+    """Return a simple timing reporter for the staged example output."""
+
     start = perf_counter()
     last = start
 
@@ -40,6 +41,8 @@ def _embedding(
     tertiary: float,
     quaternary: float = 0.0,
 ) -> list[float]:
+    """Build a fixed-width demo embedding with the provided leading weights."""
+
     return [
         primary,
         secondary,
@@ -53,6 +56,8 @@ REFRESH_VECTOR = _embedding(0.92, 0.31, 0.18, 0.04)
 
 
 def build_direct_rows() -> list[dict[str, object]]:
+    """Create the direct-vector demo corpus with curated and filler rows."""
+
     rows: list[dict[str, object]] = []
     catalog = (
         (1001, "graph", "gold", "guide", _embedding(1.0, 0.15, 0.05)),
@@ -98,18 +103,23 @@ def build_direct_rows() -> list[dict[str, object]]:
 
 
 def print_section(title: str) -> None:
+    """Print a visible section header for the walkthrough output."""
+
     print()
     print(f"=== {title} ===")
 
 
 def configure_demo_tiering(db: HumemDB) -> None:
+    """Lower ANN thresholds so the demo exercises the indexed path."""
+
     db._vector_runtime_config = IndexedVectorRuntimeConfig(
-        hot_max_rows=DEMO_HOT_MAX_ROWS,
-        merge_buffer_factor=DEMO_MERGE_BUFFER_FACTOR,
+        ann_min_vectors=DEMO_ANN_MIN_VECTORS,
     )
 
 
 def run_direct_workflow(db) -> tuple[object, ...]:
+    """Execute the direct-vector lifecycle showcased by the example."""
+
     inserted_ids = db.insert_vectors(build_direct_rows())
     initial_index_state = db.inspect_vector_index(index_name=DIRECT_INDEX_NAME)
     built_index = db.build_vector_index(index_name=DIRECT_INDEX_NAME)
@@ -184,6 +194,8 @@ def run_direct_workflow(db) -> tuple[object, ...]:
 
 
 def run_direct_vector_example(root: Path, report: callable) -> None:
+    """Run and validate the direct-vector section of the example."""
+
     with HumemDB(root / "vectors-direct") as db:
         configure_demo_tiering(db)
         (
@@ -227,14 +239,14 @@ def run_direct_vector_example(root: Path, report: callable) -> None:
     assert abs(refreshed_result.rows[0][3] - 1.0) < 1e-6
     assert direct_initial_index["name"] == DIRECT_INDEX_NAME
     assert direct_built_index["state"] == "ready"
-    assert direct_built_index["cold_snapshot_rows"] > 0
-    assert direct_built_index["hot_rows"] <= DEMO_HOT_MAX_ROWS
+    assert direct_built_index["snapshot_rows"] > 0
+    assert direct_built_index["delta_rows"] == 0
     assert direct_paused_index["maintenance_paused"] is True
     assert direct_paused_state["maintenance_paused"] is True
-    assert direct_paused_state["pending_cold_rows"] > 0
+    assert direct_paused_state["delta_rows"] > 0
     assert direct_awaited_refresh is False
     assert direct_resumed_index["maintenance_paused"] is False
-    assert direct_refreshed_index["pending_cold_rows"] == 0
+    assert direct_refreshed_index["delta_rows"] == 0
     assert direct_dropped_index["state"] == "disabled"
     assert direct_rebuilt_index["state"] == "ready"
     assert direct_final_index["state"] == "ready"
@@ -242,7 +254,8 @@ def run_direct_vector_example(root: Path, report: callable) -> None:
     print_section("1. Direct Vectors: unstructured vector memory")
     print("Use this when you want raw vector insert/search without tables or graphs.")
     print(
-        "This demo lowers hot_max_rows so the cold ANN tier activates on a small dataset."
+        "This demo lowers ann_min_vectors so the ANN snapshot activates on a "
+        "small dataset."
     )
     print("Direct vector index initial state:", direct_initial_index)
     print("Direct vector index lifecycle:", direct_built_index)
@@ -261,6 +274,8 @@ def run_direct_vector_example(root: Path, report: callable) -> None:
 
 
 def run_sql_workflow(db) -> tuple[object, ...]:
+    """Execute the SQL-owned vector lifecycle demonstrated by the example."""
+
     with db.transaction():
         db.query(
             (
@@ -428,6 +443,8 @@ def run_sql_workflow(db) -> tuple[object, ...]:
 
 
 def run_sql_vector_example(root: Path, report: callable) -> None:
+    """Run and validate the SQL-owned vector section of the example."""
+
     with HumemDB(root / "vectors-rows") as db:
         configure_demo_tiering(db)
         (
@@ -468,12 +485,12 @@ def run_sql_vector_example(root: Path, report: callable) -> None:
     assert len(sql_listed_indexes.rows) == 1
     assert sql_paused_index.rows[0][-1] is True
     assert sql_listed_indexes_paused.rows[0][-1] is True
-    assert sql_listed_indexes_paused.rows[0][8] > 0
+    assert sql_listed_indexes_paused.rows[0][7] > 0
     assert sql_resumed_index.rows[0][-1] is False
     assert sql_refreshed_index.rows[0][3] == "ready"
-    assert sql_refreshed_index.rows[0][7] > 0
+    assert sql_refreshed_index.rows[0][6] > 0
     assert sql_rebuilt_index.rows[0][3] == "ready"
-    assert sql_rebuilt_index.rows[0][7] > 0
+    assert sql_rebuilt_index.rows[0][6] > 0
     assert sql_dropped_index.rows[0][3] == "disabled"
     assert sql_dropped_index_if_present.rows[0][3] == "disabled"
     assert sql_listed_indexes_after_drop.rows == ()
@@ -481,8 +498,9 @@ def run_sql_vector_example(root: Path, report: callable) -> None:
     print_section("2. SQL Vectors: table-owned embeddings")
     print("Use this when vectors belong to relational rows and SQL does the filtering.")
     print(
-        "This demo lowers hot_max_rows and adds filler rows so the cold ANN "
-        "tier becomes visible."
+        "This demo lowers ann_min_vectors and adds filler rows so the ANN "
+        "snapshot "
+        "path becomes visible."
     )
     print("SQL vector index lifecycle:", sql_created_index.rows)
     print(
@@ -506,6 +524,8 @@ def run_sql_vector_example(root: Path, report: callable) -> None:
 
 
 def run_graph_workflow(db) -> tuple[object, ...]:
+    """Execute the graph-owned vector lifecycle used by the Cypher demo."""
+
     profile_ids: dict[str, int] = {}
     with db.transaction():
         for name, cohort, role, embedding in (
@@ -666,6 +686,8 @@ def run_graph_workflow(db) -> tuple[object, ...]:
 
 
 def run_cypher_vector_example(root: Path, report: callable) -> None:
+    """Run and validate the Cypher-owned vector section of the example."""
+
     with HumemDB(root / "vectors-graph") as db:
         configure_demo_tiering(db)
         (
@@ -691,12 +713,12 @@ def run_cypher_vector_example(root: Path, report: callable) -> None:
     assert tuple(row[0] for row in cypher_initial.rows) == (
         profile_ids["Ada"],
         profile_ids["Bea"],
-           profile_ids["Drew"],
+        profile_ids["Drew"],
     )
     assert tuple(row[0] for row in cypher_updated.rows) == (
         profile_ids["Ada"],
         profile_ids["Bea"],
-           profile_ids["Drew"],
+        profile_ids["Drew"],
     )
     assert abs(cypher_updated.rows[0][1] - 1.0) < 1e-6
     assert abs(cypher_updated.rows[1][1] - 1.0) < 1e-6
@@ -706,10 +728,10 @@ def run_cypher_vector_example(root: Path, report: callable) -> None:
     assert cypher_created_index_if_missing.rows[0][0] == CYPHER_INDEX_NAME
     assert len(cypher_shown_indexes.rows) == 1
     assert cypher_created_index.rows[0][3] == "ready"
-    assert cypher_created_index.rows[0][7] > 0
+    assert cypher_created_index.rows[0][6] > 0
     assert cypher_paused_index.rows[0][-1] is True
     assert cypher_shown_indexes_paused.rows[0][-1] is True
-    assert cypher_shown_indexes_paused.rows[0][8] > 0
+    assert cypher_shown_indexes_paused.rows[0][7] > 0
     assert cypher_resumed_index.rows[0][-1] is False
     assert cypher_refreshed_index.rows[0][3] == "ready"
     assert cypher_rebuilt_index.rows[0][3] == "ready"
@@ -723,8 +745,8 @@ def run_cypher_vector_example(root: Path, report: callable) -> None:
         "pattern filtering."
     )
     print(
-        "This demo lowers hot_max_rows and adds filler graph nodes so the "
-        "cold ANN tier becomes visible."
+        "This demo lowers ann_min_vectors and adds filler graph nodes so the "
+        "ANN snapshot path becomes visible."
     )
     print("Cypher vector index lifecycle:", cypher_created_index.rows)
     print(
@@ -754,6 +776,8 @@ def run_cypher_vector_example(root: Path, report: callable) -> None:
 
 
 def main() -> None:
+    """Run all three vector-surface walkthroughs in sequence."""
+
     report = _make_timer()
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
@@ -762,8 +786,8 @@ def main() -> None:
         print("2. SQL for vectors attached to relational table rows")
         print("3. Cypher for vectors attached to graph nodes")
         print(
-            "For demonstration, all three sections lower the hot-tier limit "
-            "so the cold tier activates on small toy datasets."
+            "For demonstration, all three sections lower the ANN snapshot "
+            "threshold so background index builds activate on small toy datasets."
         )
 
         run_direct_vector_example(root, report)

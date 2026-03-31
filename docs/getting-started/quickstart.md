@@ -164,7 +164,7 @@ These write forms are intentionally narrow `v0` subset features. They follow a
 PostgreSQL-like row ownership model and a Neo4j-style node-property ownership model
 without claiming full pgvector or full Neo4j Cypher compatibility.
 
-The indexed hot/cold runtime also has a narrow public lifecycle surface:
+The indexed snapshot runtime also has a narrow public lifecycle surface:
 
 - direct Python: `build_vector_index()`, `inspect_vector_index()`,
   `refresh_vector_index()`, `drop_vector_index()`, and `await_vector_index_refresh()`

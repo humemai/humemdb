@@ -17,8 +17,7 @@ class TestVectorQueries(unittest.TestCase):
 
             with HumemDB(base_path) as db:
                 db._vector_runtime_config = IndexedVectorRuntimeConfig(
-                    hot_max_rows=2,
-                    merge_buffer_factor=2,
+                    ann_min_vectors=256,
                 )
                 db.insert_vectors(
                     [
@@ -128,8 +127,7 @@ class TestVectorQueries(unittest.TestCase):
 
             with HumemDB(base_path) as db:
                 db._vector_runtime_config = IndexedVectorRuntimeConfig(
-                    hot_max_rows=2,
-                    merge_buffer_factor=2,
+                    ann_min_vectors=256,
                 )
                 db.query(
                     (
@@ -165,7 +163,7 @@ class TestVectorQueries(unittest.TestCase):
                 self.assertEqual(created.query_type, "sql")
                 self.assertEqual(created.rows[0][0], "docs_embedding_idx")
                 self.assertEqual(created.rows[0][3], "ready")
-                self.assertEqual(created.rows[0][7], 258)
+                self.assertEqual(created.rows[0][6], 260)
 
                 catalog = db.query("SELECT * FROM humemdb_vector_indexes")
                 self.assertEqual(catalog.query_type, "sql")
@@ -208,8 +206,7 @@ class TestVectorQueries(unittest.TestCase):
 
             with HumemDB(base_path) as db:
                 db._vector_runtime_config = IndexedVectorRuntimeConfig(
-                    hot_max_rows=2,
-                    merge_buffer_factor=2,
+                    ann_min_vectors=256,
                 )
                 db.insert_vectors(
                     [
@@ -332,8 +329,7 @@ class TestVectorQueries(unittest.TestCase):
 
             with HumemDB(base_path) as db:
                 db._vector_runtime_config = IndexedVectorRuntimeConfig(
-                    hot_max_rows=2,
-                    merge_buffer_factor=2,
+                    ann_min_vectors=256,
                 )
                 db.query(
                     (
@@ -376,7 +372,7 @@ class TestVectorQueries(unittest.TestCase):
                     ),
                 )
 
-    def test_sql_vector_query_keeps_small_cold_spill_exact_until_relative_trigger(
+    def test_sql_vector_query_keeps_small_snapshot_delta_exact_until_refresh_trigger(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -384,9 +380,7 @@ class TestVectorQueries(unittest.TestCase):
 
             with HumemDB(base_path) as db:
                 db._vector_runtime_config = IndexedVectorRuntimeConfig(
-                    hot_max_rows=1000,
-                    merge_buffer_factor=2,
-                    cold_index_relative_to_hot_fraction=0.5,
+                    ann_min_vectors=2_000,
                 )
                 db.query(
                     (
@@ -426,18 +420,15 @@ class TestVectorQueries(unittest.TestCase):
                     tuple(row[:3] for row in result.rows),
                     (("sql_row", "docs", 1), ("sql_row", "docs", 2)),
                 )
-                self.assertFalse(db._cold_vector_index_cache)
+                self.assertFalse(db._snapshot_vector_index_cache)
 
-    def test_sql_vector_insert_keeps_cold_snapshot_for_pending_spill(self) -> None:
+    def test_sql_vector_insert_keeps_snapshot_for_pending_delta(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             base_path = Path(tmpdir) / "humem"
 
             with HumemDB(base_path) as db:
                 db._vector_runtime_config = IndexedVectorRuntimeConfig(
-                    hot_max_rows=2,
-                    merge_buffer_factor=2,
-                    cold_refresh_min_rows=10,
-                    cold_refresh_relative_to_cold_fraction=0.5,
+                    ann_min_vectors=10,
                 )
                 db.query(
                     (
@@ -470,7 +461,9 @@ class TestVectorQueries(unittest.TestCase):
                     "SELECT id FROM docs ORDER BY embedding <=> $query LIMIT 1",
                     params={"query": [1.0, 0.0]},
                 )
-                first_cold_rows = db._cold_vector_index_cache["cosine"].item_ids.size
+                first_snapshot_rows = (
+                    db._snapshot_vector_index_cache["cosine"].item_ids.size
+                )
 
                 db.executemany(
                     (
@@ -497,11 +490,11 @@ class TestVectorQueries(unittest.TestCase):
                     ),
                 )
                 self.assertEqual(
-                    db._cold_vector_index_cache["cosine"].item_ids.size,
-                    first_cold_rows,
+                    db._snapshot_vector_index_cache["cosine"].item_ids.size,
+                    first_snapshot_rows,
                 )
 
-    def test_cypher_create_with_embedding_keeps_cold_snapshot_for_pending_spill(
+    def test_cypher_create_with_embedding_keeps_snapshot_for_pending_delta(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -509,10 +502,7 @@ class TestVectorQueries(unittest.TestCase):
 
             with HumemDB(base_path) as db:
                 db._vector_runtime_config = IndexedVectorRuntimeConfig(
-                    hot_max_rows=2,
-                    merge_buffer_factor=2,
-                    cold_refresh_min_rows=10,
-                    cold_refresh_relative_to_cold_fraction=0.5,
+                    ann_min_vectors=10,
                 )
                 for idx in range(1, 261):
                     embedding = [0.0, 1.0]
@@ -544,7 +534,7 @@ class TestVectorQueries(unittest.TestCase):
                     params={"query": [1.0, 0.0]},
                 )
                 first_state = db._inspect_vector_runtime()
-                self.assertEqual(first_state["cold_snapshot_rows"], 258)
+                self.assertEqual(first_state["snapshot_rows"], 260)
 
                 for idx in range(261, 263):
                     db.query(
@@ -575,20 +565,17 @@ class TestVectorQueries(unittest.TestCase):
                 )
                 second_state = db._inspect_vector_runtime()
                 self.assertEqual(second_state["total_rows"], 262)
-                self.assertEqual(second_state["hot_rows"], 2)
-                self.assertEqual(second_state["cold_rows"], 260)
-                self.assertEqual(second_state["cold_snapshot_rows"], 258)
+                self.assertEqual(second_state["indexed_rows"], 260)
+                self.assertEqual(second_state["delta_rows"], 2)
+                self.assertEqual(second_state["snapshot_rows"], 260)
 
-    def test_sql_delete_keeps_cold_snapshot_until_refresh(self) -> None:
+    def test_sql_delete_keeps_snapshot_until_refresh(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             base_path = Path(tmpdir) / "humem"
 
             with HumemDB(base_path) as db:
                 db._vector_runtime_config = IndexedVectorRuntimeConfig(
-                    hot_max_rows=2,
-                    merge_buffer_factor=2,
-                    cold_refresh_min_rows=1,
-                    cold_refresh_relative_to_cold_fraction=0.0,
+                    ann_min_vectors=1,
                 )
                 db.query(
                     (
@@ -637,24 +624,21 @@ class TestVectorQueries(unittest.TestCase):
                     (("sql_row", "docs", 260), ("sql_row", "docs", 259)),
                 )
                 in_progress = db._inspect_vector_runtime()
-                self.assertEqual(in_progress["cold_snapshot_rows"], 258)
+                self.assertEqual(in_progress["snapshot_rows"], 260)
                 self.assertEqual(in_progress["tombstone_rows"], 1)
 
-                self.assertTrue(db._await_vector_runtime_background_refresh())
+                self.assertTrue(db._await_vector_runtime_snapshot_refresh())
                 final_state = db._inspect_vector_runtime()
-                self.assertEqual(final_state["cold_snapshot_rows"], 257)
+                self.assertEqual(final_state["snapshot_rows"], 259)
                 self.assertEqual(final_state["tombstone_rows"], 0)
 
-    def test_cypher_delete_keeps_cold_snapshot_until_refresh(self) -> None:
+    def test_cypher_delete_keeps_snapshot_until_refresh(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             base_path = Path(tmpdir) / "humem"
 
             with HumemDB(base_path) as db:
                 db._vector_runtime_config = IndexedVectorRuntimeConfig(
-                    hot_max_rows=2,
-                    merge_buffer_factor=2,
-                    cold_refresh_min_rows=1,
-                    cold_refresh_relative_to_cold_fraction=0.0,
+                    ann_min_vectors=1,
                 )
                 for idx in range(1, 261):
                     embedding = [0.0, 1.0]
@@ -706,12 +690,12 @@ class TestVectorQueries(unittest.TestCase):
                     (259, 260),
                 )
                 in_progress = db._inspect_vector_runtime()
-                self.assertEqual(in_progress["cold_snapshot_rows"], 258)
+                self.assertEqual(in_progress["snapshot_rows"], 260)
                 self.assertEqual(in_progress["tombstone_rows"], 1)
 
-                self.assertTrue(db._await_vector_runtime_background_refresh())
+                self.assertTrue(db._await_vector_runtime_snapshot_refresh())
                 final_state = db._inspect_vector_runtime()
-                self.assertEqual(final_state["cold_snapshot_rows"], 257)
+                self.assertEqual(final_state["snapshot_rows"], 259)
                 self.assertEqual(final_state["tombstone_rows"], 0)
 
     def test_sql_owned_vectors_work_through_sql_and_vector_query(self) -> None:

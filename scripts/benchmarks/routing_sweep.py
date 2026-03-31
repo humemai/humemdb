@@ -13,6 +13,8 @@ BenchmarkName = Literal["sql", "cypher", "vector"]
 
 
 def _parse_args() -> argparse.Namespace:
+    """Parse CLI arguments for the routing sweep runner."""
+
     parser = argparse.ArgumentParser(
         description=(
             "Run scale sweeps for the relational and Cypher routing benchmarks and "
@@ -98,6 +100,8 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _parse_scales(raw: str) -> tuple[int, ...]:
+    """Parse one comma-separated integer scale list."""
+
     values = tuple(int(part.strip()) for part in raw.split(",") if part.strip())
     if not values:
         raise ValueError("At least one scale must be provided.")
@@ -105,6 +109,8 @@ def _parse_scales(raw: str) -> tuple[int, ...]:
 
 
 def _sql_config(rows: int) -> dict[str, int]:
+    """Return SQL benchmark fixture sizes for the requested row scale."""
+
     if rows <= 10_000:
         return {"users": 2_000, "tags": 256, "batch_size": 2_000}
     if rows <= 100_000:
@@ -115,17 +121,23 @@ def _sql_config(rows: int) -> dict[str, int]:
 
 
 def _cypher_config(nodes: int) -> dict[str, int]:
+    """Return graph benchmark fixture sizes for the requested node scale."""
+
     if nodes <= 100_000:
         return {"fanout": 4, "tag_fanout": 2, "batch_size": 5_000}
     return {"fanout": 4, "tag_fanout": 2, "batch_size": 20_000}
 
 
 def _run_benchmark(command: list[str], *, env: dict[str, str]) -> None:
+    """Run one child benchmark command and stream a short progress line."""
+
     print("[routing_sweep] running", " ".join(command))
     subprocess.run(command, check=True, env=env)
 
 
 def _load_json(path: Path) -> dict[str, object]:
+    """Load one JSON file produced by a benchmark helper."""
+
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -137,6 +149,8 @@ def _run_sql_sweep(
     output_dir: Path,
     env: dict[str, str],
 ) -> dict[str, object]:
+    """Run the SQL routing benchmark across the requested row scales."""
+
     benchmark_file = Path(__file__).with_name("duckdb_direct_read.py")
     runs: list[dict[str, object]] = []
     for rows in scales:
@@ -189,6 +203,8 @@ def _run_cypher_sweep(
     output_dir: Path,
     env: dict[str, str],
 ) -> dict[str, object]:
+    """Run the Cypher routing benchmark across the requested node scales."""
+
     benchmark_file = Path(__file__).with_name("cypher_graph_path.py")
     runs: list[dict[str, object]] = []
     for nodes in scales:
@@ -248,6 +264,8 @@ def _run_vector_sweep(
     output_dir: Path,
     env: dict[str, str],
 ) -> dict[str, object]:
+    """Run the real-data vector sweep and persist its merged summary."""
+
     benchmark_file = Path(__file__).with_name("vector_search_real_sweep.py")
     intermediate_dir = output_dir / "vector_intermediate"
     summary_path = output_dir / "vector_summary.json"
@@ -297,6 +315,8 @@ def _run_vector_sweep(
 
 
 def main() -> None:
+    """Execute the requested routing sweep families and write merged output."""
+
     args = _parse_args()
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)

@@ -35,6 +35,8 @@ _SQLITE_SEED_BATCH_SIZE = 10_000
 
 @dataclass(frozen=True, slots=True)
 class BenchmarkConfig:
+    """Configuration for one real-data vector search benchmark run."""
+
     dataset: str
     rows: int
     queries: int
@@ -62,12 +64,16 @@ class BenchmarkConfig:
 
 @dataclass(frozen=True, slots=True)
 class TimingSummary:
+    """Summary statistics for one group of timed benchmark operations."""
+
     mean: float
     stdev: float
     minimum: float
     maximum: float
 
     def to_dict(self) -> dict[str, float]:
+        """Return a JSON-serializable representation of the timing summary."""
+
         return {
             "mean": self.mean,
             "stdev": self.stdev,
@@ -78,6 +84,8 @@ class TimingSummary:
 
 @dataclass(frozen=True, slots=True)
 class DatasetInfo:
+    """Packaged metadata describing one benchmark dataset."""
+
     name: str
     meta_path: Path
     count: int
@@ -87,6 +95,8 @@ class DatasetInfo:
 
 @dataclass(frozen=True, slots=True)
 class PackagedGroundTruth:
+    """Loaded recall ground-truth neighbors bundled with a dataset."""
+
     gt_path: Path
     query_ids: Any
     neighbors_by_query_id: dict[int, tuple[int, ...]]
@@ -94,6 +104,8 @@ class PackagedGroundTruth:
 
 @dataclass(frozen=True, slots=True)
 class SelectedRange:
+    """One contiguous slice chosen from a dataset shard for benchmarking."""
+
     row_start: int
     shard_path: Path
     shard_count: int
@@ -129,6 +141,8 @@ _MEMORY_SNAPSHOT_ORDER = (
 
 
 def _parse_args() -> argparse.Namespace:
+    """Parse CLI flags for the real-data vector benchmark."""
+
     parser = argparse.ArgumentParser(
         description=(
             "Benchmark the fixed hot-tier NumPy exact path and cold-tier LanceDB "
@@ -204,6 +218,8 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    """Parse arguments, run the benchmark, and emit the requested report."""
+
     args = _parse_args()
     _validate_benchmark_sampling(args.queries, args.repetitions)
     if args.dataset == "msmarco-10m" and args.filter_source is not None:
@@ -244,6 +260,8 @@ def main() -> None:
 
 
 def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
+    """Run the real-data benchmark and return a structured report."""
+
     dataset = _dataset_info(config.dataset)
     if config.rows > dataset.count:
         raise ValueError(
@@ -548,6 +566,8 @@ def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
 
 
 def _parse_optional_int_grid(raw: str | None) -> tuple[int, ...] | None:
+    """Parse an optional comma-separated integer grid."""
+
     if raw is None:
         return None
     parts = tuple(int(part.strip()) for part in raw.split(",") if part.strip())
@@ -570,6 +590,8 @@ def _run_top_k_benchmark(
     group_ids,
     packaged_ground_truth: PackagedGroundTruth | None,
 ) -> tuple[dict[str, TimingSummary], dict[str, float | None]]:
+    """Benchmark one top-k setting and compute recall against the reference."""
+
     summaries: dict[str, TimingSummary] = {}
     filtered_truth = None
     filtered_actual = None
@@ -689,6 +711,8 @@ def _finalize_top_k_reports(
     base_report: dict[str, Any],
     top_k_reports: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    """Collapse one or many top-k reports into the final output shape."""
+
     if len(top_k_reports) == 1:
         single = top_k_reports[0]
         return {
@@ -705,6 +729,8 @@ def _finalize_top_k_reports(
 
 
 def _dataset_info(name: str) -> DatasetInfo:
+    """Load dataset metadata for a supported benchmark corpus."""
+
     root = Path(__file__).resolve().parents[2] / "examples" / "data"
     if name == "msmarco-10m":
         meta_path = root / "MSMARCO-10M" / "msmarco-passages-10000000.meta.json"
@@ -741,6 +767,8 @@ def _load_dataset_subset(
     rows: int,
     sample_mode: str,
 ) -> tuple[Any, Any, Any, dict[int, str]]:
+    """Load a sampled dataset subset into memory with group labels."""
+
     selected_ranges, group_ids, group_lookup = _plan_dataset_subset(
         meta_path=meta_path,
         rows=rows,
@@ -763,6 +791,8 @@ def _plan_dataset_subset(
     rows: int,
     sample_mode: str,
 ) -> tuple[list[SelectedRange], Any, dict[int, str]]:
+    """Plan which shard ranges should populate the benchmark subset."""
+
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     shards = _iter_shards(meta_path, meta)
     resolved_sample_mode = _resolved_sample_mode(
@@ -817,6 +847,8 @@ def _load_subset_matrix(
     rows: int,
     dimensions: int,
 ) -> Any:
+    """Materialize a sampled subset into one dense float32 matrix."""
+
     matrix = np.empty((rows, dimensions), dtype=np.float32)
     for selected_range in selected_ranges:
         shard_matrix = np.memmap(
@@ -839,6 +871,8 @@ def _load_query_vectors(
     query_indexes: Any,
     dimensions: int,
 ) -> list[Any]:
+    """Load only the sampled query vectors from the selected shard ranges."""
+
     query_indexes_array = np.asarray(query_indexes, dtype=np.int64)
     order = np.argsort(query_indexes_array, kind="stable")
     sorted_query_indexes = query_indexes_array[order]
@@ -871,6 +905,8 @@ def _load_query_vectors(
 
 
 def _resolved_sample_mode(sample_mode: str, *, group_count: int) -> str:
+    """Resolve the effective sampling mode for the dataset layout."""
+
     if sample_mode != "auto":
         return sample_mode
     if group_count > 1:
@@ -883,6 +919,8 @@ def _prefix_selected_ranges(
     shards: list[dict[str, Any]],
     rows: int,
 ) -> list[dict[str, Any]]:
+    """Select a prefix of shards until the requested row budget is filled."""
+
     selected: list[dict[str, Any]] = []
     remaining = rows
     for shard in shards:
@@ -899,6 +937,8 @@ def _stratified_selected_ranges(
     shards: list[dict[str, Any]],
     rows: int,
 ) -> list[dict[str, Any]]:
+    """Select shard ranges proportionally across source groups."""
+
     groups: dict[str, list[dict[str, Any]]] = {}
     for shard in shards:
         group_name = str(shard.get("source_corpus") or "all")
@@ -950,6 +990,8 @@ def _proportional_allocations(
     *,
     total: int,
 ) -> dict[str, int]:
+    """Allocate a fixed row budget proportionally across named groups."""
+
     if total <= 0:
         return {name: 0 for name in group_counts}
     total_count = sum(group_counts.values())
@@ -978,6 +1020,8 @@ def _proportional_allocations(
 
 
 def _iter_shards(meta_path: Path, meta: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return normalized shard metadata from a dataset sidecar file."""
+
     if isinstance(meta.get("shards"), list):
         return [
             {
@@ -1017,6 +1061,8 @@ def _query_indexes(
     rng: Any,
     eligible_indexes: Any | None = None,
 ) -> Any:
+    """Choose benchmark query indexes from the eligible sampled rows."""
+
     if filter_source is None:
         population = np.arange(group_ids.shape[0], dtype=np.int64)
     else:
@@ -1037,6 +1083,8 @@ def _query_indexes(
 
 
 def _local_to_global_item_ids(*, selected_ranges: list[SelectedRange], rows: int):
+    """Map sampled local row ids back to their original dataset ids."""
+
     local_to_global = np.empty(rows, dtype=np.int64)
     for selected_range in selected_ranges:
         start = selected_range.row_start
@@ -1051,6 +1099,8 @@ def _local_to_global_item_ids(*, selected_ranges: list[SelectedRange], rows: int
 
 
 def _load_packaged_ground_truth(meta_path: Path) -> PackagedGroundTruth | None:
+    """Load packaged ground-truth neighbors if the dataset ships them."""
+
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     gt_name = meta.get("gt_file")
     if gt_name is None:
@@ -1087,6 +1137,8 @@ def _eligible_packaged_gt_query_indexes(
     local_to_global_item_ids,
     packaged_ground_truth: PackagedGroundTruth,
 ):
+    """Return sampled rows whose global ids appear in packaged ground truth."""
+
     if packaged_ground_truth.query_ids.size == 0:
         return np.empty(0, dtype=np.int64)
     return np.flatnonzero(
@@ -1107,6 +1159,8 @@ def _packaged_truth_for_query_indexes(
     group_ids=None,
     filter_group_id: int | None = None,
 ) -> list[tuple[int, ...]]:
+    """Translate packaged global-id neighbors into sampled local-id truth sets."""
+
     sorted_local_indexes = np.argsort(local_to_global_item_ids, kind="stable")
     sorted_global_ids = local_to_global_item_ids[sorted_local_indexes]
     truth: list[tuple[int, ...]] = []
@@ -1143,6 +1197,8 @@ def _packaged_truth_for_query_indexes(
 
 
 def _group_id_for_name(group_lookup: dict[int, str], name: str) -> int:
+    """Resolve a group name back to its numeric id."""
+
     for group_id, group_name in group_lookup.items():
         if group_name == name:
             return int(group_id)
@@ -1155,6 +1211,8 @@ def _seed_sqlite_subset(
     selected_ranges: list[SelectedRange],
     dimensions: int,
 ) -> None:
+    """Seed the sampled subset into SQLite for exact and export workflows."""
+
     sqlite = db._sqlite
     _ensure_vector_schema(sqlite)
     sqlite.execute(
@@ -1233,6 +1291,8 @@ def _seed_lancedb_table(
     ingest_stats: dict[str, float] | None = None,
     memory_snapshots_bytes: dict[str, int | None] | None = None,
 ):
+    """Build a LanceDB table by exporting the sampled subset through DuckDB."""
+
     started = time.perf_counter()
     db = lancedb.connect(str(lance_path))
     schema = pa.schema(
@@ -1284,6 +1344,8 @@ def _seed_lancedb_table_from_selected_ranges(
     ingest_stats: dict[str, float] | None = None,
     memory_snapshots_bytes: dict[str, int | None] | None = None,
 ):
+    """Build a LanceDB table directly from selected shard ranges."""
+
     started = time.perf_counter()
     db = lancedb.connect(str(lance_path))
     schema = pa.schema(
@@ -1331,6 +1393,8 @@ def _iter_duckdb_arrow_batches(
     dimensions: int,
     batch_size: int,
 ):
+    """Yield Arrow batches exported from DuckDB in LanceDB-ready form."""
+
     reader = duckdb.connection.execute(
         (
             "SELECT e.target_id AS item_id, "
@@ -1356,6 +1420,8 @@ def _iter_selected_range_arrow_batches(
     dimensions: int,
     batch_size: int,
 ):
+    """Yield Arrow batches assembled directly from sampled shard ranges."""
+
     for selected_range in selected_ranges:
         shard_matrix = np.memmap(
             selected_range.shard_path,
@@ -1388,6 +1454,8 @@ def _iter_selected_range_arrow_batches(
 
 
 def _duckdb_record_batch_to_lancedb_table(*, batch, dimensions: int):
+    """Convert one DuckDB Arrow record batch into the LanceDB table schema."""
+
     item_ids = batch.column(0)
     group_ids = pa.compute.cast(batch.column(1), pa.int8())
     vectors = _binary_embedding_column_to_fixed_size_list(
@@ -1404,6 +1472,8 @@ def _duckdb_record_batch_to_lancedb_table(*, batch, dimensions: int):
 
 
 def _numpy_batch_to_lancedb_table(*, item_ids, group_ids, matrix, dimensions: int):
+    """Convert one NumPy batch into the LanceDB table schema."""
+
     vectors = _matrix_to_fixed_size_list(matrix, dimensions=dimensions)
     return pa.table(
         {
@@ -1415,6 +1485,8 @@ def _numpy_batch_to_lancedb_table(*, item_ids, group_ids, matrix, dimensions: in
 
 
 def _matrix_to_fixed_size_list(matrix, *, dimensions: int):
+    """Wrap a float32 matrix as a fixed-size Arrow list array."""
+
     flat_values = np.asarray(matrix, dtype=np.float32).reshape(-1)
     return pa.FixedSizeListArray.from_arrays(
         pa.array(flat_values, type=pa.float32()),
@@ -1426,6 +1498,8 @@ def _snapshot_memory(
     snapshots: dict[str, int | None] | None,
     name: str,
 ) -> int | None:
+    """Capture the current RSS into the named memory snapshot."""
+
     if snapshots is None:
         return None
     value = _current_rss_bytes()
@@ -1439,6 +1513,8 @@ def _record_lancedb_ingest_batch(
     memory_snapshots_bytes: dict[str, int | None] | None,
     batch_rows: int,
 ) -> None:
+    """Update ingest statistics and memory snapshots for one batch."""
+
     current_rss = _current_rss_bytes()
     if (
         memory_snapshots_bytes is not None
@@ -1472,6 +1548,8 @@ def _record_lancedb_ingest_batch(
 
 
 def _binary_embedding_column_to_fixed_size_list(column, *, dimensions: int):
+    """Decode binary embedding blobs into a fixed-size Arrow list array."""
+
     array = column.combine_chunks() if hasattr(column, "combine_chunks") else column
     if array.null_count:
         raise ValueError("Encountered null embedding while exporting SQLite vectors.")
@@ -1502,12 +1580,16 @@ def _binary_embedding_column_to_fixed_size_list(column, *, dimensions: int):
 
 
 def _build_lancedb_index(table, *, config: BenchmarkConfig) -> float:
+    """Create the configured LanceDB vector index and return build time."""
+
     started = time.perf_counter()
     table.create_index(**_lancedb_index_kwargs(config))
     return (time.perf_counter() - started) * 1000.0
 
 
 def _build_lancedb_scalar_index(table, *, enabled: bool) -> float:
+    """Create the optional LanceDB scalar prefilter index when enabled."""
+
     if not enabled:
         return 0.0
     started = time.perf_counter()
@@ -1523,6 +1605,8 @@ def _search_lancedb_indexed(
     top_k: int,
     filter_group_id: int | None = None,
 ) -> tuple[int, ...]:
+    """Run one indexed LanceDB search and return the matched item ids."""
+
     builder = table.search(query).distance_type(config.metric).limit(top_k)
     if config.lancedb_nprobes is not None:
         builder = builder.nprobes(config.lancedb_nprobes)
@@ -1535,6 +1619,8 @@ def _search_lancedb_indexed(
 
 
 def _lancedb_index_kwargs(config: BenchmarkConfig) -> dict[str, Any]:
+    """Translate benchmark config into LanceDB index build arguments."""
+
     kwargs: dict[str, Any] = {
         "metric": config.metric,
         "vector_column_name": "vector",
@@ -1553,6 +1639,8 @@ def _lancedb_index_kwargs(config: BenchmarkConfig) -> dict[str, Any]:
 
 
 def _lancedb_index_settings(config: BenchmarkConfig) -> dict[str, Any]:
+    """Return LanceDB index settings for the benchmark report."""
+
     return {
         "index_type": config.lancedb_index_type,
         "num_partitions": config.lancedb_num_partitions,
@@ -1566,6 +1654,8 @@ def _lancedb_index_settings(config: BenchmarkConfig) -> dict[str, Any]:
 
 
 def _lancedb_search_settings(config: BenchmarkConfig) -> dict[str, Any]:
+    """Return LanceDB search settings for the benchmark report."""
+
     return {
         "nprobes": config.lancedb_nprobes,
         "refine_factor": config.lancedb_refine_factor,
@@ -1579,6 +1669,8 @@ def _time_callable(
     runner,
     queries: list[Any],
 ) -> TimingSummary:
+    """Time one query runner across warmup and measured repetitions."""
+
     for _ in range(warmup):
         for query in queries:
             runner(query)
@@ -1602,6 +1694,8 @@ def _recall_at_k(
     expected: list[tuple[int, ...]],
     actual: list[tuple[int, ...]],
 ) -> float:
+    """Compute recall@k from expected and actual neighbor id lists."""
+
     matched = 0
     total = 0
     for expected_ids, actual_ids in zip(expected, actual, strict=True):
@@ -1612,6 +1706,8 @@ def _recall_at_k(
 
 
 def _print_report(report: dict[str, Any]) -> None:
+    """Render the benchmark report in text form."""
+
     print("Real vector benchmark")
     print(f"  dataset: {report['dataset']}")
     print(f"  rows: {report['rows']}")
@@ -1681,6 +1777,8 @@ def _print_report(report: dict[str, Any]) -> None:
 
 
 def _current_rss_bytes() -> int | None:
+    """Read the current process RSS from procfs when available."""
+
     try:
         with open("/proc/self/status", "r", encoding="utf-8") as status_file:
             for line in status_file:
@@ -1694,6 +1792,8 @@ def _current_rss_bytes() -> int | None:
 
 
 def _peak_rss_bytes() -> int | None:
+    """Read the process peak RSS from resource usage data."""
+
     try:
         peak_rss_kib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     except OSError:
@@ -1706,6 +1806,8 @@ def _peak_rss_bytes() -> int | None:
 def _memory_stage_deltas(
     snapshots: dict[str, int | None],
 ) -> dict[str, int | None]:
+    """Compute per-stage RSS deltas from ordered memory snapshots."""
+
     deltas: dict[str, int | None] = {}
     previous_value: int | None = None
     previous_name: str | None = None
@@ -1725,6 +1827,8 @@ def _memory_stage_deltas(
 
 
 def _validate_benchmark_sampling(queries: int, repetitions: int) -> None:
+    """Enforce the minimum query and repetition counts for the benchmark."""
+
     if queries < _MIN_BENCHMARK_QUERIES:
         raise ValueError(
             "Real vector benchmark requires at least "

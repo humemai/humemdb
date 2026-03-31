@@ -76,6 +76,8 @@ class GraphDataset:
 
 
 def _parse_args() -> argparse.Namespace:
+    """Parse CLI arguments for the graph path benchmark."""
+
     parser = argparse.ArgumentParser(
         description=(
             "Benchmark HumemCypher parse, compile, and execution costs over a "
@@ -147,6 +149,8 @@ def _apply_graph_index_set(db: HumemDB, *, index_set: str) -> None:
 
 
 def _workloads(dataset: GraphDataset) -> dict[str, QueryWorkload]:
+    """Build the workload catalog for the seeded graph dataset."""
+
     midpoint_user = max(1, dataset.user_count // 2)
     midpoint_document = max(1, dataset.document_count // 2)
     midpoint_topic = max(1, dataset.topic_count // 2)
@@ -496,6 +500,8 @@ def _workloads(dataset: GraphDataset) -> dict[str, QueryWorkload]:
 
 
 def _dataset_counts(total_nodes: int, fanout: int, tag_fanout: int) -> GraphDataset:
+    """Derive node, edge, and storage counts from the requested graph scale."""
+
     user_count = (total_nodes * 45) // 100
     document_count = (total_nodes * 30) // 100
     topic_count = total_nodes - user_count - document_count
@@ -545,6 +551,8 @@ def _seed_graph(
     tag_fanout: int,
     batch_size: int,
 ) -> tuple[GraphDataset, float]:
+    """Seed the full synthetic graph and return its dataset summary and duration."""
+
     _ensure_graph_schema(db._sqlite)
     dataset = _dataset_counts(nodes, fanout, tag_fanout)
 
@@ -620,6 +628,8 @@ def _seed_graph(
 
 
 def _seed_user_nodes(db: HumemDB, *, count: int, batch_size: int) -> None:
+    """Seed synthetic User nodes and their properties."""
+
     for start in range(1, count + 1, batch_size):
         stop = min(start + batch_size - 1, count)
         node_rows = [(node_id, "User") for node_id in range(start, stop + 1)]
@@ -650,6 +660,8 @@ def _seed_document_nodes(
     count: int,
     batch_size: int,
 ) -> None:
+    """Seed synthetic Document nodes and their properties."""
+
     stop_id = start_id + count - 1
     for batch_start in range(start_id, stop_id + 1, batch_size):
         batch_stop = min(batch_start + batch_size - 1, stop_id)
@@ -684,6 +696,8 @@ def _seed_topic_nodes(
     count: int,
     batch_size: int,
 ) -> None:
+    """Seed synthetic Topic nodes and their properties."""
+
     stop_id = start_id + count - 1
     for batch_start in range(start_id, stop_id + 1, batch_size):
         batch_stop = min(batch_start + batch_size - 1, stop_id)
@@ -717,6 +731,8 @@ def _seed_team_nodes(
     count: int,
     batch_size: int,
 ) -> None:
+    """Seed synthetic Team nodes and their properties."""
+
     stop_id = start_id + count - 1
     for batch_start in range(start_id, stop_id + 1, batch_size):
         batch_stop = min(batch_start + batch_size - 1, stop_id)
@@ -743,6 +759,8 @@ def _insert_nodes(
     node_rows: list[tuple[int, str]],
     property_rows: list[tuple[int, str, str | None, str]],
 ) -> None:
+    """Insert one batch of graph nodes and their property rows."""
+
     sqlite = db._sqlite
     sqlite.executemany(
         "INSERT INTO graph_nodes (id, label) VALUES (?, ?)",
@@ -764,6 +782,8 @@ def _seed_knows_edges(
     fanout: int,
     batch_size: int,
 ) -> None:
+    """Seed synthetic KNOWS relationships and their properties."""
+
     edge_id = 1
     edge_rows: list[tuple[int, str, int, int]] = []
     property_rows: list[tuple[int, str, str | None, str]] = []
@@ -794,6 +814,8 @@ def _seed_authored_edges(
     starting_edge_id: int,
     batch_size: int,
 ) -> None:
+    """Seed synthetic AUTHORED relationships and their properties."""
+
     edge_id = starting_edge_id
     edge_rows: list[tuple[int, str, int, int]] = []
     property_rows: list[tuple[int, str, str | None, str]] = []
@@ -824,6 +846,8 @@ def _seed_tagged_edges(
     tag_fanout: int,
     batch_size: int,
 ) -> None:
+    """Seed synthetic TAGGED relationships and their properties."""
+
     edge_id = starting_edge_id
     edge_rows: list[tuple[int, str, int, int]] = []
     property_rows: list[tuple[int, str, str | None, str]] = []
@@ -855,6 +879,8 @@ def _seed_member_of_edges(
     starting_edge_id: int,
     batch_size: int,
 ) -> None:
+    """Seed synthetic MEMBER_OF relationships and their properties."""
+
     edge_id = starting_edge_id
     edge_rows: list[tuple[int, str, int, int]] = []
     property_rows: list[tuple[int, str, str | None, str]] = []
@@ -878,6 +904,8 @@ def _flush_edge_batches(
     edge_rows: list[tuple[int, str, int, int]],
     property_rows: list[tuple[int, str, str | None, str]],
 ) -> None:
+    """Write one buffered batch of graph edges and edge properties."""
+
     sqlite = db._sqlite
     sqlite.executemany(
         (
@@ -896,6 +924,8 @@ def _flush_edge_batches(
 
 
 def _summarize(timings: list[float]) -> TimingSummary:
+    """Summarize one set of benchmark timing samples."""
+
     return TimingSummary(
         mean=statistics.mean(timings),
         stdev=statistics.pstdev(timings),
@@ -910,6 +940,8 @@ def _time_callable(
     warmup: int,
     repetitions: int,
 ) -> TimingSummary:
+    """Warm up and time one zero-argument benchmark stage."""
+
     for _ in range(warmup):
         operation()
 
@@ -923,6 +955,8 @@ def _time_callable(
 
 
 def _compile_workload(workload: QueryWorkload):
+    """Compile one admitted Cypher workload into an executable match plan."""
+
     plan = _bind_plan_values(parse_cypher(workload.query), workload.params)
     if not isinstance(plan, (MatchNodePlan, MatchRelationshipPlan)):
         raise ValueError("Graph benchmark only supports MATCH-based workloads.")
@@ -998,10 +1032,14 @@ def _sqlite_plan_summary(
 
 
 def _format_seconds(seconds: float) -> str:
+    """Format seconds as a millisecond string for console output."""
+
     return f"{seconds * 1_000:.2f} ms"
 
 
 def _print_summary(label: str, summary: TimingSummary) -> None:
+    """Print one timing summary in the benchmark's text format."""
+
     print(
         f"  {label}: mean={_format_seconds(summary.mean)} "
         f"std={_format_seconds(summary.stdev)} "
@@ -1022,6 +1060,8 @@ def _summary_dict(summary: TimingSummary) -> dict[str, float]:
 
 
 def main() -> None:
+    """Seed the graph, run the workloads, and emit benchmark results."""
+
     args = _parse_args()
     json_results: dict[str, object] = {
         "benchmark": "cypher_graph_path",

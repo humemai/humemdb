@@ -14,6 +14,8 @@ ITEMS_PER_ORDER = 3
 
 
 def _make_timer() -> callable:
+    """Build a small step timer for the example workflow."""
+
     start = perf_counter()
     last = start
 
@@ -29,6 +31,8 @@ def _make_timer() -> callable:
 
 
 def build_users() -> list[tuple[int, str, str, str, str, bool]]:
+    """Generate the demo user table rows."""
+
     cities = ("Berlin", "Paris", "Lisbon", "Seoul", "Tokyo", "Oslo")
     countries = ("DE", "FR", "PT", "KR", "JP", "NO")
     segments = ("enterprise", "startup", "research", "public-sector")
@@ -48,6 +52,8 @@ def build_users() -> list[tuple[int, str, str, str, str, bool]]:
 
 
 def build_products() -> list[tuple[int, str, str, int]]:
+    """Generate the demo product catalog rows."""
+
     categories = ("storage", "compute", "analytics", "security")
     rows: list[tuple[int, str, str, int]] = []
     for product_id in range(1, PRODUCT_COUNT + 1):
@@ -58,6 +64,8 @@ def build_products() -> list[tuple[int, str, str, int]]:
 
 
 def build_orders() -> list[tuple[int, int, str, str, int]]:
+    """Generate order header rows for the example workload."""
+
     rows: list[tuple[int, int, str, str, int]] = []
     order_id = 1
     for user_id in range(1, USER_COUNT + 1):
@@ -74,6 +82,8 @@ def build_order_items(
     orders: list[tuple[int, int, str, str, int]],
     products: list[tuple[int, str, str, int]],
 ) -> list[tuple[int, int, int, int, int]]:
+    """Expand orders into per-line-item rows with derived totals."""
+
     rows: list[tuple[int, int, int, int, int]] = []
     item_id = 1
     product_prices = {
@@ -96,6 +106,8 @@ def build_order_items(
 
 
 def main() -> None:
+    """Create the demo relational schema and run representative SQL queries."""
+
     report = _make_timer()
     users = build_users()
     products = build_products()

@@ -159,4 +159,4 @@ DuckDB first wins, if it wins at all.
 The vector benchmark surface is now the real-data indexed-vector path.
 
 - [`vector_search_real.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/vector_search_real.py) measures one shared-build scenario over shipped datasets such as `MSMARCO-10M` and `stackoverflow-xlarge`.
-- [`vector_search_real_sweep.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/vector_search_real_sweep.py) sweeps real dataset scales and Stack Overflow corpus filters so the hot-tier and cold-tier policy stays grounded in shipped data.
+- [`vector_search_real_sweep.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/scripts/benchmarks/vector_search_real_sweep.py) sweeps real dataset scales and Stack Overflow corpus filters so the fixed ANN snapshot threshold stays grounded in shipped data.

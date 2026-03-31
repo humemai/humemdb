@@ -33,7 +33,22 @@ _SUPPORTED_STATEMENT_NAMES = {
 
 @dataclass(frozen=True, slots=True)
 class SQLTranslationPlan:
-    """Validated SQL translation plus lightweight planning metadata."""
+    """Validated SQL translation plus lightweight planning metadata.
+
+    Attributes:
+        translated_text: Backend-specific SQL emitted by translation.
+        statement_name: Parsed sqlglot statement class name.
+        is_read_only: Whether the translated statement is read-only.
+        cte_count: Number of common table expressions in the statement.
+        join_count: Number of joins in the statement.
+        aggregate_count: Number of aggregate expressions in the statement.
+        window_count: Number of window expressions in the statement.
+        exists_count: Number of EXISTS subqueries in the statement.
+        has_order_by: Whether the statement includes ORDER BY.
+        has_limit: Whether the statement includes LIMIT.
+        has_group_by: Whether the statement includes GROUP BY.
+        has_distinct: Whether the statement includes DISTINCT.
+    """
 
     translated_text: str
     statement_name: str

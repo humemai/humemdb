@@ -23,16 +23,22 @@ LIST_RE = re.compile(r"^(\s*)(?:[-+*]|\d+\.)\s+")
 
 
 def iter_md_files(root: Path) -> Iterable[Path]:
+    """Yield Markdown files rooted under the provided directory."""
+
     return root.rglob("*.md")
 
 
 def normalize_indent(indent_len: int) -> int:
+    """Round list indentation up to the nearest four-space boundary."""
+
     if indent_len <= 0:
         return 0
     return ((indent_len + 3) // 4) * 4
 
 
 def _format_line_list(lines: list[int], max_items: int = 20) -> str:
+    """Format changed line numbers for compact console reporting."""
+
     if not lines:
         return ""
     if len(lines) <= max_items:
@@ -42,6 +48,8 @@ def _format_line_list(lines: list[int], max_items: int = 20) -> str:
 
 
 def _parse_fence(line: str) -> tuple[str, int] | None:
+    """Return the fence character and length when the line opens a code fence."""
+
     match = FENCE_RE.match(line)
     if not match:
         return None
@@ -52,6 +60,8 @@ def _parse_fence(line: str) -> tuple[str, int] | None:
 
 
 def _is_python_fence(line: str) -> bool:
+    """Return whether the current fence header denotes Python code."""
+
     match = FENCE_RE.match(line.lstrip())
     if not match:
         return False
@@ -60,6 +70,8 @@ def _is_python_fence(line: str) -> bool:
 
 
 def _is_fence_close(line: str, fence_char: str, fence_len: int) -> bool:
+    """Return whether the line closes the active fenced code block."""
+
     stripped = line.lstrip()
     if not stripped.startswith(fence_char * fence_len):
         return False
@@ -87,6 +99,8 @@ def process_file(
     int,
     list[int],
 ] | None:
+    """Normalize one Markdown file and return per-rule change details."""
+
     original = path.read_text(encoding="utf-8")
     lines = original.splitlines()
     new_lines: list[str] = []
@@ -254,6 +268,8 @@ def process_file(
 
 
 def main() -> int:
+    """Normalize the docs tree and print a summary of modified files."""
+
     parser = argparse.ArgumentParser(
         description="Normalize Markdown formatting in docs.",
     )

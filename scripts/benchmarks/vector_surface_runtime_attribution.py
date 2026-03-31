@@ -131,6 +131,7 @@ class RunMeasurement:
     """Captured timing and memory results for one measured operation."""
 
     total_ms: float
+    native_vector_ms: float
     orchestration_ms: float
     rss_before_bytes: int
     rss_after_bytes: int
@@ -540,6 +541,13 @@ def _install_instrumentation(
         db,
         recorder,
         restores,
+        "_execute_vector_search",
+        "vector_runtime_search_ms",
+    )
+    _wrap_instance_method(
+        db,
+        recorder,
+        restores,
         "_execute_vector_query",
         "vector_dispatch_ms",
     )
@@ -547,8 +555,36 @@ def _install_instrumentation(
         db,
         recorder,
         restores,
-        "_execute_candidate_vector_query",
+        "_resolve_candidate_vector_query",
         "candidate_resolution_ms",
+    )
+    _wrap_instance_method(
+        db,
+        recorder,
+        restores,
+        "_execute_candidate_vector_query",
+        "candidate_query_execution_ms",
+    )
+    _wrap_instance_method(
+        db,
+        recorder,
+        restores,
+        "_resolved_vector_candidates",
+        "candidate_index_resolution_ms",
+    )
+    _wrap_instance_method(
+        db,
+        recorder,
+        restores,
+        "_candidate_indexes_for_target",
+        "namespace_index_lookup_ms",
+    )
+    _wrap_instance_method(
+        db,
+        recorder,
+        restores,
+        "_candidate_indexes_for_target_keys",
+        "candidate_key_lookup_ms",
     )
     _wrap_instance_method(
         db,
@@ -591,6 +627,20 @@ def _install_instrumentation(
         restores,
         "_snapshot_vector_index_for",
         "snapshot_index_load_ms",
+    )
+    _wrap_instance_method(
+        db,
+        recorder,
+        restores,
+        "_vector_index_for",
+        "exact_index_load_ms",
+    )
+    _wrap_instance_method(
+        db,
+        recorder,
+        restores,
+        "_load_vector_matrix",
+        "vector_matrix_load_ms",
     )
     _wrap_instance_method(
         db,
@@ -653,13 +703,14 @@ def _run_one_measurement(
         for restore in reversed(restores):
             restore()
     rss_after = _current_rss_bytes()
-    backend_search_ms = (
+    native_vector_ms = (
         recorder.total_ms("numpy_exact_search_ms")
         + recorder.total_ms("snapshot_ann_search_ms")
     )
     measurement = RunMeasurement(
         total_ms=total_ms,
-        orchestration_ms=max(total_ms - backend_search_ms, 0.0),
+        native_vector_ms=native_vector_ms,
+        orchestration_ms=max(total_ms - native_vector_ms, 0.0),
         rss_before_bytes=rss_before,
         rss_after_bytes=rss_after,
         rss_delta_bytes=rss_after - rss_before,
@@ -703,6 +754,32 @@ def _aggregate_stage_stats(
             "total_ms": _timing_summary(totals),
         }
     return aggregated
+
+
+def _measurement_summary(
+    measurements: list[RunMeasurement],
+) -> dict[str, dict[str, float]]:
+    """Return summary statistics for top-level derived latency metrics."""
+
+    return {
+        "total_ms": _timing_summary(
+            [measurement.total_ms for measurement in measurements]
+        ),
+        "native_vector_ms": _timing_summary(
+            [measurement.native_vector_ms for measurement in measurements]
+        ),
+        "orchestration_ms": _timing_summary(
+            [measurement.orchestration_ms for measurement in measurements]
+        ),
+        "native_share_pct": _timing_summary(
+            [
+                (measurement.native_vector_ms / measurement.total_ms) * 100.0
+                if measurement.total_ms > 0.0
+                else 0.0
+                for measurement in measurements
+            ]
+        ),
+    }
 
 
 def _sql_metric_operator(metric: Literal["cosine", "dot", "l2"]) -> str:
@@ -978,6 +1055,7 @@ def _benchmark_build_scenario(
                 scenario.operation,
                 None,
             )
+            summary = _measurement_summary([measurement])
             scenario.verify(context, result, config)
             return {
                 "description": scenario.description,
@@ -987,8 +1065,10 @@ def _benchmark_build_scenario(
                     metric=config.metric,
                     index_name=context.index_name,
                 ),
-                "total_ms": _timing_summary([measurement.total_ms]),
-                "orchestration_ms": _timing_summary([measurement.orchestration_ms]),
+                "total_ms": summary["total_ms"],
+                "native_vector_ms": summary["native_vector_ms"],
+                "orchestration_ms": summary["orchestration_ms"],
+                "native_share_pct": summary["native_share_pct"],
                 "rss_delta_bytes": _timing_summary(
                     [float(measurement.rss_delta_bytes)]
                 ),
@@ -1023,6 +1103,7 @@ def _benchmark_search_scenario(
                     )
                     scenario.verify(context, result, config)
                     measurements.append(measurement)
+            summary = _measurement_summary(measurements)
             return {
                 "description": scenario.description,
                 "surface": context.surface,
@@ -1034,12 +1115,10 @@ def _benchmark_search_scenario(
                     metric=config.metric,
                     index_name=context.index_name,
                 ),
-                "total_ms": _timing_summary(
-                    [measurement.total_ms for measurement in measurements]
-                ),
-                "orchestration_ms": _timing_summary(
-                    [measurement.orchestration_ms for measurement in measurements]
-                ),
+                "total_ms": summary["total_ms"],
+                "native_vector_ms": summary["native_vector_ms"],
+                "orchestration_ms": summary["orchestration_ms"],
+                "native_share_pct": summary["native_share_pct"],
                 "rss_delta_bytes": _timing_summary(
                     [
                         float(measurement.rss_delta_bytes)
@@ -1087,6 +1166,8 @@ def _print_text_report(config: BenchmarkConfig, results: dict[str, Any]) -> None
         print(
             (
                 f"mean_total_ms={summary['total_ms']['mean']:.3f}, "
+                f"mean_native_vector_ms={summary['native_vector_ms']['mean']:.3f}, "
+                f"mean_native_share_pct={summary['native_share_pct']['mean']:.1f}, "
                 f"mean_orchestration_ms={summary['orchestration_ms']['mean']:.3f}"
             )
         )

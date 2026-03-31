@@ -639,8 +639,11 @@ Purpose:
 - Measure the live HumemDB ANN snapshot plus exact-delta runtime rather than the
   real-data build pipeline.
 - Break out snapshot build, snapshot load, candidate resolution, ANN search, exact
-  rerank, and surface-dispatch time through the real runtime seams.
-- Compare direct, SQL, and Cypher surfaces over the same snapshot-runtime shape.
+  rerank, result dispatch, and runtime bookkeeping time through the real runtime
+  seams.
+- Compare direct, SQL, and Cypher surfaces independently over the same
+  snapshot-runtime shape. Each surface seeds its own isolated temporary database,
+  builds its own snapshot, and runs its own searches.
 - Capture both process RSS deltas and Python-only heap peaks so orchestration overhead
   can be separated from backend-heavy work more clearly.
 
@@ -652,12 +655,12 @@ HUMEMDB_THREADS=8 python scripts/benchmarks/vector_surface_runtime_attribution.p
   --rows 100000 \
   --queries 100 \
   --top-k 10 \
-  --ann-min-vectors 100000 \
+  --ann-min-vectors 10000 \
   --warmup 1 \
   --repetitions 3
 ```
 
-What it measures:
+Measured scenarios in the current `100k` snapshot smoke run:
 
 - direct ANN snapshot build
 - SQL ANN snapshot build
@@ -666,19 +669,92 @@ What it measures:
 - SQL search over a ready snapshot plus exact-delta rerank runtime
 - Cypher search over a ready snapshot plus exact-delta rerank runtime
 
+Important scope note:
+
+- The `100k` run above measures the ready-snapshot path only: `snapshot_rows=100000`
+  and `delta_rows=0` for all three search surfaces.
+- It does not yet cover exact-only fallback with no ANN snapshot, a ready snapshot
+  plus a non-empty delta overlay, or query latency while a background refresh is
+  actively rebuilding the snapshot.
+
+Current search order:
+
+- The indexed path is sequential, not parallel.
+- Candidate resolution runs first.
+- ANN search runs on the snapshot-backed subset first.
+- Exact NumPy rerank runs second over ANN hits plus any delta candidates.
+- `snapshot_rerank_path_ms` therefore includes both ANN retrieval and the final
+  exact rerank path.
+
 Current stage names:
 
 - `build_snapshot_ms`: synchronous snapshot build path
 - `snapshot_materialization_ms`: full-corpus matrix materialization used for snapshot
   builds
+- `vector_matrix_load_ms`: cached vector-matrix load cost seen by build or search
 - `snapshot_index_load_ms`: live or persisted snapshot acquisition before a search
 - `snapshot_persisted_load_ms`: persisted snapshot reopen path
 - `vector_dispatch_ms`: top-level vector query dispatch inside the runtime
-- `candidate_resolution_ms`: SQL or Cypher candidate-query resolution before vector
-  ranking
-- `snapshot_rerank_path_ms`: end-to-end snapshot search plus exact rerank path
+- `vector_runtime_search_ms`: full internal vector-search execution path after
+  candidate resolution
+- `candidate_resolution_ms`: total candidate-query plus candidate-index resolution
+  cost before vector ranking
+- `candidate_query_execution_ms`: SQL or Cypher candidate-query execution cost
+- `candidate_index_resolution_ms`: logical candidate-key to runtime-index resolution
+  cost
+- `candidate_key_lookup_ms`: candidate-key lookup inside cached vector-id maps
+- `namespace_index_lookup_ms`: cached namespace scan / full-namespace lookup cost
+- `snapshot_rerank_path_ms`: end-to-end indexed search path, including ANN lookup,
+  delta union, and exact rerank
 - `snapshot_ann_search_ms`: LanceDB ANN search call over the snapshot
 - `numpy_exact_search_ms`: exact NumPy rerank or fallback search call
+- `exact_index_load_ms`: exact-index cache load path
+
+Current `100k` build means:
+
+| Surface | Total build | `build_snapshot_ms` | `snapshot_materialization_ms` | `vector_matrix_load_ms` | `snapshot_persisted_load_ms` |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `direct_build_snapshot` | `131864.46 ms` | `131785.99 ms` | `1209.34 ms` | `1209.14 ms` | `0.27 ms` |
+| `sql_build_snapshot` | `130710.00 ms` | `130623.08 ms` | `1173.35 ms` | `1173.16 ms` | `0.26 ms` |
+| `cypher_build_snapshot` | `132259.99 ms` | `132175.34 ms` | `1132.43 ms` | `1132.26 ms` | `0.23 ms` |
+
+Build interpretation:
+
+- At `100k`, all three surface builds land around `131` to `132` seconds, roughly
+  `2.2 minutes`.
+- The current benchmark does not yet produce a clean Python-versus-native split for
+  build time, because the top-level `native_vector_ms` field is defined only for the
+  wrapped ANN-search and NumPy-search calls.
+- Even without that exact split, the stage breakdown strongly suggests build time is
+  dominated by the LanceDB snapshot build path rather than by Python-side matrix load
+  or metadata bookkeeping.
+
+Current `100k` search means:
+
+| Surface | Total per query | Native vector work | Python / orchestration | Native share |
+| --- | ---: | ---: | ---: | ---: |
+| `direct_search` | `105.73 ms` | `7.69 ms` | `98.04 ms` | `7.28%` |
+| `sql_search` | `344.08 ms` | `7.70 ms` | `336.38 ms` | `2.24%` |
+| `cypher_search` | `407.64 ms` | `7.98 ms` | `399.66 ms` | `1.96%` |
+
+Detailed `100k` search breakdown:
+
+| Stage | Direct | SQL | Cypher |
+| --- | ---: | ---: | ---: |
+| `candidate_query_execution_ms` | `n/a` | `161.02 ms` | `226.17 ms` |
+| `candidate_index_resolution_ms` | `n/a` | `67.34 ms` | `62.38 ms` |
+| `candidate_key_lookup_ms` | `n/a` | `66.76 ms` | `62.08 ms` |
+| `candidate_resolution_ms` | `n/a` | `228.59 ms` | `288.73 ms` |
+| `sql_query_plan_ms` | `n/a` | `82.60 ms` | `n/a` |
+| `cypher_query_plan_ms` | `n/a` | `n/a` | `149.10 ms` |
+| `direct_candidate_resolution_ms` | `0.09 ms` | `n/a` | `n/a` |
+| `namespace_index_lookup_ms` | `0.05 ms` | `0.32 ms` | `0.04 ms` |
+| `snapshot_index_load_ms` | `0.08 ms` | `0.09 ms` | `0.09 ms` |
+| `snapshot_ann_search_ms` | `7.45 ms` | `7.46 ms` | `7.74 ms` |
+| `numpy_exact_search_ms` | `0.24 ms` | `0.24 ms` | `0.24 ms` |
+| `snapshot_rerank_path_ms` | `105.20 ms` | `113.70 ms` | `117.80 ms` |
+| `vector_runtime_search_ms` | `105.35 ms` | `113.87 ms` | `117.96 ms` |
+| `vector_dispatch_ms` | `n/a` | `342.53 ms` | `406.87 ms` |
 
 Important note:
 
@@ -686,25 +762,31 @@ Important note:
   [`vector_search_real.py`](./vector_search_real.py) and
   [`vector_search_real_sweep.py`](./vector_search_real_sweep.py) for real-dataset
   recall, build-cost, and routing evidence.
+- Treat the percentages and wrapped stages below as attribution proxies, not as
+  profiler-precise CPU accounting. The goal is to identify which runtime seams are
+  dominating wall-clock time, not to replace a full profiler.
 
 Current attribution takeaway:
 
-- The fresh tuned `1M` MSMARCO rerun still says the expensive part of offline
-  real-data indexing is the LanceDB build itself, while the expensive part of
-  online vector search is mostly the surrounding Python-side orchestration,
-  candidate-resolution, and snapshot/rerank coordination work rather than the raw
-  native ANN or exact-search calls by themselves.
-- Treat the percentages this benchmark produces as stage-attribution proxies, not as
-  profiler-precise CPU accounting: `orchestration_ms` means time outside the wrapped
-  native-heavy search calls, while the backend side is mostly `snapshot_ann_search_ms`
-  plus `numpy_exact_search_ms`.
+- At `100k`, ready-snapshot search is overwhelmingly Python/orchestration-heavy.
+- The actual native vector work is only about `7.7` to `8.0 ms` per query across all
+  three surfaces.
+- Direct search is already spending about `98 ms` outside the wrapped LanceDB and
+  NumPy calls.
+- SQL and Cypher are much worse: the main cost is candidate-query execution,
+  candidate-key remapping, and surface-specific planning / dispatch, not ANN or exact
+  math.
+- Exact rerank is currently cheap enough that it is not the optimization priority.
 
 Practical interpretation:
 
-- To reduce offline snapshot build and refresh cost, optimize or amortize LanceDB index build;
-  the fresh tuned `1M` rerun still spends about `95%` of build time there.
-- To reduce online direct-vector latency, optimize the ANN snapshot threshold and surrounding
-  runtime bookkeeping first.
+- To reduce offline snapshot build and refresh cost, optimize or amortize the
+  LanceDB build itself rather than the Python-side matrix materialization.
+- To reduce online direct-vector latency, optimize snapshot-side bookkeeping,
+  candidate partitioning, and rerank candidate construction first.
 - To reduce online SQL/Cypher vector latency, optimize candidate-set generation and
-  candidate-resolution overhead before focusing on rerank, because merge/rerank is
-  already effectively free in the current measurements.
+  candidate-resolution overhead before focusing on rerank, because ANN plus exact
+  rerank together are already only about `8 ms` in the current `100k` run.
+- If later work needs more realism, add explicit scenarios for exact-only fallback,
+  ready snapshot plus non-empty delta rows, and search while a background refresh is
+  actively rebuilding the snapshot.

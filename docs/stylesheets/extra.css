@@ -1,8 +1,9 @@
 /* Custom styles for HumemDB documentation */
 
 :root {
-  --humemdb-hero-bg: linear-gradient(135deg, rgba(13, 148, 136, 0.14), rgba(132, 204, 22, 0.16));
-  --humemdb-hero-border: rgba(13, 148, 136, 0.28);
+  /* Oxblood and rose, from the HumemAI design system (was teal and lime). */
+  --humemdb-hero-bg: linear-gradient(135deg, rgba(137, 33, 34, 0.07), rgba(232, 142, 139, 0.16));
+  --humemdb-hero-border: rgba(137, 33, 34, 0.24);
 }
 
 .md-typeset h1 {

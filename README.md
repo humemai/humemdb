@@ -2,7 +2,7 @@
 
 Multi-model embedded data orchestration for SQL, Cypher, and vector search.
 
-[![Docs](https://img.shields.io/badge/docs-humem.ai-0f766e)](https://docs.humem.ai/humemdb/)
+[![Docs](https://img.shields.io/badge/docs-humem.ai-892122)](https://docs.humem.ai/humemdb/)
 [![Test](https://github.com/humemai/humemdb/actions/workflows/test.yml/badge.svg)](https://github.com/humemai/humemdb/actions/workflows/test.yml)
 [![Examples](https://github.com/humemai/humemdb/actions/workflows/test-examples.yml/badge.svg)](https://github.com/humemai/humemdb/actions/workflows/test-examples.yml)
 [![Build Docs](https://github.com/humemai/humemdb/actions/workflows/build-docs.yml/badge.svg)](https://github.com/humemai/humemdb/actions/workflows/build-docs.yml)
